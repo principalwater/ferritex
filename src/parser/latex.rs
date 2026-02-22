@@ -1,4 +1,4 @@
-use crate::model::{Block, Document, Figure, Inline, Table, TableCell, TableRow};
+use crate::model::{Block, Document, Figure, Inline, List, Table, TableCell, TableRow};
 
 /// Parse a LaTeX source string into a [`Document`] AST.
 ///
@@ -61,8 +61,15 @@ enum Segment {
     Text(String),
 }
 
-/// The float environments we recognise as block-level.
-const FLOAT_ENVS: &[&str] = &["table", "figure", "table*", "figure*"];
+/// Block-level environments extracted before paragraph splitting.
+const BLOCK_ENVS: &[&str] = &[
+    "table",
+    "figure",
+    "table*",
+    "figure*",
+    "itemize",
+    "enumerate",
+];
 
 fn segment(src: &str) -> Vec<Segment> {
     let mut segments = Vec::new();
@@ -118,7 +125,7 @@ fn find_begin_float(src: &str, from: usize) -> Option<(String, usize)> {
             let after_begin = abs + 7; // len("\\begin{") == 7
             if let Some(close) = src[after_begin..].find('}') {
                 let env = &src[after_begin..after_begin + close];
-                if FLOAT_ENVS.contains(&env) {
+                if BLOCK_ENVS.contains(&env) {
                     return Some((env.to_string(), abs));
                 }
                 // Not a float env — skip past this \begin and keep searching.
@@ -151,11 +158,15 @@ fn consume_source_macro(src: &str) -> String {
 // Float parser
 // ---------------------------------------------------------------------------
 
-/// Parse a float segment (table or figure) into a [`Block`].
+/// Parse a block environment segment into a [`Block`].
 fn parse_float(src: &str) -> Option<Block> {
     let src = src.trim();
     if src.starts_with("\\begin{figure") {
         Some(Block::Figure(parse_figure(src)))
+    } else if src.starts_with("\\begin{itemize") {
+        Some(Block::List(parse_list(src, false)))
+    } else if src.starts_with("\\begin{enumerate") {
+        Some(Block::List(parse_list(src, true)))
     } else {
         Some(Block::Table(parse_table(src)))
     }
@@ -186,6 +197,47 @@ fn parse_figure(src: &str) -> Figure {
         caption,
         source,
     }
+}
+
+/// Parse a `\begin{itemize}…\end{itemize}` or `\begin{enumerate}…\end{enumerate}` segment.
+fn parse_list(src: &str, ordered: bool) -> List {
+    let env = if ordered { "enumerate" } else { "itemize" };
+    // Strip the outer \begin{env}…\end{env} wrapper.
+    let begin_tag = format!("\\begin{{{}}}", env);
+    let end_tag = format!("\\end{{{}}}", env);
+    let inner = src
+        .find(&begin_tag)
+        .map(|p| &src[p + begin_tag.len()..])
+        .unwrap_or(src);
+    let inner = inner.find(&end_tag).map(|p| &inner[..p]).unwrap_or(inner);
+
+    // Split on \item, discard everything before the first \item.
+    let items: Vec<Vec<Inline>> = inner
+        .split("\\item")
+        .skip(1) // first chunk is before the first \item
+        .map(|chunk| {
+            // Each chunk may start with an optional [label] for \item[custom].
+            let chunk = chunk.trim_start();
+            let chunk = if chunk.starts_with('[') {
+                chunk
+                    .find(']')
+                    .map_or(chunk, |i| chunk[i + 1..].trim_start())
+            } else {
+                chunk
+            };
+            // Collapse internal newlines to spaces (same as paragraph text).
+            let text: String = chunk
+                .lines()
+                .map(str::trim)
+                .filter(|l| !l.is_empty())
+                .collect::<Vec<_>>()
+                .join(" ");
+            parse_inlines(&text)
+        })
+        .filter(|inlines| !inlines.is_empty())
+        .collect();
+
+    List { ordered, items }
 }
 
 /// Extract `\caption{…}` content from a float.
@@ -856,6 +908,54 @@ Beta & 2 \\
                 assert!(!f.source.is_empty(), "figuresource should be parsed");
             }
             other => panic!("expected Figure, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_itemize_parsed() {
+        let src = r"
+\begin{itemize}
+    \item First item with \textit{italic}.
+    \item Second item.
+    \item Third item.
+\end{itemize}
+";
+        let doc = parse_latex(src);
+        assert_eq!(doc.blocks.len(), 1);
+        match &doc.blocks[0] {
+            Block::List(list) => {
+                assert!(!list.ordered, "should be unordered");
+                assert_eq!(list.items.len(), 3, "expected 3 items");
+                // First item should contain italic inline.
+                assert!(
+                    list.items[0].iter().any(|i| matches!(i, Inline::Italic(_))),
+                    "first item should contain italic"
+                );
+            }
+            other => panic!("expected List, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_enumerate_parsed() {
+        let src = r"
+\begin{enumerate}
+    \item Rule one.
+    \item Rule two with \textbf{bold}.
+\end{enumerate}
+";
+        let doc = parse_latex(src);
+        assert_eq!(doc.blocks.len(), 1);
+        match &doc.blocks[0] {
+            Block::List(list) => {
+                assert!(list.ordered, "should be ordered");
+                assert_eq!(list.items.len(), 2, "expected 2 items");
+                assert!(
+                    list.items[1].iter().any(|i| matches!(i, Inline::Bold(_))),
+                    "second item should contain bold"
+                );
+            }
+            other => panic!("expected List, got {other:?}"),
         }
     }
 }

@@ -1,0 +1,48 @@
+name: Bot Auto-Approve
+
+# Trigger when all checks on a PR complete.
+on:
+  check_suite:
+    types: [completed]
+
+jobs:
+  auto-approve:
+    name: Approve PR if CI passed
+    runs-on: ubuntu-latest
+    # Only run when the check suite itself succeeded.
+    if: github.event.check_suite.conclusion == 'success'
+
+    permissions:
+      pull-requests: read
+
+    steps:
+      - name: Find open PR for this commit
+        id: find-pr
+        env:
+          GH_TOKEN: ${{ secrets.BOT_GITHUB_TOKEN }}
+          HEAD_SHA: ${{ github.event.check_suite.head_sha }}
+        run: |
+          PR_JSON=$(gh api repos/${{ github.repository }}/commits/${HEAD_SHA}/pulls \
+            --header "Accept: application/vnd.github+json" \
+            --jq '[.[] | select(.state == "open" and .base.ref == "master")] | first')
+
+          PR_NUMBER=$(echo "$PR_JSON" | jq -r '.number // empty')
+          PR_AUTHOR=$(echo "$PR_JSON"  | jq -r '.user.login // empty')
+
+          echo "pr_number=${PR_NUMBER}" >> "$GITHUB_OUTPUT"
+          echo "pr_author=${PR_AUTHOR}" >> "$GITHUB_OUTPUT"
+
+      - name: Approve PR
+        if: |
+          steps.find-pr.outputs.pr_number != '' &&
+          steps.find-pr.outputs.pr_author == 'principalwater'
+        env:
+          GH_TOKEN: ${{ secrets.BOT_GITHUB_TOKEN }}
+        run: |
+          PR_NUMBER=${{ steps.find-pr.outputs.pr_number }}
+          echo "Approving PR #${PR_NUMBER} by principalwater"
+          gh api repos/${{ github.repository }}/pulls/${PR_NUMBER}/reviews \
+            --method POST \
+            --input - <<'EOF'
+          {"event": "APPROVE", "body": "CI passed \u2705 — auto-approved by elementary-flow-bot."}
+          EOF

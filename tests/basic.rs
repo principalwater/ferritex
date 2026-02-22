@@ -152,3 +152,55 @@ fn test_figure_docx_is_valid() {
 
     let _ = std::fs::remove_file(&output);
 }
+
+/// List fixture: both itemize and enumerate must produce `<w:numId>` references
+/// in word/document.xml and the AST must contain two List blocks.
+#[test]
+fn test_lists_docx_contains_numbering() {
+    use ferritex::model::Block;
+
+    let input = fixture("with_lists.tex");
+    let output = tmp_output("with_lists.docx");
+
+    let source = std::fs::read_to_string(&input)
+        .unwrap_or_else(|e| panic!("cannot read fixture {input:?}: {e}"));
+    let document = ferritex::parser::latex::parse_latex(&source);
+
+    let list_blocks: Vec<_> = document
+        .blocks
+        .iter()
+        .filter(|b| matches!(b, Block::List(_)))
+        .collect();
+    assert_eq!(list_blocks.len(), 2, "expected 2 list blocks");
+
+    if let Block::List(l) = list_blocks[0] {
+        assert!(!l.ordered, "first list should be unordered (itemize)");
+        assert_eq!(l.items.len(), 4, "itemize should have 4 items");
+    }
+    if let Block::List(l) = list_blocks[1] {
+        assert!(l.ordered, "second list should be ordered (enumerate)");
+        assert_eq!(l.items.len(), 3, "enumerate should have 3 items");
+    }
+
+    ferritex::renderer::docx::render_docx(&document, &output)
+        .unwrap_or_else(|e| panic!("render_docx failed: {e}"));
+
+    let file =
+        std::fs::File::open(&output).unwrap_or_else(|e| panic!("cannot open output DOCX: {e}"));
+    let mut zip =
+        zip::ZipArchive::new(file).unwrap_or_else(|e| panic!("output is not a valid ZIP: {e}"));
+    let mut doc_xml = zip
+        .by_name("word/document.xml")
+        .unwrap_or_else(|e| panic!("word/document.xml missing: {e}"));
+    let mut xml_content = String::new();
+    doc_xml
+        .read_to_string(&mut xml_content)
+        .unwrap_or_else(|e| panic!("cannot read word/document.xml: {e}"));
+
+    assert!(
+        xml_content.contains("w:numId"),
+        "DOCX does not contain numbering references — lists were not rendered"
+    );
+
+    let _ = std::fs::remove_file(&output);
+}

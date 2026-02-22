@@ -21,6 +21,8 @@ pub enum Block {
     Table(Table),
     /// A figure with an optional caption (image embedding is not yet supported).
     Figure(Figure),
+    /// A bullet or numbered list.
+    List(List),
 }
 
 /// A table block.
@@ -60,6 +62,15 @@ pub struct Figure {
     pub caption: Vec<Inline>,
     /// Source/attribution line (`\figuresource{…}`), if present.
     pub source: Vec<Inline>,
+}
+
+/// A bullet or numbered list block.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct List {
+    /// `true` = `\begin{enumerate}` (numbered), `false` = `\begin{itemize}` (bullet).
+    pub ordered: bool,
+    /// The list items in document order.
+    pub items: Vec<Vec<Inline>>,
 }
 
 /// An inline text element.

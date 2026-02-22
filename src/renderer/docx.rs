@@ -1,7 +1,8 @@
 use std::{fs::File, path::Path};
 
 use docx_rs::{
-    AlignmentType, Docx, Paragraph, Run, Table as DocxTable, TableCell as DocxCell,
+    AbstractNumbering, AlignmentType, Docx, IndentLevel, Level, LevelJc, LevelText, NumberFormat,
+    Numbering, NumberingId, Paragraph, Run, Start, Table as DocxTable, TableCell as DocxCell,
     TableRow as DocxRow,
 };
 
@@ -17,6 +18,10 @@ use crate::model::{Block, Document, Figure, Inline, Table};
 pub fn render_docx(document: &Document, output_path: &Path) -> anyhow::Result<()> {
     let mut docx = Docx::new();
 
+    // Assign a stable numbering ID for each list block we encounter.
+    // abstractNumId == numId for simplicity (one-to-one mapping).
+    let mut next_num_id: usize = 1;
+
     for block in &document.blocks {
         match block {
             Block::Section { .. } | Block::Paragraph(_) => {
@@ -24,18 +29,28 @@ pub fn render_docx(document: &Document, output_path: &Path) -> anyhow::Result<()
                 docx = docx.add_paragraph(para);
             }
             Block::Table(t) => {
-                // Optional caption paragraph before the table.
                 if !t.caption.is_empty() {
                     docx = docx.add_paragraph(caption_paragraph(&t.caption));
                 }
                 docx = docx.add_table(build_table(t));
-                // Optional source line after the table.
                 if !t.source.is_empty() {
                     docx = docx.add_paragraph(source_paragraph(&t.source));
                 }
             }
             Block::Figure(f) => {
                 docx = docx.add_paragraph(build_figure_paragraph(f));
+                if !f.source.is_empty() {
+                    docx = docx.add_paragraph(source_paragraph(&f.source));
+                }
+            }
+            Block::List(list) => {
+                let num_id = next_num_id;
+                next_num_id += 1;
+                docx = register_numbering(docx, num_id, list.ordered);
+                for item_inlines in &list.items {
+                    let para = build_list_item(item_inlines, num_id);
+                    docx = docx.add_paragraph(para);
+                }
             }
         }
     }
@@ -43,6 +58,44 @@ pub fn render_docx(document: &Document, output_path: &Path) -> anyhow::Result<()
     let file = File::create(output_path)?;
     docx.build().pack(file)?;
     Ok(())
+}
+
+// ---------------------------------------------------------------------------
+// List rendering
+// ---------------------------------------------------------------------------
+
+/// Register an AbstractNumbering + Numbering pair for one list instance.
+fn register_numbering(docx: Docx, num_id: usize, ordered: bool) -> Docx {
+    let abs_id = num_id - 1; // abstract IDs are 0-based by convention
+
+    let (format, text) = if ordered {
+        ("decimal", "%1.")
+    } else {
+        ("bullet", "•")
+    };
+
+    let level = Level::new(
+        0,
+        Start::new(1),
+        NumberFormat::new(format),
+        LevelText::new(text),
+        LevelJc::new("left"),
+    )
+    .indent(Some(720), None, Some(360), None);
+
+    let abs_num = AbstractNumbering::new(abs_id).add_level(level);
+    let num = Numbering::new(num_id, abs_id);
+
+    docx.add_abstract_numbering(abs_num).add_numbering(num)
+}
+
+/// Build a single list-item paragraph with numbering applied.
+fn build_list_item(inlines: &[Inline], num_id: usize) -> Paragraph {
+    let mut para = Paragraph::new().numbering(NumberingId::new(num_id), IndentLevel::new(0));
+    for run in inline_runs(inlines, false, false) {
+        para = para.add_run(run);
+    }
+    para
 }
 
 // ---------------------------------------------------------------------------
@@ -93,16 +146,12 @@ fn source_paragraph(inlines: &[Inline]) -> Paragraph {
 // Figure rendering
 // ---------------------------------------------------------------------------
 
-/// For v0.2, figures are rendered as text-only blocks:
-/// - caption (italic, centred) when present
-/// - source line when present
-///
+/// For v0.2+, figures are rendered as text-only blocks (caption + source).
 /// Image embedding is deferred to v1.0.
 fn build_figure_paragraph(figure: &Figure) -> Paragraph {
     if !figure.caption.is_empty() {
         caption_paragraph(&figure.caption)
     } else {
-        // No caption — emit an empty paragraph as a placeholder.
         Paragraph::new()
     }
 }
@@ -129,8 +178,8 @@ fn build_paragraph(block: &Block) -> Paragraph {
             }
             para
         }
-        // Table and Figure are handled separately in render_docx — unreachable here.
-        Block::Table(_) | Block::Figure(_) => unreachable!(),
+        // Table, Figure, List are handled separately in render_docx — unreachable here.
+        Block::Table(_) | Block::Figure(_) | Block::List(_) => unreachable!(),
     }
 }
 

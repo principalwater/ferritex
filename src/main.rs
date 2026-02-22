@@ -3,15 +3,22 @@ mod error;
 mod model;
 mod parser;
 mod renderer;
+mod tui;
 
 use anyhow::Result;
 use clap::Parser;
-use cli::Cli;
+use cli::{Cli, Mode};
+use std::path::Path;
 
 fn main() -> Result<()> {
     let cli = Cli::parse();
-    init_logging(cli.verbose);
-    convert(&cli)
+    let (verbose, mode) = cli.resolve_mode()?;
+    init_logging(verbose);
+
+    match mode {
+        Mode::Convert { input, output } => convert_paths(&input, &output),
+        Mode::Tui { input, output } => tui::run_tui(input, output, convert_paths),
+    }
 }
 
 fn init_logging(verbose: bool) {
@@ -20,13 +27,13 @@ fn init_logging(verbose: bool) {
     env_logger::Builder::from_env(env).init();
 }
 
-fn convert(cli: &Cli) -> Result<()> {
-    log::info!("Reading {}", cli.input.display());
-    let document = parser::latex::parse_latex_file(&cli.input)?;
+fn convert_paths(input: &Path, output: &Path) -> Result<()> {
+    log::info!("Reading {}", input.display());
+    let document = parser::latex::parse_latex_file(input)?;
     log::debug!("Parsed {} block(s)", document.blocks.len());
 
-    log::info!("Writing {}", cli.output.display());
-    renderer::docx::render_docx(&document, &cli.output)?;
+    log::info!("Writing {}", output.display());
+    renderer::docx::render_docx(&document, output)?;
 
     log::info!("Done.");
     Ok(())

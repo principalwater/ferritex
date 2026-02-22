@@ -17,6 +17,49 @@ pub enum Block {
     Section { level: u8, title: Vec<Inline> },
     /// A body paragraph consisting of inline elements.
     Paragraph(Vec<Inline>),
+    /// A table with an optional caption and rows of cells.
+    Table(Table),
+    /// A figure with an optional caption (image embedding is not yet supported).
+    Figure(Figure),
+}
+
+/// A table block.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct Table {
+    /// Caption text, if any (`\caption{…}` before or inside the float).
+    pub caption: Vec<Inline>,
+    /// Source/attribution line (`\tablesource{…}`), if present.
+    pub source: Vec<Inline>,
+    /// Rows of cells; each cell contains inline content.
+    pub rows: Vec<TableRow>,
+}
+
+/// A single row in a table.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct TableRow {
+    /// Ordered cells in this row.
+    pub cells: Vec<TableCell>,
+}
+
+/// A single cell in a table row.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct TableCell {
+    /// Inline content of the cell.
+    pub content: Vec<Inline>,
+}
+
+/// A figure block (image reference + caption).
+///
+/// ferritex does not embed images in v0.2; the image path is stored for
+/// future use when image embedding is implemented.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct Figure {
+    /// Relative path from `\includegraphics[…]{path}`, if present.
+    pub image_path: Option<String>,
+    /// Caption text from `\caption{…}`, if any.
+    pub caption: Vec<Inline>,
+    /// Source/attribution line (`\figuresource{…}`), if present.
+    pub source: Vec<Inline>,
 }
 
 /// An inline text element.

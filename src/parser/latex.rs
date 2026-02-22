@@ -1,4 +1,4 @@
-use crate::model::{Block, Document, Inline};
+use crate::model::{Block, Document, Figure, Inline, Table, TableCell, TableRow};
 
 /// Parse a LaTeX source string into a [`Document`] AST.
 ///
@@ -7,27 +7,41 @@ use crate::model::{Block, Document, Inline};
 /// - Plain paragraphs (blank-line separated)
 /// - `\textbf{…}`, `\textit{…}`, `{\bf …}`, `{\it …}`
 /// - `\label{…}`, `\ref{…}`, `\cite{…}` — emitted as placeholder text
+/// - `\begin{table}…\end{table}` with `\begin{tabular}` / `\begin{tblr}` / `\begin{longtblr}`
+/// - `\begin{figure}…\end{figure}` with `\includegraphics` and `\caption`
+/// - `\tablesource{…}` / `\figuresource{…}` — stored as source attribution
 /// - Preamble directives (`\documentclass`, `\usepackage`, `\begin{document}`,
 ///   `\end{document}`) are silently skipped.
 pub fn parse_latex(source: &str) -> Document {
-    // Strip comments first, then filter out skippable lines so that
-    // split_paragraphs never sees preamble directives mixed with body text.
     let source = strip_comments(source);
     let filtered = filter_skippable_lines(&source);
-    let chunks = split_paragraphs(&filtered);
+    // Segment the source into typed spans before paragraph-splitting,
+    // so that multi-line environments are kept intact.
+    let segments = segment(&filtered);
     let mut blocks = Vec::new();
 
-    for chunk in chunks {
-        let chunk = chunk.trim();
-        if chunk.is_empty() {
-            continue;
-        }
-        if let Some(block) = try_parse_section(chunk) {
-            blocks.push(block);
-        } else {
-            let inlines = parse_inlines(chunk);
-            if !inlines.is_empty() {
-                blocks.push(Block::Paragraph(inlines));
+    for seg in segments {
+        match seg {
+            Segment::Float(content) => {
+                if let Some(block) = parse_float(&content) {
+                    blocks.push(block);
+                }
+            }
+            Segment::Text(content) => {
+                for chunk in split_paragraphs(&content) {
+                    let chunk = chunk.trim();
+                    if chunk.is_empty() {
+                        continue;
+                    }
+                    if let Some(block) = try_parse_section(chunk) {
+                        blocks.push(block);
+                    } else {
+                        let inlines = parse_inlines(chunk);
+                        if !inlines.is_empty() {
+                            blocks.push(Block::Paragraph(inlines));
+                        }
+                    }
+                }
             }
         }
     }
@@ -35,8 +49,347 @@ pub fn parse_latex(source: &str) -> Document {
     Document { blocks }
 }
 
-/// Remove lines that are purely preamble directives or environment delimiters,
-/// replacing them with blank lines so that paragraph splitting is unaffected.
+// ---------------------------------------------------------------------------
+// Segmenter — splits source into float environments vs plain text
+// ---------------------------------------------------------------------------
+
+enum Segment {
+    /// A `\begin{table}…\end{table}` or `\begin{figure}…\end{figure}` block,
+    /// plus any immediately following `\tablesource`/`\figuresource` call.
+    Float(String),
+    /// Everything else (paragraphs, sections, etc.).
+    Text(String),
+}
+
+/// The float environments we recognise as block-level.
+const FLOAT_ENVS: &[&str] = &["table", "figure", "table*", "figure*"];
+
+fn segment(src: &str) -> Vec<Segment> {
+    let mut segments = Vec::new();
+    let mut pos = 0;
+    let bytes = src.as_bytes();
+    let len = src.len();
+
+    while pos < len {
+        // Look for \begin{<float_env>}
+        if let Some((env_name, begin_pos)) = find_begin_float(src, pos) {
+            // Flush text before this float.
+            if begin_pos > pos {
+                segments.push(Segment::Text(src[pos..begin_pos].to_string()));
+            }
+            // Find the matching \end{<env_name>}.
+            let end_tag = format!("\\end{{{}}}", env_name);
+            if let Some(end_offset) = src[begin_pos..].find(&end_tag) {
+                let end_pos = begin_pos + end_offset + end_tag.len();
+                // Also consume an optional \tablesource / \figuresource after the float.
+                let after = src[end_pos..].trim_start_matches([' ', '\t', '\n', '\r']);
+                let source_suffix = consume_source_macro(after);
+                let total_end = if source_suffix.is_empty() {
+                    end_pos
+                } else {
+                    end_pos + (src[end_pos..].len() - after.len()) + source_suffix.len()
+                };
+                let float_text = format!("{}{}", &src[begin_pos..end_pos], source_suffix);
+                segments.push(Segment::Float(float_text));
+                pos = total_end;
+            } else {
+                // Unmatched \begin — treat as text.
+                segments.push(Segment::Text(src[begin_pos..].to_string()));
+                pos = len;
+            }
+        } else {
+            // No more floats — rest is text.
+            segments.push(Segment::Text(src[pos..].to_string()));
+            pos = len;
+        }
+        _ = bytes; // suppress unused warning
+    }
+
+    segments
+}
+
+/// Find the next `\begin{<float_env>}` at or after `from`.
+/// Returns `(env_name, byte_offset_of_begin)`.
+fn find_begin_float(src: &str, from: usize) -> Option<(String, usize)> {
+    let mut search_pos = from;
+    while search_pos < src.len() {
+        if let Some(rel) = src[search_pos..].find("\\begin{") {
+            let abs = search_pos + rel;
+            let after_begin = abs + 7; // len("\\begin{") == 7
+            if let Some(close) = src[after_begin..].find('}') {
+                let env = &src[after_begin..after_begin + close];
+                if FLOAT_ENVS.contains(&env) {
+                    return Some((env.to_string(), abs));
+                }
+                // Not a float env — skip past this \begin and keep searching.
+                search_pos = after_begin + close + 1;
+            } else {
+                break;
+            }
+        } else {
+            break;
+        }
+    }
+    None
+}
+
+/// If `src` starts with `\tablesource{…}` or `\figuresource{…}`, return that
+/// entire call (including braces). Otherwise return empty string.
+fn consume_source_macro(src: &str) -> String {
+    for prefix in &["\\tablesource", "\\figuresource"] {
+        if let Some(rest) = src.strip_prefix(prefix) {
+            let rest = rest.trim_start_matches([' ', '\t']);
+            if let Some(len) = braced_len(rest) {
+                return format!("{}{}", prefix, &rest[..len]);
+            }
+        }
+    }
+    String::new()
+}
+
+// ---------------------------------------------------------------------------
+// Float parser
+// ---------------------------------------------------------------------------
+
+/// Parse a float segment (table or figure) into a [`Block`].
+fn parse_float(src: &str) -> Option<Block> {
+    let src = src.trim();
+    if src.starts_with("\\begin{figure") {
+        Some(Block::Figure(parse_figure(src)))
+    } else {
+        Some(Block::Table(parse_table(src)))
+    }
+}
+
+/// Parse a `\begin{table}…\end{table}` segment into a [`Table`].
+fn parse_table(src: &str) -> Table {
+    let caption = extract_caption(src);
+    let source = extract_source_macro(src);
+
+    // Find the inner tabular/tblr/longtblr environment.
+    let rows = extract_table_rows(src);
+
+    Table {
+        caption,
+        source,
+        rows,
+    }
+}
+
+/// Parse a `\begin{figure}…\end{figure}` segment into a [`Figure`].
+fn parse_figure(src: &str) -> Figure {
+    let caption = extract_caption(src);
+    let source = extract_source_macro(src);
+    let image_path = extract_includegraphics_path(src);
+    Figure {
+        image_path,
+        caption,
+        source,
+    }
+}
+
+/// Extract `\caption{…}` content from a float.
+fn extract_caption(src: &str) -> Vec<Inline> {
+    if let Some(pos) = src.find("\\caption") {
+        let after = src[pos + 8..].trim_start_matches([' ', '\t']);
+        // Skip optional `[short]` argument.
+        let after = if after.starts_with('[') {
+            if let Some(close) = after.find(']') {
+                after[close + 1..].trim_start_matches([' ', '\t'])
+            } else {
+                after
+            }
+        } else {
+            after
+        };
+        if let Some(content) = extract_braced(after) {
+            return parse_inlines(content);
+        }
+    }
+    Vec::new()
+}
+
+/// Extract `\tablesource{…}` or `\figuresource{…}` content.
+fn extract_source_macro(src: &str) -> Vec<Inline> {
+    for macro_name in &["\\tablesource", "\\figuresource"] {
+        if let Some(pos) = src.find(macro_name) {
+            let after = src[pos + macro_name.len()..].trim_start_matches([' ', '\t']);
+            if let Some(content) = extract_braced(after) {
+                return parse_inlines(content);
+            }
+        }
+    }
+    Vec::new()
+}
+
+/// Extract the path from `\includegraphics[…]{path}`.
+fn extract_includegraphics_path(src: &str) -> Option<String> {
+    let pos = src.find("\\includegraphics")?;
+    let after = src[pos + 16..].trim_start_matches([' ', '\t']);
+    // Skip optional `[width=…]` argument.
+    let after = if after.starts_with('[') {
+        let close = after.find(']')?;
+        after[close + 1..].trim_start_matches([' ', '\t'])
+    } else {
+        after
+    };
+    let content = extract_braced(after)?;
+    Some(content.trim().to_string())
+}
+
+/// Parse rows from within a `tabular`, `tblr`, or `longtblr` environment.
+///
+/// Strategy:
+/// 1. Locate the innermost table environment body (after the column spec).
+/// 2. Split on `\\` (row separator).
+/// 3. Split each row on `&` (cell separator).
+/// 4. Parse each cell as inlines.
+fn extract_table_rows(src: &str) -> Vec<TableRow> {
+    // Find the body of the innermost tabular/tblr/longtblr.
+    let body = find_tabular_body(src);
+    if body.is_empty() {
+        return Vec::new();
+    }
+
+    let mut rows = Vec::new();
+    // Split on `\\` but not on `\` followed by other chars.
+    for raw_row in split_table_rows(body) {
+        // A single "row chunk" between `\\` terminators can contain horizontal
+        // rule lines (`\hline`, `\midrule`, …) followed by actual cell data.
+        // Strip those rule lines and keep only the cell content lines.
+        let cell_line: String = raw_row
+            .lines()
+            .filter(|l| {
+                let t = l.trim();
+                !t.is_empty()
+                    && !t.starts_with("\\hline")
+                    && !t.starts_with("\\toprule")
+                    && !t.starts_with("\\midrule")
+                    && !t.starts_with("\\bottomrule")
+                    && !t.starts_with("\\cline")
+            })
+            .collect::<Vec<_>>()
+            .join(" ");
+        let cell_line = cell_line.trim();
+        if cell_line.is_empty() {
+            continue;
+        }
+        let cells: Vec<TableCell> = cell_line
+            .split('&')
+            .map(|cell| TableCell {
+                content: parse_inlines(cell.trim()),
+            })
+            .collect();
+        if cells.iter().any(|c| !c.content.is_empty()) {
+            rows.push(TableRow { cells });
+        }
+    }
+    rows
+}
+
+/// Locate the content between `{col_spec}` (or `{…}`) and the matching
+/// `\end{tabular}` / `\end{tblr}` / `\end{longtblr}`.
+fn find_tabular_body(src: &str) -> &str {
+    // Find innermost tabular-family begin.
+    let inner_envs = ["tabular", "tblr", "longtblr"];
+    let mut best: Option<(usize, &str)> = None;
+    for env in inner_envs {
+        let tag = format!("\\begin{{{}}}", env);
+        if let Some(pos) = src.rfind(&tag)
+            && best.is_none_or(|(p, _)| pos > p)
+        {
+            best = Some((pos, env));
+        }
+    }
+    let (begin_pos, env_name) = match best {
+        Some(v) => v,
+        None => return "",
+    };
+
+    let tag_len = 8 + env_name.len(); // \begin{} = 8 chars + env name
+    let after_begin = &src[begin_pos + tag_len..];
+
+    // Skip the column spec argument `{…}` or `[…]{…}`.
+    let body_start = skip_tabular_preamble(after_begin);
+
+    let end_tag = format!("\\end{{{}}}", env_name);
+    if let Some(end_rel) = body_start.find(&end_tag) {
+        &body_start[..end_rel]
+    } else {
+        body_start
+    }
+}
+
+/// Skip optional `[…]` and mandatory `{col_spec}` after `\begin{tabular}`.
+/// Returns a slice pointing at the actual cell content.
+fn skip_tabular_preamble(src: &str) -> &str {
+    let src = src.trim_start();
+    // tblr uses `{ key=val, ... }` preamble — skip it.
+    if src.starts_with('{') {
+        if let Some(len) = braced_len(src) {
+            src[len..].trim_start()
+        } else {
+            src
+        }
+    } else if src.starts_with('[') {
+        // longtblr `[caption=…]`
+        if let Some(close) = src.find(']') {
+            let after = src[close + 1..].trim_start();
+            // Then the `{col_spec}` block.
+            if let Some(len) = braced_len(after) {
+                after[len..].trim_start()
+            } else {
+                after
+            }
+        } else {
+            src
+        }
+    } else {
+        src
+    }
+}
+
+/// Split table body on `\\` row terminators, respecting brace nesting.
+fn split_table_rows(src: &str) -> Vec<&str> {
+    let mut rows = Vec::new();
+    let mut depth = 0usize;
+    let mut start = 0;
+    let bytes = src.as_bytes();
+    let len = src.len();
+    let mut i = 0;
+
+    while i < len {
+        match bytes[i] {
+            b'{' => {
+                depth += 1;
+                i += 1;
+            }
+            b'}' => {
+                depth = depth.saturating_sub(1);
+                i += 1;
+            }
+            b'\\' if depth == 0 && i + 1 < len && bytes[i + 1] == b'\\' => {
+                rows.push(&src[start..i]);
+                i += 2;
+                start = i;
+            }
+            _ => {
+                i += 1;
+            }
+        }
+    }
+    let last = src[start..].trim();
+    if !last.is_empty() {
+        rows.push(last);
+    }
+    rows
+}
+
+// ---------------------------------------------------------------------------
+// Shared line-level helpers (unchanged from v0.1)
+// ---------------------------------------------------------------------------
+
+/// Remove lines that are purely preamble directives or environment delimiters.
 fn filter_skippable_lines(src: &str) -> String {
     src.lines()
         .map(|line| if is_skippable(line.trim()) { "" } else { line })
@@ -44,15 +397,10 @@ fn filter_skippable_lines(src: &str) -> String {
         .join("\n")
 }
 
-// ---------------------------------------------------------------------------
-// Internal helpers
-// ---------------------------------------------------------------------------
-
 /// Remove `%`-style LaTeX comments (to end of line).
 fn strip_comments(src: &str) -> String {
     src.lines()
         .map(|line| {
-            // A `%` that is NOT preceded by `\` starts a comment.
             let mut result = String::with_capacity(line.len());
             let mut chars = line.chars().peekable();
             while let Some(ch) = chars.next() {
@@ -112,7 +460,6 @@ fn is_skippable(chunk: &str) -> bool {
 }
 
 /// Try to parse `\section{…}` / `\subsection{…}` / `\subsubsection{…}`.
-/// Returns `None` if the chunk is not a heading.
 fn try_parse_section(chunk: &str) -> Option<Block> {
     let (level, rest) = if let Some(r) = chunk.strip_prefix("\\subsubsection") {
         (3u8, r)
@@ -124,7 +471,6 @@ fn try_parse_section(chunk: &str) -> Option<Block> {
         return None;
     };
 
-    // Accept optional `*` (unnumbered variant) then `{…}`
     let rest = rest.strip_prefix('*').unwrap_or(rest).trim_start();
     let title_src = extract_braced(rest)?;
     let title = parse_inlines(title_src);
@@ -132,8 +478,6 @@ fn try_parse_section(chunk: &str) -> Option<Block> {
 }
 
 /// Extract the content of the first `{…}` group from the start of `src`.
-/// Returns the content (without braces) or `None` if the input doesn't start
-/// with `{`.
 fn extract_braced(src: &str) -> Option<&str> {
     let src = src.trim_start();
     if !src.starts_with('{') {
@@ -156,8 +500,7 @@ fn extract_braced(src: &str) -> Option<&str> {
     None
 }
 
-/// Parse a string of mixed text and inline LaTeX commands into a list of
-/// [`Inline`] nodes.
+/// Parse a string of mixed text and inline LaTeX commands into [`Inline`] nodes.
 pub(crate) fn parse_inlines(src: &str) -> Vec<Inline> {
     let mut result = Vec::new();
     let mut pos = 0;
@@ -165,7 +508,6 @@ pub(crate) fn parse_inlines(src: &str) -> Vec<Inline> {
     let len = src.len();
 
     while pos < len {
-        // Look for the next interesting character.
         match bytes[pos] {
             b'\\' => {
                 let rest = &src[pos..];
@@ -173,14 +515,11 @@ pub(crate) fn parse_inlines(src: &str) -> Vec<Inline> {
                     result.extend(inlines);
                     pos += consumed;
                 } else {
-                    // Unknown command — emit as literal text up to next space/brace.
                     let end = rest[1..]
                         .find(|c: char| !c.is_ascii_alphabetic())
                         .map(|i| pos + 1 + i)
                         .unwrap_or(len);
-                    // Skip the command silently (unknown macro).
                     pos = end;
-                    // Skip optional `{…}` argument if present.
                     let remaining = src[pos..].trim_start();
                     if remaining.starts_with('{')
                         && let Some(arg_len) = braced_len(remaining)
@@ -190,25 +529,20 @@ pub(crate) fn parse_inlines(src: &str) -> Vec<Inline> {
                 }
             }
             b'{' => {
-                // Group: check for `{\bf …}` / `{\it …}` etc.
                 let rest = &src[pos..];
                 if let Some((inlines, consumed)) = try_parse_brace_group(rest) {
                     result.extend(inlines);
                     pos += consumed;
+                } else if let Some(inner_len) = braced_len(rest) {
+                    let inner = &rest[1..inner_len - 1];
+                    result.extend(parse_inlines(inner));
+                    pos += inner_len;
                 } else {
-                    // Plain group — parse contents transparently.
-                    if let Some(inner_len) = braced_len(rest) {
-                        let inner = &rest[1..inner_len - 1];
-                        result.extend(parse_inlines(inner));
-                        pos += inner_len;
-                    } else {
-                        result.push(Inline::Text("{".to_string()));
-                        pos += 1;
-                    }
+                    result.push(Inline::Text("{".to_string()));
+                    pos += 1;
                 }
             }
             _ => {
-                // Collect plain text until the next `\` or `{`.
                 let start = pos;
                 while pos < len && bytes[pos] != b'\\' && bytes[pos] != b'{' {
                     pos += 1;
@@ -225,10 +559,7 @@ pub(crate) fn parse_inlines(src: &str) -> Vec<Inline> {
     result
 }
 
-/// Try to parse an inline command starting with `\` from the beginning of
-/// `src`. Returns `(inlines, bytes_consumed)` on success.
 fn try_parse_inline_command(src: &str) -> Option<(Vec<Inline>, usize)> {
-    // \textbf{…}
     if let Some(r) = src.strip_prefix("\\textbf") {
         let r = r.trim_start_matches(' ');
         if let Some(arg_len) = braced_len(r) {
@@ -237,7 +568,6 @@ fn try_parse_inline_command(src: &str) -> Option<(Vec<Inline>, usize)> {
             return Some((vec![Inline::Bold(parse_inlines(inner))], consumed));
         }
     }
-    // \textit{…}  /  \emph{…}
     if let Some(r) = src
         .strip_prefix("\\textit")
         .or_else(|| src.strip_prefix("\\emph"))
@@ -249,8 +579,7 @@ fn try_parse_inline_command(src: &str) -> Option<(Vec<Inline>, usize)> {
             return Some((vec![Inline::Italic(parse_inlines(inner))], consumed));
         }
     }
-    // \label{…}, \ref{…}, \cite{…} — emit placeholder
-    for cmd in &["\\label", "\\ref", "\\cite"] {
+    for cmd in &["\\label", "\\ref", "\\cite", "\\autocite"] {
         if let Some(r) = src.strip_prefix(cmd) {
             let r = r.trim_start_matches(' ');
             if let Some(arg_len) = braced_len(r) {
@@ -264,14 +593,11 @@ fn try_parse_inline_command(src: &str) -> Option<(Vec<Inline>, usize)> {
     None
 }
 
-/// Try to parse a `{…}` group that starts with a font switch like `{\bf …}`
-/// or `{\it …}`.
 fn try_parse_brace_group(src: &str) -> Option<(Vec<Inline>, usize)> {
     if !src.starts_with('{') {
         return None;
     }
     let inner_src = &src[1..];
-    // Look for font switch at the start of the group.
     let (wrapper, content_src): (fn(Vec<Inline>) -> Inline, &str) = if let Some(r) =
         inner_src.strip_prefix("\\bf").and_then(|r| {
             if r.starts_with(|c: char| c.is_whitespace() || c == '{') {
@@ -309,18 +635,14 @@ fn try_parse_brace_group(src: &str) -> Option<(Vec<Inline>, usize)> {
         return None;
     };
 
-    // Find the matching closing `}` for the outer group.
     let total_group_len = braced_len(src)?;
-    // content is everything between the font switch and the closing `}`.
-    let content_end = total_group_len - 1; // index of closing `}`
+    let content_end = total_group_len - 1;
     let content_start = src.len() - inner_src.len() + (inner_src.len() - content_src.len());
     let content = &src[content_start..content_end];
     let inlines = parse_inlines(content);
     Some((vec![wrapper(inlines)], total_group_len))
 }
 
-/// Return the byte length of a `{…}` group at the start of `src` (including
-/// both braces), or `None` if `src` doesn't start with `{`.
 fn braced_len(src: &str) -> Option<usize> {
     if !src.starts_with('{') {
         return None;
@@ -341,7 +663,6 @@ fn braced_len(src: &str) -> Option<usize> {
     None
 }
 
-/// Collapse runs of whitespace (including newlines) into a single space.
 fn normalize_whitespace(s: &str) -> String {
     let mut out = String::with_capacity(s.len());
     let mut prev_space = false;
@@ -450,8 +771,6 @@ mod tests {
     #[test]
     fn test_comment_stripped() {
         let doc = parse_latex("Hello % this is a comment\nworld.");
-        // After stripping the comment and joining the paragraph we get "Hello  world."
-        // with possible extra space; normalize_whitespace reduces it.
         match &doc.blocks[0] {
             Block::Paragraph(inlines) => {
                 let text: String = inlines
@@ -480,6 +799,63 @@ mod tests {
                 );
             }
             other => panic!("expected paragraph, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_simple_table_parsed() {
+        let src = r"
+\begin{table}[H]
+\centering
+\caption{Sample table}
+\label{tab:sample}
+\begin{tabular}{|l|c|}
+\hline
+\textbf{Name} & \textbf{Value} \\
+\hline
+Alpha & 1 \\
+Beta & 2 \\
+\hline
+\end{tabular}
+\end{table}
+";
+        let doc = parse_latex(src);
+        assert_eq!(doc.blocks.len(), 1, "expected one block");
+        match &doc.blocks[0] {
+            Block::Table(t) => {
+                assert!(!t.caption.is_empty(), "caption should be parsed");
+                // 3 rows: header + 2 data rows (hline rules are stripped, not rows)
+                assert_eq!(t.rows.len(), 3, "expected 3 rows (header + 2 data)");
+                assert_eq!(t.rows[0].cells.len(), 2, "expected 2 cells per row");
+            }
+            other => panic!("expected Table, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_figure_parsed() {
+        let src = r"
+\begin{figure}[H]
+\centering
+\includegraphics[width=1.0\textwidth]{images/chart.png}
+\caption{A sample chart}
+\label{fig:chart}
+\end{figure}
+\figuresource{Source: synthetic data.}
+";
+        let doc = parse_latex(src);
+        assert_eq!(doc.blocks.len(), 1);
+        match &doc.blocks[0] {
+            Block::Figure(f) => {
+                assert_eq!(
+                    f.image_path.as_deref(),
+                    Some("images/chart.png"),
+                    "image path mismatch"
+                );
+                assert!(!f.caption.is_empty(), "caption should be parsed");
+                assert!(!f.source.is_empty(), "figuresource should be parsed");
+            }
+            other => panic!("expected Figure, got {other:?}"),
         }
     }
 }

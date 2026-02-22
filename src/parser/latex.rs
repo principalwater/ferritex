@@ -69,6 +69,8 @@ const BLOCK_ENVS: &[&str] = &[
     "figure*",
     "itemize",
     "enumerate",
+    "equation",
+    "equation*",
 ];
 
 fn segment(src: &str) -> Vec<Segment> {
@@ -167,9 +169,25 @@ fn parse_float(src: &str) -> Option<Block> {
         Some(Block::List(parse_list(src, false)))
     } else if src.starts_with("\\begin{enumerate") {
         Some(Block::List(parse_list(src, true)))
+    } else if src.starts_with("\\begin{equation") {
+        Some(Block::DisplayMath(extract_display_math_body(src)))
     } else {
         Some(Block::Table(parse_table(src)))
     }
+}
+
+/// Extract the raw body from `\begin{equation}…\end{equation}` (or `equation*`).
+fn extract_display_math_body(src: &str) -> String {
+    // Find the opening `}` of `\begin{equation...}`.
+    let body_start = src.find('}').map(|i| i + 1).unwrap_or(src.len());
+    let body = &src[body_start..];
+    // Trim up to `\end{equation`.
+    let body = if let Some(end) = body.find("\\end{equation") {
+        &body[..end]
+    } else {
+        body
+    };
+    body.trim().to_string()
 }
 
 /// Parse a `\begin{table}…\end{table}` segment into a [`Table`].
@@ -561,6 +579,29 @@ pub(crate) fn parse_inlines(src: &str) -> Vec<Inline> {
 
     while pos < len {
         match bytes[pos] {
+            b'$' => {
+                // Inline math: $…$
+                // Find the closing `$` (skip escaped `\$`).
+                let mut end = pos + 1;
+                while end < len {
+                    if bytes[end] == b'\\' {
+                        end += 2; // skip escaped char
+                    } else if bytes[end] == b'$' {
+                        break;
+                    } else {
+                        end += 1;
+                    }
+                }
+                if end < len {
+                    let math_src = src[pos + 1..end].trim().to_string();
+                    result.push(Inline::InlineMath(math_src));
+                    pos = end + 1;
+                } else {
+                    // No closing $ — emit as plain text.
+                    result.push(Inline::Text("$".to_string()));
+                    pos += 1;
+                }
+            }
             b'\\' => {
                 let rest = &src[pos..];
                 if let Some((inlines, consumed)) = try_parse_inline_command(rest) {
@@ -596,7 +637,7 @@ pub(crate) fn parse_inlines(src: &str) -> Vec<Inline> {
             }
             _ => {
                 let start = pos;
-                while pos < len && bytes[pos] != b'\\' && bytes[pos] != b'{' {
+                while pos < len && bytes[pos] != b'\\' && bytes[pos] != b'{' && bytes[pos] != b'$' {
                     pos += 1;
                 }
                 let text = &src[start..pos];
@@ -956,6 +997,33 @@ Beta & 2 \\
                 );
             }
             other => panic!("expected List, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_inline_math_parsed() {
+        let doc = parse_latex("Energy $E = mc^2$ is conserved.");
+        match &doc.blocks[0] {
+            Block::Paragraph(inlines) => {
+                assert!(
+                    inlines.iter().any(|i| matches!(i, Inline::InlineMath(_))),
+                    "expected InlineMath in paragraph"
+                );
+            }
+            other => panic!("expected paragraph, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_display_math_parsed() {
+        let src = "\\begin{equation}\nW = \\sum x_i\n\\label{eq:welfare}\n\\end{equation}";
+        let doc = parse_latex(src);
+        assert_eq!(doc.blocks.len(), 1);
+        match &doc.blocks[0] {
+            Block::DisplayMath(body) => {
+                assert!(body.contains("W = \\sum x_i"), "body: {body:?}");
+            }
+            other => panic!("expected DisplayMath, got {other:?}"),
         }
     }
 }

@@ -204,3 +204,61 @@ fn test_lists_docx_contains_numbering() {
 
     let _ = std::fs::remove_file(&output);
 }
+
+/// Math fixture: inline `$...$` must produce paragraph runs; display equation
+/// must render as a centered paragraph in DOCX.
+#[test]
+fn test_math_docx_is_valid() {
+    use ferritex::model::{Block, Inline};
+
+    let input = fixture("with_math.tex");
+    let output = tmp_output("with_math.docx");
+
+    let source = std::fs::read_to_string(&input)
+        .unwrap_or_else(|e| panic!("cannot read fixture {input:?}: {e}"));
+    let document = ferritex::parser::latex::parse_latex(&source);
+
+    assert!(
+        document
+            .blocks
+            .iter()
+            .any(|b| matches!(b, Block::DisplayMath(_))),
+        "no DisplayMath block found"
+    );
+
+    let has_inline_math = document.blocks.iter().any(|b| {
+        if let Block::Paragraph(inlines) = b {
+            inlines.iter().any(|i| matches!(i, Inline::InlineMath(_)))
+        } else {
+            false
+        }
+    });
+    assert!(has_inline_math, "no InlineMath inline found");
+
+    ferritex::renderer::docx::render_docx(&document, &output)
+        .unwrap_or_else(|e| panic!("render_docx failed: {e}"));
+
+    let file =
+        std::fs::File::open(&output).unwrap_or_else(|e| panic!("cannot open output DOCX: {e}"));
+    let mut zip =
+        zip::ZipArchive::new(file).unwrap_or_else(|e| panic!("output is not a valid ZIP: {e}"));
+
+    let mut doc_xml = zip
+        .by_name("word/document.xml")
+        .unwrap_or_else(|e| panic!("word/document.xml missing from DOCX: {e}"));
+    let mut xml_content = String::new();
+    doc_xml
+        .read_to_string(&mut xml_content)
+        .unwrap_or_else(|e| panic!("cannot read word/document.xml: {e}"));
+
+    assert!(
+        xml_content.contains("W = \\sum_{i=1}^{n} x_i") || xml_content.contains("W = \\sum"),
+        "display math body not found in document.xml"
+    );
+    assert!(
+        xml_content.contains("w:jc w:val=\"center\""),
+        "display math paragraph is not centered"
+    );
+
+    let _ = std::fs::remove_file(&output);
+}

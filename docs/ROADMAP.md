@@ -11,15 +11,16 @@
 - `\tablesource` / `\figuresource` attribution lines
 - GitHub Actions CI (fmt + clippy + test)
 
-## v0.3
+## v0.3 ✅
 - Lists: `\begin{itemize}`, `\begin{enumerate}`
-- Footnotes: `\footnote{}`
 
-## v0.4
-- Math: inline `$…$` and display `\[…\]` — rendered as plain text placeholder
+## v0.4 ✅
+- Math: inline `$…$` and display `\begin{equation}…\end{equation}` / `\begin{equation*}…\end{equation*}` — rendered as plain-text approximation (italic; display math centered)
 
 ## v0.5
+- Footnotes: `\footnote{}`
 - Bibliography: `\autocite{}`, `\cite{}` — rendered as `[key]` (already partial)
+- Display math `\[…\]`
 - `\input{}` file inclusion
 
 ## v1.0

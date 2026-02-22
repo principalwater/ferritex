@@ -1,0 +1,99 @@
+name: Bot Merge
+
+on:
+  workflow_run:
+    workflows: ["CI"]
+    types: [completed]
+  pull_request_target:
+    types: [labeled]
+
+jobs:
+  bot-merge:
+    name: Merge labeled PR with squash
+    runs-on: ubuntu-latest
+    if: |
+      (github.event_name == 'workflow_run' && github.event.workflow_run.conclusion == 'success') ||
+      (github.event_name == 'pull_request_target' && github.event.action == 'labeled' && github.event.label.name == 'bot-merge')
+
+    permissions:
+      contents: write
+      pull-requests: write
+
+    steps:
+      - name: Resolve PR number
+        id: pr
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_run" ]; then
+            PR_NUMBER=$(jq -r '.workflow_run.pull_requests[0].number // empty' "$GITHUB_EVENT_PATH")
+          else
+            PR_NUMBER=$(jq -r '.pull_request.number // empty' "$GITHUB_EVENT_PATH")
+          fi
+          echo "pr_number=${PR_NUMBER}" >> "$GITHUB_OUTPUT"
+
+      - name: Check merge gates
+        id: gate
+        if: steps.pr.outputs.pr_number != ''
+        env:
+          GH_TOKEN: ${{ secrets.BOT_GITHUB_TOKEN }}
+          PR_NUMBER: ${{ steps.pr.outputs.pr_number }}
+        run: |
+          PR_JSON=$(gh pr view "$PR_NUMBER" \
+            --repo "${{ github.repository }}" \
+            --json state,isDraft,baseRefName,author,labels \
+            --jq '.')
+
+          PR_STATE=$(echo "$PR_JSON" | jq -r '.state')
+          PR_DRAFT=$(echo "$PR_JSON" | jq -r '.isDraft')
+          PR_BASE=$(echo "$PR_JSON" | jq -r '.baseRefName')
+          PR_AUTHOR=$(echo "$PR_JSON" | jq -r '.author.login')
+          HAS_BOT_MERGE_LABEL=$(echo "$PR_JSON" | jq -r '[.labels[].name] | index("bot-merge") != null')
+
+          CI_OK=false
+          if gh pr checks "$PR_NUMBER" --repo "${{ github.repository }}" --required >/dev/null 2>&1; then
+            CI_OK=true
+          fi
+
+          echo "pr_state=${PR_STATE}" >> "$GITHUB_OUTPUT"
+          echo "pr_draft=${PR_DRAFT}" >> "$GITHUB_OUTPUT"
+          echo "pr_base=${PR_BASE}" >> "$GITHUB_OUTPUT"
+          echo "pr_author=${PR_AUTHOR}" >> "$GITHUB_OUTPUT"
+          echo "has_bot_merge_label=${HAS_BOT_MERGE_LABEL}" >> "$GITHUB_OUTPUT"
+          echo "ci_ok=${CI_OK}" >> "$GITHUB_OUTPUT"
+
+      - name: Merge PR (squash + delete branch)
+        if: |
+          steps.pr.outputs.pr_number != '' &&
+          steps.gate.outputs.pr_state == 'OPEN' &&
+          steps.gate.outputs.pr_draft == 'false' &&
+          steps.gate.outputs.pr_base == 'master' &&
+          steps.gate.outputs.pr_author == 'principalwater' &&
+          steps.gate.outputs.has_bot_merge_label == 'true' &&
+          steps.gate.outputs.ci_ok == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.BOT_GITHUB_TOKEN }}
+          PR_NUMBER: ${{ steps.pr.outputs.pr_number }}
+        run: |
+          echo "Checking approval status for PR #${PR_NUMBER}"
+          APPROVED=false
+          for _ in {1..12}; do
+            REVIEW_DECISION=$(gh pr view "$PR_NUMBER" \
+              --repo "${{ github.repository }}" \
+              --json reviewDecision \
+              --jq '.reviewDecision // "REVIEW_REQUIRED"')
+            if [ "$REVIEW_DECISION" = "APPROVED" ]; then
+              APPROVED=true
+              break
+            fi
+            sleep 10
+          done
+
+          if [ "$APPROVED" != "true" ]; then
+            echo "PR #${PR_NUMBER} is not approved yet. Skipping merge."
+            exit 0
+          fi
+
+          echo "Merging PR #${PR_NUMBER} with squash and deleting branch."
+          gh pr merge "$PR_NUMBER" \
+            --repo "${{ github.repository }}" \
+            --squash \
+            --delete-branch

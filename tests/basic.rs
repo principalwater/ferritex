@@ -286,3 +286,93 @@ fn test_math_docx_is_valid() {
 
     let _ = std::fs::remove_file(&output);
 }
+
+/// Footnote fixture: parser must emit footnote inlines and renderer must create
+/// a DOCX with `word/footnotes.xml` and footnote references in `document.xml`.
+#[test]
+fn test_footnotes_docx_contains_footnotes_part() {
+    use ferritex::model::{Block, Inline};
+
+    let input = fixture("with_footnotes.tex");
+    let output = tmp_output("with_footnotes.docx");
+
+    let source = std::fs::read_to_string(&input)
+        .unwrap_or_else(|e| panic!("cannot read fixture {input:?}: {e}"));
+    let document = ferritex::parser::latex::parse_latex(&source);
+
+    let footnote_payloads: Vec<_> = document
+        .blocks
+        .iter()
+        .flat_map(|b| {
+            if let Block::Paragraph(inlines) = b {
+                inlines
+                    .iter()
+                    .filter_map(|i| {
+                        if let Inline::Footnote(content) = i {
+                            Some(content)
+                        } else {
+                            None
+                        }
+                    })
+                    .collect::<Vec<_>>()
+            } else {
+                Vec::new()
+            }
+        })
+        .collect();
+
+    assert!(
+        footnote_payloads.len() >= 3,
+        "expected at least 3 footnotes in AST (2 explicit + 1 autocite)"
+    );
+    assert!(
+        footnote_payloads
+            .iter()
+            .any(|content| content.iter().any(|i| matches!(i, Inline::Italic(_)))),
+        "expected inline formatting inside footnote payload"
+    );
+
+    ferritex::renderer::docx::render_docx(&document, &output)
+        .unwrap_or_else(|e| panic!("render_docx failed: {e}"));
+
+    let file =
+        std::fs::File::open(&output).unwrap_or_else(|e| panic!("cannot open output DOCX: {e}"));
+    let mut zip =
+        zip::ZipArchive::new(file).unwrap_or_else(|e| panic!("output is not a valid ZIP: {e}"));
+
+    let mut doc_xml_content = String::new();
+    {
+        let mut doc_xml = zip
+            .by_name("word/document.xml")
+            .unwrap_or_else(|e| panic!("word/document.xml missing from DOCX: {e}"));
+        doc_xml
+            .read_to_string(&mut doc_xml_content)
+            .unwrap_or_else(|e| panic!("cannot read word/document.xml: {e}"));
+    }
+    assert!(
+        doc_xml_content.contains("w:footnoteReference"),
+        "document.xml does not contain footnote references"
+    );
+
+    let mut footnotes_xml_content = String::new();
+    {
+        let mut footnotes_xml = zip
+            .by_name("word/footnotes.xml")
+            .unwrap_or_else(|e| panic!("word/footnotes.xml missing from DOCX: {e}"));
+        footnotes_xml
+            .read_to_string(&mut footnotes_xml_content)
+            .unwrap_or_else(|e| panic!("cannot read word/footnotes.xml: {e}"));
+    }
+    assert!(
+        footnotes_xml_content.contains("<w:footnote "),
+        "footnotes.xml does not contain footnote elements"
+    );
+    assert!(
+        footnotes_xml_content.contains("Synthetic note")
+            || footnotes_xml_content.contains("Second note")
+            || footnotes_xml_content.contains("DemoAutocite2026"),
+        "footnote text not found in footnotes.xml"
+    );
+
+    let _ = std::fs::remove_file(&output);
+}

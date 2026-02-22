@@ -93,9 +93,21 @@ dissertation, or private project.
 - University or organization names
 - Dissertation or thesis titles, chapter names, or subject matter
 - Absolute local file paths (use relative paths or CLI args)
+- Relative paths that point to external/private projects or corpora
+  (e.g., `thesis/dissertation.tex` from another repo/workspace)
 - Private GitHub repository names or URLs
 - API tokens, SSH keys, credentials of any kind
 - Email addresses (unless explicitly public and consented)
+
+### Commit / PR metadata policy
+- The same privacy rules apply to commit messages, PR titles, PR bodies,
+  release notes, CI logs, and validation notes.
+- Do not mention external/private project names, file paths, or identifiers
+  in PR/commit text. Use generic wording:
+  - good: `validated on a large multi-file LaTeX corpus`
+  - bad: `validated on thesis/dissertation.tex`
+- Validation examples in this repository must use synthetic paths such as
+  `sample/main.tex` unless the file is inside this public repo.
 
 ### Test fixtures policy
 - Test .tex fixtures must be synthetic and generic

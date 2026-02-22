@@ -22,10 +22,11 @@
 - Math: inline `$…$` and display `\begin{equation}…\end{equation}` / `\begin{equation*}…\end{equation*}` — rendered as plain-text approximation (italic; display math centered)
 
 ## v0.5
-- Footnotes: `\footnote{}`
-- Resolved cross-references (`\ref`, `\cite`, `\autocite`) instead of placeholders
+- Footnotes: `\footnote{}` ✅
+- Resolved cross-references (`\ref`, `\cite`) instead of placeholders
 - Display math `\[…\]` ✅
-- `\input{}` file inclusion
+- `\input{}` file inclusion ✅
+- `\include{}` file inclusion ✅
 
 ## v1.0
 - PDF output via `printpdf` or similar

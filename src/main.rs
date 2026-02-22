@@ -22,10 +22,7 @@ fn init_logging(verbose: bool) {
 
 fn convert(cli: &Cli) -> Result<()> {
     log::info!("Reading {}", cli.input.display());
-    let source = std::fs::read_to_string(&cli.input)?;
-
-    log::debug!("Parsing LaTeX source ({} bytes)", source.len());
-    let document = parser::latex::parse_latex(&source);
+    let document = parser::latex::parse_latex_file(&cli.input)?;
     log::debug!("Parsed {} block(s)", document.blocks.len());
 
     log::info!("Writing {}", cli.output.display());

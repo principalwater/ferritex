@@ -1,4 +1,12 @@
+use std::path::{Path, PathBuf};
+
 use crate::model::{Block, Document, Figure, Inline, List, Table, TableCell, TableRow};
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum AutociteMode {
+    InlinePlaceholder,
+    FootnotePlaceholder,
+}
 
 /// Parse a LaTeX source string into a [`Document`] AST.
 ///
@@ -7,13 +15,31 @@ use crate::model::{Block, Document, Figure, Inline, List, Table, TableCell, Tabl
 /// - Plain paragraphs (blank-line separated)
 /// - `\textbf{…}`, `\textit{…}`, `{\bf …}`, `{\it …}`
 /// - `\label{…}`, `\ref{…}`, `\cite{…}` — emitted as placeholder text
+/// - `\autocite{…}` — style-aware placeholder:
+///   - inline (`[key]`) by default
+///   - footnote placeholder if the project style config enables footnote autocites
 /// - `\begin{table}…\end{table}` with `\begin{tabular}` / `\begin{tblr}` / `\begin{longtblr}`
 /// - `\begin{figure}…\end{figure}` with `\includegraphics` and `\caption`
 /// - Display math blocks: `\begin{equation}…\end{equation}` / `equation*` / `\[…\]`
+/// - `\footnote{…}` inline notes
 /// - `\tablesource{…}` / `\figuresource{…}` — stored as source attribution
 /// - Preamble directives (`\documentclass`, `\usepackage`, `\begin{document}`,
 ///   `\end{document}`) are silently skipped.
 pub fn parse_latex(source: &str) -> Document {
+    let autocite_mode = detect_autocite_mode(source);
+    parse_latex_with_mode(source, autocite_mode)
+}
+
+/// Parse an entry `.tex` file with recursive `\input{...}` / `\include{...}` expansion.
+///
+/// Missing input files are kept as-is in the expanded source (best-effort mode).
+pub fn parse_latex_file(input_path: &Path) -> anyhow::Result<Document> {
+    let mut stack = Vec::new();
+    let expanded = expand_inputs_recursive(input_path, &mut stack)?;
+    Ok(parse_latex(&expanded))
+}
+
+fn parse_latex_with_mode(source: &str, autocite_mode: AutociteMode) -> Document {
     let source = strip_comments(source);
     let filtered = filter_skippable_lines(&source);
     // Segment the source into typed spans before paragraph-splitting,
@@ -24,7 +50,7 @@ pub fn parse_latex(source: &str) -> Document {
     for seg in segments {
         match seg {
             Segment::Float(content) => {
-                if let Some(block) = parse_float(&content) {
+                if let Some(block) = parse_float(&content, autocite_mode) {
                     blocks.push(block);
                 }
             }
@@ -34,10 +60,10 @@ pub fn parse_latex(source: &str) -> Document {
                     if chunk.is_empty() {
                         continue;
                     }
-                    if let Some(block) = try_parse_section(chunk) {
+                    if let Some(block) = try_parse_section(chunk, autocite_mode) {
                         blocks.push(block);
                     } else {
-                        let inlines = parse_inlines(chunk);
+                        let inlines = parse_inlines(chunk, autocite_mode);
                         if !inlines.is_empty() {
                             blocks.push(Block::Paragraph(inlines));
                         }
@@ -48,6 +74,131 @@ pub fn parse_latex(source: &str) -> Document {
     }
 
     Document { blocks }
+}
+
+fn detect_autocite_mode(source: &str) -> AutociteMode {
+    let source = strip_comments(source);
+    let mut mode = AutociteMode::InlinePlaceholder;
+
+    for raw_line in source.lines() {
+        let line = raw_line.trim();
+        if line.contains("\\setcounter{usefootcite}{1}") {
+            mode = AutociteMode::FootnotePlaceholder;
+        } else if line.contains("\\setcounter{usefootcite}{0}") {
+            mode = AutociteMode::InlinePlaceholder;
+        }
+
+        if let Some(value) = extract_latex_option_value(line, "autocite") {
+            if value.eq_ignore_ascii_case("footnote") {
+                mode = AutociteMode::FootnotePlaceholder;
+            } else {
+                mode = AutociteMode::InlinePlaceholder;
+            }
+        }
+
+        if let Some(value) = extract_latex_option_value(line, "citestyle")
+            && value.to_ascii_lowercase().contains("footnote")
+        {
+            mode = AutociteMode::FootnotePlaceholder;
+        }
+    }
+
+    mode
+}
+
+fn extract_latex_option_value(line: &str, key: &str) -> Option<String> {
+    let idx = line.find(key)?;
+    let after_key = &line[idx + key.len()..];
+    let after_key = after_key.trim_start();
+    let after_eq = after_key.strip_prefix('=')?.trim_start();
+    let end = after_eq
+        .find(|c: char| c == ',' || c == ']' || c == '}' || c.is_whitespace())
+        .unwrap_or(after_eq.len());
+    let value = after_eq[..end].trim();
+    if value.is_empty() {
+        None
+    } else {
+        Some(value.to_string())
+    }
+}
+
+fn expand_inputs_recursive(path: &Path, stack: &mut Vec<PathBuf>) -> anyhow::Result<String> {
+    let canonical = std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
+    if stack.contains(&canonical) {
+        return Ok(String::new());
+    }
+
+    stack.push(canonical);
+    let source = std::fs::read_to_string(path)?;
+    let source = strip_comments(&source);
+    let base_dir = path.parent().unwrap_or_else(|| Path::new("."));
+    let mut out = String::with_capacity(source.len());
+    let mut pos = 0usize;
+
+    while pos < source.len() {
+        // Expand \input{...} and \include{...} recursively as best effort.
+        let include_cmd_len = if source[pos..].starts_with("\\input") {
+            Some("\\input".len())
+        } else if source[pos..].starts_with("\\include") {
+            Some("\\include".len())
+        } else {
+            None
+        };
+
+        if let Some(cmd_len) = include_cmd_len {
+            let cmd_end = pos + cmd_len;
+            let next = source[cmd_end..].chars().next();
+            if !next.is_some_and(|c| c.is_ascii_alphabetic()) {
+                let mut arg_pos = cmd_end;
+                while arg_pos < source.len() && source.as_bytes()[arg_pos].is_ascii_whitespace() {
+                    arg_pos += 1;
+                }
+
+                if arg_pos < source.len()
+                    && source.as_bytes()[arg_pos] == b'{'
+                    && let Some(arg_len) = braced_len(&source[arg_pos..])
+                {
+                    let arg_src = &source[arg_pos + 1..arg_pos + arg_len - 1];
+                    let included = arg_src.trim();
+                    if !included.is_empty() {
+                        let include_path = resolve_input_path(base_dir, included);
+                        if include_path.exists() {
+                            let expanded = expand_inputs_recursive(&include_path, stack)?;
+                            out.push_str(&expanded);
+                        } else {
+                            // Missing include: keep original command for best-effort parsing.
+                            out.push_str(&source[pos..arg_pos + arg_len]);
+                        }
+                        pos = arg_pos + arg_len;
+                        continue;
+                    }
+                }
+            }
+        }
+
+        if let Some(ch) = source[pos..].chars().next() {
+            out.push(ch);
+            pos += ch.len_utf8();
+        } else {
+            break;
+        }
+    }
+
+    stack.pop();
+    Ok(out)
+}
+
+fn resolve_input_path(base_dir: &Path, include_arg: &str) -> PathBuf {
+    let raw = base_dir.join(include_arg);
+    if raw.exists() {
+        return raw;
+    }
+    if raw.extension().is_none() {
+        let mut with_tex = raw.clone();
+        with_tex.set_extension("tex");
+        return with_tex;
+    }
+    raw
 }
 
 // ---------------------------------------------------------------------------
@@ -232,18 +383,18 @@ fn consume_source_macro(src: &str) -> String {
 // ---------------------------------------------------------------------------
 
 /// Parse a block environment segment into a [`Block`].
-fn parse_float(src: &str) -> Option<Block> {
+fn parse_float(src: &str, autocite_mode: AutociteMode) -> Option<Block> {
     let src = src.trim();
     if src.starts_with("\\[") || src.starts_with("\\begin{equation") {
         Some(Block::DisplayMath(extract_display_math_body(src)))
     } else if src.starts_with("\\begin{figure") {
-        Some(Block::Figure(parse_figure(src)))
+        Some(Block::Figure(parse_figure(src, autocite_mode)))
     } else if src.starts_with("\\begin{itemize") {
-        Some(Block::List(parse_list(src, false)))
+        Some(Block::List(parse_list(src, false, autocite_mode)))
     } else if src.starts_with("\\begin{enumerate") {
-        Some(Block::List(parse_list(src, true)))
+        Some(Block::List(parse_list(src, true, autocite_mode)))
     } else {
-        Some(Block::Table(parse_table(src)))
+        Some(Block::Table(parse_table(src, autocite_mode)))
     }
 }
 
@@ -273,12 +424,12 @@ fn extract_display_math_body(src: &str) -> String {
 }
 
 /// Parse a `\begin{table}…\end{table}` segment into a [`Table`].
-fn parse_table(src: &str) -> Table {
-    let caption = extract_caption(src);
-    let source = extract_source_macro(src);
+fn parse_table(src: &str, autocite_mode: AutociteMode) -> Table {
+    let caption = extract_caption(src, autocite_mode);
+    let source = extract_source_macro(src, autocite_mode);
 
     // Find the inner tabular/tblr/longtblr environment.
-    let rows = extract_table_rows(src);
+    let rows = extract_table_rows(src, autocite_mode);
 
     Table {
         caption,
@@ -288,9 +439,9 @@ fn parse_table(src: &str) -> Table {
 }
 
 /// Parse a `\begin{figure}…\end{figure}` segment into a [`Figure`].
-fn parse_figure(src: &str) -> Figure {
-    let caption = extract_caption(src);
-    let source = extract_source_macro(src);
+fn parse_figure(src: &str, autocite_mode: AutociteMode) -> Figure {
+    let caption = extract_caption(src, autocite_mode);
+    let source = extract_source_macro(src, autocite_mode);
     let image_path = extract_includegraphics_path(src);
     Figure {
         image_path,
@@ -300,7 +451,7 @@ fn parse_figure(src: &str) -> Figure {
 }
 
 /// Parse a `\begin{itemize}…\end{itemize}` or `\begin{enumerate}…\end{enumerate}` segment.
-fn parse_list(src: &str, ordered: bool) -> List {
+fn parse_list(src: &str, ordered: bool, autocite_mode: AutociteMode) -> List {
     let env = if ordered { "enumerate" } else { "itemize" };
     // Strip the outer \begin{env}…\end{env} wrapper.
     let begin_tag = format!("\\begin{{{}}}", env);
@@ -332,7 +483,7 @@ fn parse_list(src: &str, ordered: bool) -> List {
                 .filter(|l| !l.is_empty())
                 .collect::<Vec<_>>()
                 .join(" ");
-            parse_inlines(&text)
+            parse_inlines(&text, autocite_mode)
         })
         .filter(|inlines| !inlines.is_empty())
         .collect();
@@ -341,7 +492,7 @@ fn parse_list(src: &str, ordered: bool) -> List {
 }
 
 /// Extract `\caption{…}` content from a float.
-fn extract_caption(src: &str) -> Vec<Inline> {
+fn extract_caption(src: &str, autocite_mode: AutociteMode) -> Vec<Inline> {
     if let Some(pos) = src.find("\\caption") {
         let after = src[pos + 8..].trim_start_matches([' ', '\t']);
         // Skip optional `[short]` argument.
@@ -355,19 +506,19 @@ fn extract_caption(src: &str) -> Vec<Inline> {
             after
         };
         if let Some(content) = extract_braced(after) {
-            return parse_inlines(content);
+            return parse_inlines(content, autocite_mode);
         }
     }
     Vec::new()
 }
 
 /// Extract `\tablesource{…}` or `\figuresource{…}` content.
-fn extract_source_macro(src: &str) -> Vec<Inline> {
+fn extract_source_macro(src: &str, autocite_mode: AutociteMode) -> Vec<Inline> {
     for macro_name in &["\\tablesource", "\\figuresource"] {
         if let Some(pos) = src.find(macro_name) {
             let after = src[pos + macro_name.len()..].trim_start_matches([' ', '\t']);
             if let Some(content) = extract_braced(after) {
-                return parse_inlines(content);
+                return parse_inlines(content, autocite_mode);
             }
         }
     }
@@ -396,7 +547,7 @@ fn extract_includegraphics_path(src: &str) -> Option<String> {
 /// 2. Split on `\\` (row separator).
 /// 3. Split each row on `&` (cell separator).
 /// 4. Parse each cell as inlines.
-fn extract_table_rows(src: &str) -> Vec<TableRow> {
+fn extract_table_rows(src: &str, autocite_mode: AutociteMode) -> Vec<TableRow> {
     // Find the body of the innermost tabular/tblr/longtblr.
     let body = find_tabular_body(src);
     if body.is_empty() {
@@ -429,7 +580,7 @@ fn extract_table_rows(src: &str) -> Vec<TableRow> {
         let cells: Vec<TableCell> = cell_line
             .split('&')
             .map(|cell| TableCell {
-                content: parse_inlines(cell.trim()),
+                content: parse_inlines(cell.trim(), autocite_mode),
             })
             .collect();
         if cells.iter().any(|c| !c.content.is_empty()) {
@@ -612,7 +763,7 @@ fn is_skippable(chunk: &str) -> bool {
 }
 
 /// Try to parse `\section{…}` / `\subsection{…}` / `\subsubsection{…}`.
-fn try_parse_section(chunk: &str) -> Option<Block> {
+fn try_parse_section(chunk: &str, autocite_mode: AutociteMode) -> Option<Block> {
     let (level, rest) = if let Some(r) = chunk.strip_prefix("\\subsubsection") {
         (3u8, r)
     } else if let Some(r) = chunk.strip_prefix("\\subsection") {
@@ -625,7 +776,7 @@ fn try_parse_section(chunk: &str) -> Option<Block> {
 
     let rest = rest.strip_prefix('*').unwrap_or(rest).trim_start();
     let title_src = extract_braced(rest)?;
-    let title = parse_inlines(title_src);
+    let title = parse_inlines(title_src, autocite_mode);
     Some(Block::Section { level, title })
 }
 
@@ -653,7 +804,7 @@ fn extract_braced(src: &str) -> Option<&str> {
 }
 
 /// Parse a string of mixed text and inline LaTeX commands into [`Inline`] nodes.
-pub(crate) fn parse_inlines(src: &str) -> Vec<Inline> {
+fn parse_inlines(src: &str, autocite_mode: AutociteMode) -> Vec<Inline> {
     let mut result = Vec::new();
     let mut pos = 0;
     let bytes = src.as_bytes();
@@ -686,7 +837,7 @@ pub(crate) fn parse_inlines(src: &str) -> Vec<Inline> {
             }
             b'\\' => {
                 let rest = &src[pos..];
-                if let Some((inlines, consumed)) = try_parse_inline_command(rest) {
+                if let Some((inlines, consumed)) = try_parse_inline_command(rest, autocite_mode) {
                     result.extend(inlines);
                     pos += consumed;
                 } else {
@@ -705,12 +856,12 @@ pub(crate) fn parse_inlines(src: &str) -> Vec<Inline> {
             }
             b'{' => {
                 let rest = &src[pos..];
-                if let Some((inlines, consumed)) = try_parse_brace_group(rest) {
+                if let Some((inlines, consumed)) = try_parse_brace_group(rest, autocite_mode) {
                     result.extend(inlines);
                     pos += consumed;
                 } else if let Some(inner_len) = braced_len(rest) {
                     let inner = &rest[1..inner_len - 1];
-                    result.extend(parse_inlines(inner));
+                    result.extend(parse_inlines(inner, autocite_mode));
                     pos += inner_len;
                 } else {
                     result.push(Inline::Text("{".to_string()));
@@ -734,13 +885,19 @@ pub(crate) fn parse_inlines(src: &str) -> Vec<Inline> {
     result
 }
 
-fn try_parse_inline_command(src: &str) -> Option<(Vec<Inline>, usize)> {
+fn try_parse_inline_command(
+    src: &str,
+    autocite_mode: AutociteMode,
+) -> Option<(Vec<Inline>, usize)> {
     if let Some(r) = src.strip_prefix("\\textbf") {
         let r = r.trim_start_matches(' ');
         if let Some(arg_len) = braced_len(r) {
             let inner = &r[1..arg_len - 1];
             let consumed = src.len() - r.len() + arg_len;
-            return Some((vec![Inline::Bold(parse_inlines(inner))], consumed));
+            return Some((
+                vec![Inline::Bold(parse_inlines(inner, autocite_mode))],
+                consumed,
+            ));
         }
     }
     if let Some(r) = src
@@ -751,10 +908,24 @@ fn try_parse_inline_command(src: &str) -> Option<(Vec<Inline>, usize)> {
         if let Some(arg_len) = braced_len(r) {
             let inner = &r[1..arg_len - 1];
             let consumed = src.len() - r.len() + arg_len;
-            return Some((vec![Inline::Italic(parse_inlines(inner))], consumed));
+            return Some((
+                vec![Inline::Italic(parse_inlines(inner, autocite_mode))],
+                consumed,
+            ));
         }
     }
-    for cmd in &["\\label", "\\ref", "\\cite", "\\autocite"] {
+    if let Some(r) = src.strip_prefix("\\footnote") {
+        let r = r.trim_start_matches(' ');
+        if let Some(arg_len) = braced_len(r) {
+            let inner = &r[1..arg_len - 1];
+            let consumed = src.len() - r.len() + arg_len;
+            return Some((
+                vec![Inline::Footnote(parse_inlines(inner, autocite_mode))],
+                consumed,
+            ));
+        }
+    }
+    for cmd in &["\\label", "\\ref", "\\cite"] {
         if let Some(r) = src.strip_prefix(cmd) {
             let r = r.trim_start_matches(' ');
             if let Some(arg_len) = braced_len(r) {
@@ -765,10 +936,25 @@ fn try_parse_inline_command(src: &str) -> Option<(Vec<Inline>, usize)> {
             }
         }
     }
+    if let Some(r) = src.strip_prefix("\\autocite") {
+        let r = r.trim_start_matches(' ');
+        if let Some(arg_len) = braced_len(r) {
+            let inner = &r[1..arg_len - 1];
+            let consumed = src.len() - r.len() + arg_len;
+            let placeholder = format!("[{}]", inner);
+            return Some(match autocite_mode {
+                AutociteMode::InlinePlaceholder => (vec![Inline::Text(placeholder)], consumed),
+                AutociteMode::FootnotePlaceholder => (
+                    vec![Inline::Footnote(vec![Inline::Text(placeholder)])],
+                    consumed,
+                ),
+            });
+        }
+    }
     None
 }
 
-fn try_parse_brace_group(src: &str) -> Option<(Vec<Inline>, usize)> {
+fn try_parse_brace_group(src: &str, autocite_mode: AutociteMode) -> Option<(Vec<Inline>, usize)> {
     if !src.starts_with('{') {
         return None;
     }
@@ -814,7 +1000,7 @@ fn try_parse_brace_group(src: &str) -> Option<(Vec<Inline>, usize)> {
     let content_end = total_group_len - 1;
     let content_start = src.len() - inner_src.len() + (inner_src.len() - content_src.len());
     let content = &src[content_start..content_end];
-    let inlines = parse_inlines(content);
+    let inlines = parse_inlines(content, autocite_mode);
     Some((vec![wrapper(inlines)], total_group_len))
 }
 
@@ -978,6 +1164,47 @@ mod tests {
     }
 
     #[test]
+    fn test_autocite_default_is_inline_placeholder() {
+        let doc = parse_latex("See \\autocite{Smith2020}.");
+        match &doc.blocks[0] {
+            Block::Paragraph(inlines) => {
+                assert!(
+                    inlines
+                        .iter()
+                        .any(|i| matches!(i, Inline::Text(s) if s.contains("Smith2020"))),
+                    "autocite should default to inline placeholder"
+                );
+            }
+            other => panic!("expected paragraph, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_autocite_becomes_footnote_when_style_requires_it() {
+        let src = "\\ExecuteBibliographyOptions{autocite=footnote}\nSee \\autocite{Smith2020}.";
+        let doc = parse_latex(src);
+        match &doc.blocks[0] {
+            Block::Paragraph(inlines) => {
+                let footnote_payload = inlines.iter().find_map(|i| {
+                    if let Inline::Footnote(content) = i {
+                        Some(content)
+                    } else {
+                        None
+                    }
+                });
+                let footnote_payload = footnote_payload.expect("expected footnote from autocite");
+                assert!(
+                    footnote_payload
+                        .iter()
+                        .any(|i| matches!(i, Inline::Text(s) if s.contains("Smith2020"))),
+                    "autocite footnote payload must contain citation key"
+                );
+            }
+            other => panic!("expected paragraph, got {other:?}"),
+        }
+    }
+
+    #[test]
     fn test_simple_table_parsed() {
         let src = r"
 \begin{table}[H]
@@ -1134,5 +1361,149 @@ Beta & 2 \\
         assert!(matches!(doc.blocks[0], Block::Paragraph(_)));
         assert!(matches!(doc.blocks[1], Block::DisplayMath(_)));
         assert!(matches!(doc.blocks[2], Block::Paragraph(_)));
+    }
+
+    #[test]
+    fn test_footnote_parsed() {
+        let src = "A statement\\footnote{A supporting note with \\textit{style}.}.";
+        let doc = parse_latex(src);
+        match &doc.blocks[0] {
+            Block::Paragraph(inlines) => {
+                assert!(
+                    inlines.iter().any(|i| matches!(i, Inline::Footnote(_))),
+                    "expected Footnote inline in paragraph"
+                );
+                let footnote = inlines.iter().find_map(|i| {
+                    if let Inline::Footnote(content) = i {
+                        Some(content)
+                    } else {
+                        None
+                    }
+                });
+                let footnote = footnote.expect("missing Footnote inline payload");
+                assert!(
+                    footnote.iter().any(|i| matches!(i, Inline::Italic(_))),
+                    "expected nested formatting inside footnote"
+                );
+            }
+            other => panic!("expected paragraph, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_parse_latex_file_expands_input_blocks() {
+        use std::time::{SystemTime, UNIX_EPOCH};
+
+        let unique = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("clock should be monotonic")
+            .as_nanos();
+        let root = std::env::temp_dir().join(format!("ferritex_input_expand_{unique}"));
+        std::fs::create_dir_all(&root).expect("failed to create temp dir");
+
+        let main_tex = root.join("main.tex");
+        let part_tex = root.join("part.tex");
+        std::fs::write(&part_tex, "Included paragraph from input.")
+            .expect("failed to write part.tex");
+        std::fs::write(
+            &main_tex,
+            "\\section{Main}\n\n\\input{part}\n\nA trailing paragraph.",
+        )
+        .expect("failed to write main.tex");
+
+        let doc = parse_latex_file(&main_tex).expect("parse_latex_file failed");
+        assert!(
+            doc.blocks
+                .iter()
+                .any(|b| matches!(b, Block::Section { .. })),
+            "expected section block from main.tex"
+        );
+        let has_included_paragraph = doc.blocks.iter().any(|b| {
+            if let Block::Paragraph(inlines) = b {
+                inlines.iter().any(
+                    |i| matches!(i, Inline::Text(s) if s.contains("Included paragraph from input")),
+                )
+            } else {
+                false
+            }
+        });
+        assert!(
+            has_included_paragraph,
+            "expected paragraph content from included part.tex"
+        );
+
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn test_parse_latex_file_detects_autocite_mode_from_included_style() {
+        use std::time::{SystemTime, UNIX_EPOCH};
+
+        let unique = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("clock should be monotonic")
+            .as_nanos();
+        let root = std::env::temp_dir().join(format!("ferritex_autocite_mode_{unique}"));
+        std::fs::create_dir_all(&root).expect("failed to create temp dir");
+
+        let main_tex = root.join("main.tex");
+        let style_tex = root.join("style.tex");
+        std::fs::write(
+            &style_tex,
+            "\\ExecuteBibliographyOptions{autocite=footnote}\n",
+        )
+        .expect("failed to write style.tex");
+        std::fs::write(&main_tex, "\\input{style}\nSee \\autocite{Key2026}.")
+            .expect("failed to write main.tex");
+
+        let doc = parse_latex_file(&main_tex).expect("parse_latex_file failed");
+        let has_autocite_footnote = doc.blocks.iter().any(|b| {
+            if let Block::Paragraph(inlines) = b {
+                inlines.iter().any(|i| matches!(i, Inline::Footnote(_)))
+            } else {
+                false
+            }
+        });
+        assert!(
+            has_autocite_footnote,
+            "expected autocite to become footnote based on included style settings"
+        );
+
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn test_parse_latex_file_expands_include_blocks() {
+        use std::time::{SystemTime, UNIX_EPOCH};
+
+        let unique = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("clock should be monotonic")
+            .as_nanos();
+        let root = std::env::temp_dir().join(format!("ferritex_include_expand_{unique}"));
+        std::fs::create_dir_all(&root).expect("failed to create temp dir");
+
+        let main_tex = root.join("main.tex");
+        let chapter_tex = root.join("chapter1.tex");
+        std::fs::write(&chapter_tex, "Chapter text from include.")
+            .expect("failed to write chapter1");
+        std::fs::write(&main_tex, "\\include{chapter1}\n").expect("failed to write main.tex");
+
+        let doc = parse_latex_file(&main_tex).expect("parse_latex_file failed");
+        let has_included_paragraph = doc.blocks.iter().any(|b| {
+            if let Block::Paragraph(inlines) = b {
+                inlines.iter().any(
+                    |i| matches!(i, Inline::Text(s) if s.contains("Chapter text from include")),
+                )
+            } else {
+                false
+            }
+        });
+        assert!(
+            has_included_paragraph,
+            "expected paragraph from included chapter file"
+        );
+
+        let _ = std::fs::remove_dir_all(&root);
     }
 }

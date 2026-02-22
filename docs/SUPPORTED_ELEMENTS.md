@@ -6,7 +6,8 @@
 | Paragraph text | ✅ v0.1 | Blank-line separated, whitespace normalized |
 | `\textbf{}`, `{\bf …}`, `{\bfseries …}` | ✅ v0.1 | Recursive nesting supported |
 | `\textit{}`, `\emph{}`, `{\it …}`, `{\itshape …}` | ✅ v0.1 | Recursive nesting supported |
-| `\label{}`, `\ref{}`, `\cite{}`, `\autocite{}` | ✅ v0.1 | Emitted as `[key]` placeholder text |
+| `\label{}`, `\ref{}`, `\cite{}` | ✅ v0.1 | Emitted as `[key]` placeholder text |
+| `\autocite{}` | ✅ v0.5 | Style-aware placeholder: footnote or inline (`[key]`) based on LaTeX style config |
 | `\documentclass`, `\usepackage`, preamble | ✅ v0.1 | Silently stripped |
 | `%` comments | ✅ v0.1 | Stripped before parsing |
 | `\begin{tabular}…\end{tabular}`, `\begin{tblr}…\end{tblr}`, `\begin{longtblr}…\end{longtblr}` | ✅ v0.2 | Basic table layout |
@@ -16,7 +17,8 @@
 | Math (`$…$`) | ✅ v0.4 | Rendered as italic plain-text approximation |
 | Math (`\begin{equation}`, `\begin{equation*}`) | ✅ v0.4 | Rendered as centered italic plain-text approximation |
 | Math (`\[…\]`) | ✅ v0.5 | Rendered as centered italic plain-text approximation |
-| Footnotes (`\footnote{}`) | ⬜ v0.5 | DOCX footnote elements |
+| Footnotes (`\footnote{}`) | ✅ v0.5 | Native DOCX footnote references + footnotes.xml |
 | Bibliography (`\bibliography`, `\bibitem`) | ⬜ v0.5 | |
 | Cross-references (`\ref`, resolved) | ⬜ v0.5 | Currently emitted as placeholder |
+| File inclusion (`\input{}`, `\include{}`) | ✅ v0.5 | Recursive expansion from entry `.tex` file |
 | PDF output | ⬜ v1.0 | |

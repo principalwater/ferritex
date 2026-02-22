@@ -4,7 +4,15 @@
 
 ## Status
 
-Scaffold phase: CLI and module architecture are in place, conversion logic is not implemented yet.
+`ferritex` v0.4 is merged to `master`.
+
+Implemented so far:
+- Sections/subsections, paragraphs, inline styles.
+- Placeholder references (`\label`, `\ref`, `\cite`, `\autocite`) as `[key]`.
+- Tables (`tabular`, `tblr`, `longtblr`) and source lines.
+- Figures (caption text + source lines).
+- Lists (`itemize`, `enumerate`).
+- Math: inline `$...$`, display `equation` / `equation*` / `\[...\]` (plain-text approximation).
 
 ## Installation
 

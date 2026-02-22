@@ -36,6 +36,11 @@ Track implementation status in docs/SUPPORTED_ELEMENTS.md.
 - cargo clippy -- -D warnings
 - cargo test
 
+## PR automation context
+- CI workflow name is `CI`; bot workflows react to successful CI runs.
+- `bot-merge` label enables optional bot-driven squash merge with branch deletion after repository gates pass.
+- If a PR branch is behind base, workflow requests an update before approval/merge steps.
+
 ## When adding a new crate
 Update this file with: crate name, version pinned, reason for adding.
 

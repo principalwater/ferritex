@@ -56,6 +56,8 @@ Update this file with: crate name, version pinned, reason for adding.
 | serde/serde_json | latest stable | Serialization |
 | zip | latest stable | ZIP/DOCX container |
 | log + env_logger | latest stable | Logging |
+| crossterm | latest stable | Terminal events/raw mode for TUI |
+| ratatui | latest stable | TUI rendering/layout |
 
 ## Project extensions
 
@@ -73,6 +75,8 @@ Update this file with: crate name, version pinned, reason for adding.
 | log | 0.4.29 | Logging facade |
 | env_logger | 0.11.9 | Env-driven logging implementation |
 | zip | 8.1.0 | ZIP/DOCX container handling |
+| crossterm | 0.29.0 | Terminal events/raw mode for TUI |
+| ratatui | 0.29.0 | TUI rendering/layout |
 
 ### Contributor checklist
 - Keep `src/main.rs` as orchestration only.

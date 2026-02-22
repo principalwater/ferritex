@@ -28,6 +28,10 @@
 - `\input{}` file inclusion ✅
 - `\include{}` file inclusion ✅
 
+## v0.6
+- TUI mode on `ratatui` for interactive conversion
+- Explicit CLI subcommands (`convert`, `tui`) with compatibility for `--input/--output`
+
 ## v1.0
 - PDF output via `printpdf` or similar
 - Image embedding in DOCX

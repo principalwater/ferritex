@@ -23,6 +23,9 @@ pub enum Block {
     Figure(Figure),
     /// A bullet or numbered list.
     List(List),
+    /// A display-math block from `\begin{equation}…\end{equation}` or `\[…\]`.
+    /// Stored as raw LaTeX source.
+    DisplayMath(String),
 }
 
 /// A table block.
@@ -75,6 +78,7 @@ pub struct List {
 
 /// An inline text element.
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[allow(clippy::enum_variant_names)]
 pub enum Inline {
     /// Plain text span.
     Text(String),
@@ -82,4 +86,6 @@ pub enum Inline {
     Bold(Vec<Inline>),
     /// Italic text — may contain nested inlines.
     Italic(Vec<Inline>),
+    /// Inline math from `$…$` — stored as raw LaTeX source.
+    InlineMath(String),
 }

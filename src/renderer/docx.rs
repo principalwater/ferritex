@@ -52,6 +52,9 @@ pub fn render_docx(document: &Document, output_path: &Path) -> anyhow::Result<()
                     docx = docx.add_paragraph(para);
                 }
             }
+            Block::DisplayMath(src) => {
+                docx = docx.add_paragraph(build_display_math_paragraph(src));
+            }
         }
     }
 
@@ -142,6 +145,13 @@ fn source_paragraph(inlines: &[Inline]) -> Paragraph {
     para
 }
 
+/// A centred italic paragraph for display-math blocks.
+fn build_display_math_paragraph(src: &str) -> Paragraph {
+    Paragraph::new()
+        .align(AlignmentType::Center)
+        .add_run(Run::new().add_text(src).italic())
+}
+
 // ---------------------------------------------------------------------------
 // Figure rendering
 // ---------------------------------------------------------------------------
@@ -178,8 +188,10 @@ fn build_paragraph(block: &Block) -> Paragraph {
             }
             para
         }
-        // Table, Figure, List are handled separately in render_docx — unreachable here.
-        Block::Table(_) | Block::Figure(_) | Block::List(_) => unreachable!(),
+        // Table, Figure, List, DisplayMath are handled separately — unreachable here.
+        Block::Table(_) | Block::Figure(_) | Block::List(_) | Block::DisplayMath(_) => {
+            unreachable!()
+        }
     }
 }
 
@@ -213,6 +225,14 @@ fn inline_runs(inlines: &[Inline], bold: bool, italic: bool) -> Vec<Run> {
             }
             Inline::Italic(children) => {
                 runs.extend(inline_runs(children, bold, true));
+            }
+            Inline::InlineMath(src) => {
+                // Render inline math as italic text — a plain-text approximation.
+                let mut run = Run::new().add_text(src.as_str()).italic();
+                if bold {
+                    run = run.bold();
+                }
+                runs.push(run);
             }
         }
     }

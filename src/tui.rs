@@ -272,10 +272,7 @@ fn draw(frame: &mut Frame<'_>, app: &AppState) {
 
 fn set_cursor(frame: &mut Frame<'_>, area: Rect, text: &str) {
     let inner_width = area.width.saturating_sub(2);
-    let text_len_u16 = match u16::try_from(text.chars().count()) {
-        Ok(v) => v,
-        Err(_) => u16::MAX,
-    };
+    let text_len_u16 = u16::try_from(text.chars().count()).unwrap_or(u16::MAX);
     let cursor_x = area
         .x
         .saturating_add(1)

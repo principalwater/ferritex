@@ -9,6 +9,7 @@ use crate::model::{Block, Document, Figure, Inline, List, Table, TableCell, Tabl
 /// - `\label{…}`, `\ref{…}`, `\cite{…}` — emitted as placeholder text
 /// - `\begin{table}…\end{table}` with `\begin{tabular}` / `\begin{tblr}` / `\begin{longtblr}`
 /// - `\begin{figure}…\end{figure}` with `\includegraphics` and `\caption`
+/// - Display math blocks: `\begin{equation}…\end{equation}` / `equation*` / `\[…\]`
 /// - `\tablesource{…}` / `\figuresource{…}` — stored as source attribution
 /// - Preamble directives (`\documentclass`, `\usepackage`, `\begin{document}`,
 ///   `\end{document}`) are silently skipped.
@@ -54,11 +55,15 @@ pub fn parse_latex(source: &str) -> Document {
 // ---------------------------------------------------------------------------
 
 enum Segment {
-    /// A `\begin{table}…\end{table}` or `\begin{figure}…\end{figure}` block,
-    /// plus any immediately following `\tablesource`/`\figuresource` call.
+    /// A block-level environment or display-math block kept intact as one span.
     Float(String),
     /// Everything else (paragraphs, sections, etc.).
     Text(String),
+}
+
+enum SegmentStart {
+    Env(String),
+    DisplayMathBrackets,
 }
 
 /// Block-level environments extracted before paragraph splitting.
@@ -76,42 +81,72 @@ const BLOCK_ENVS: &[&str] = &[
 fn segment(src: &str) -> Vec<Segment> {
     let mut segments = Vec::new();
     let mut pos = 0;
-    let bytes = src.as_bytes();
     let len = src.len();
 
     while pos < len {
-        // Look for \begin{<float_env>}
-        if let Some((env_name, begin_pos)) = find_begin_float(src, pos) {
-            // Flush text before this float.
-            if begin_pos > pos {
-                segments.push(Segment::Text(src[pos..begin_pos].to_string()));
-            }
-            // Find the matching \end{<env_name>}.
-            let end_tag = format!("\\end{{{}}}", env_name);
-            if let Some(end_offset) = src[begin_pos..].find(&end_tag) {
-                let end_pos = begin_pos + end_offset + end_tag.len();
-                // Also consume an optional \tablesource / \figuresource after the float.
-                let after = src[end_pos..].trim_start_matches([' ', '\t', '\n', '\r']);
-                let source_suffix = consume_source_macro(after);
-                let total_end = if source_suffix.is_empty() {
-                    end_pos
+        let next_env = find_begin_float(src, pos)
+            .map(|(env_name, begin_pos)| (begin_pos, SegmentStart::Env(env_name)));
+        let next_bracket_math = find_begin_display_math(src, pos)
+            .map(|begin_pos| (begin_pos, SegmentStart::DisplayMathBrackets));
+
+        let next = match (next_env, next_bracket_math) {
+            (Some(a), Some(b)) => Some(if a.0 <= b.0 { a } else { b }),
+            (Some(a), None) => Some(a),
+            (None, Some(b)) => Some(b),
+            (None, None) => None,
+        };
+
+        match next {
+            Some((begin_pos, SegmentStart::Env(env_name))) => {
+                // Flush text before this block.
+                if begin_pos > pos {
+                    segments.push(Segment::Text(src[pos..begin_pos].to_string()));
+                }
+
+                // Find the matching \end{<env_name>}.
+                let end_tag = format!("\\end{{{}}}", env_name);
+                if let Some(end_offset) = src[begin_pos..].find(&end_tag) {
+                    let end_pos = begin_pos + end_offset + end_tag.len();
+                    // Also consume an optional \tablesource / \figuresource after the float.
+                    let after = src[end_pos..].trim_start_matches([' ', '\t', '\n', '\r']);
+                    let source_suffix = consume_source_macro(after);
+                    let total_end = if source_suffix.is_empty() {
+                        end_pos
+                    } else {
+                        end_pos + (src[end_pos..].len() - after.len()) + source_suffix.len()
+                    };
+                    let float_text = format!("{}{}", &src[begin_pos..end_pos], source_suffix);
+                    segments.push(Segment::Float(float_text));
+                    pos = total_end;
                 } else {
-                    end_pos + (src[end_pos..].len() - after.len()) + source_suffix.len()
-                };
-                let float_text = format!("{}{}", &src[begin_pos..end_pos], source_suffix);
-                segments.push(Segment::Float(float_text));
-                pos = total_end;
-            } else {
-                // Unmatched \begin — treat as text.
-                segments.push(Segment::Text(src[begin_pos..].to_string()));
+                    // Unmatched \begin — treat as text.
+                    segments.push(Segment::Text(src[begin_pos..].to_string()));
+                    pos = len;
+                }
+            }
+            Some((begin_pos, SegmentStart::DisplayMathBrackets)) => {
+                // Flush text before this block.
+                if begin_pos > pos {
+                    segments.push(Segment::Text(src[pos..begin_pos].to_string()));
+                }
+
+                // Find matching \].
+                if let Some(end_pos) = find_end_display_math(src, begin_pos + 2) {
+                    let block_end = end_pos + 2; // include closing \]
+                    segments.push(Segment::Float(src[begin_pos..block_end].to_string()));
+                    pos = block_end;
+                } else {
+                    // Unmatched \[ — treat as text.
+                    segments.push(Segment::Text(src[begin_pos..].to_string()));
+                    pos = len;
+                }
+            }
+            None => {
+                // No more block starts — rest is text.
+                segments.push(Segment::Text(src[pos..].to_string()));
                 pos = len;
             }
-        } else {
-            // No more floats — rest is text.
-            segments.push(Segment::Text(src[pos..].to_string()));
-            pos = len;
         }
-        _ = bytes; // suppress unused warning
     }
 
     segments
@@ -142,6 +177,42 @@ fn find_begin_float(src: &str, from: usize) -> Option<(String, usize)> {
     None
 }
 
+/// Find the next `\[` (display-math start) at or after `from`.
+/// Ignores escaped variants like `\\[`.
+fn find_begin_display_math(src: &str, from: usize) -> Option<usize> {
+    let mut search_pos = from;
+    while search_pos < src.len() {
+        if let Some(rel) = src[search_pos..].find("\\[") {
+            let abs = search_pos + rel;
+            if abs > 0 && src.as_bytes()[abs - 1] == b'\\' {
+                search_pos = abs + 2;
+                continue;
+            }
+            return Some(abs);
+        }
+        break;
+    }
+    None
+}
+
+/// Find the next `\]` (display-math end) at or after `from`.
+/// Ignores escaped variants like `\\]`.
+fn find_end_display_math(src: &str, from: usize) -> Option<usize> {
+    let mut search_pos = from;
+    while search_pos < src.len() {
+        if let Some(rel) = src[search_pos..].find("\\]") {
+            let abs = search_pos + rel;
+            if abs > 0 && src.as_bytes()[abs - 1] == b'\\' {
+                search_pos = abs + 2;
+                continue;
+            }
+            return Some(abs);
+        }
+        break;
+    }
+    None
+}
+
 /// If `src` starts with `\tablesource{…}` or `\figuresource{…}`, return that
 /// entire call (including braces). Otherwise return empty string.
 fn consume_source_macro(src: &str) -> String {
@@ -163,21 +234,32 @@ fn consume_source_macro(src: &str) -> String {
 /// Parse a block environment segment into a [`Block`].
 fn parse_float(src: &str) -> Option<Block> {
     let src = src.trim();
-    if src.starts_with("\\begin{figure") {
+    if src.starts_with("\\[") || src.starts_with("\\begin{equation") {
+        Some(Block::DisplayMath(extract_display_math_body(src)))
+    } else if src.starts_with("\\begin{figure") {
         Some(Block::Figure(parse_figure(src)))
     } else if src.starts_with("\\begin{itemize") {
         Some(Block::List(parse_list(src, false)))
     } else if src.starts_with("\\begin{enumerate") {
         Some(Block::List(parse_list(src, true)))
-    } else if src.starts_with("\\begin{equation") {
-        Some(Block::DisplayMath(extract_display_math_body(src)))
     } else {
         Some(Block::Table(parse_table(src)))
     }
 }
 
-/// Extract the raw body from `\begin{equation}…\end{equation}` (or `equation*`).
+/// Extract the raw body from display-math forms:
+/// - `\begin{equation}…\end{equation}` / `equation*`
+/// - `\[…\]`
 fn extract_display_math_body(src: &str) -> String {
+    if let Some(body) = src.strip_prefix("\\[") {
+        let body = if let Some(end) = body.find("\\]") {
+            &body[..end]
+        } else {
+            body
+        };
+        return body.trim().to_string();
+    }
+
     // Find the opening `}` of `\begin{equation...}`.
     let body_start = src.find('}').map(|i| i + 1).unwrap_or(src.len());
     let body = &src[body_start..];
@@ -1025,5 +1107,32 @@ Beta & 2 \\
             }
             other => panic!("expected DisplayMath, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn test_display_math_brackets_parsed() {
+        let src = "\\[\nE = mc^2\n\\]";
+        let doc = parse_latex(src);
+        assert_eq!(doc.blocks.len(), 1);
+        match &doc.blocks[0] {
+            Block::DisplayMath(body) => {
+                assert_eq!(body, "E = mc^2");
+            }
+            other => panic!("expected DisplayMath, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_display_math_brackets_between_paragraphs() {
+        let src = "Before.\n\n\\[\na+b\n\\]\n\nAfter.";
+        let doc = parse_latex(src);
+        assert_eq!(
+            doc.blocks.len(),
+            3,
+            "expected paragraph + display math + paragraph"
+        );
+        assert!(matches!(doc.blocks[0], Block::Paragraph(_)));
+        assert!(matches!(doc.blocks[1], Block::DisplayMath(_)));
+        assert!(matches!(doc.blocks[2], Block::Paragraph(_)));
     }
 }

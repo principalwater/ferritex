@@ -1,5 +1,9 @@
 # Roadmap
 
+## Engineering workflow ✅
+- Required CI quality gate: fmt + clippy + test
+- Optional bot-assisted merge path with `bot-merge` label (squash + delete branch after repository gates)
+
 ## v0.1 ✅
 - Sections and subsections
 - Paragraph text blocks
@@ -19,8 +23,8 @@
 
 ## v0.5
 - Footnotes: `\footnote{}`
-- Bibliography: `\autocite{}`, `\cite{}` — rendered as `[key]` (already partial)
-- Display math `\[…\]`
+- Resolved cross-references (`\ref`, `\cite`, `\autocite`) instead of placeholders
+- Display math `\[…\]` ✅
 - `\input{}` file inclusion
 
 ## v1.0

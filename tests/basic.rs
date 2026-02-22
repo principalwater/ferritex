@@ -218,12 +218,32 @@ fn test_math_docx_is_valid() {
         .unwrap_or_else(|e| panic!("cannot read fixture {input:?}: {e}"));
     let document = ferritex::parser::latex::parse_latex(&source);
 
+    let display_math_blocks: Vec<_> = document
+        .blocks
+        .iter()
+        .filter_map(|b| {
+            if let Block::DisplayMath(src) = b {
+                Some(src)
+            } else {
+                None
+            }
+        })
+        .collect();
     assert!(
-        document
-            .blocks
+        display_math_blocks.len() >= 2,
+        "expected at least 2 DisplayMath blocks (equation + \\[...\\])"
+    );
+    assert!(
+        display_math_blocks
             .iter()
-            .any(|b| matches!(b, Block::DisplayMath(_))),
-        "no DisplayMath block found"
+            .any(|src| src.contains("\\max_{x_{ij}} W = \\sum_{i=1}^{n} x_i")),
+        "equation-style display math was not parsed"
+    );
+    assert!(
+        display_math_blocks
+            .iter()
+            .any(|src| src.contains("\\min_{y_j} C = \\sum_{j=1}^{m} y_j")),
+        "\\[...\\]-style display math was not parsed"
     );
 
     let has_inline_math = document.blocks.iter().any(|b| {
@@ -254,6 +274,10 @@ fn test_math_docx_is_valid() {
     assert!(
         xml_content.contains("W = \\sum_{i=1}^{n} x_i") || xml_content.contains("W = \\sum"),
         "display math body not found in document.xml"
+    );
+    assert!(
+        xml_content.contains("C = \\sum_{j=1}^{m} y_j") || xml_content.contains("\\min_{y_j}"),
+        "\\[...\\] display math body not found in document.xml"
     );
     assert!(
         xml_content.contains("w:jc w:val=\"center\""),

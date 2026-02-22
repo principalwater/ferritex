@@ -1,9 +1,9 @@
 use std::{fs::File, path::Path};
 
 use docx_rs::{
-    AbstractNumbering, AlignmentType, Docx, IndentLevel, Level, LevelJc, LevelText, NumberFormat,
-    Numbering, NumberingId, Paragraph, Run, Start, Table as DocxTable, TableCell as DocxCell,
-    TableRow as DocxRow,
+    AbstractNumbering, AlignmentType, Docx, Footnote, IndentLevel, Level, LevelJc, LevelText,
+    NumberFormat, Numbering, NumberingId, Paragraph, Run, Start, Table as DocxTable,
+    TableCell as DocxCell, TableRow as DocxRow,
 };
 
 use crate::model::{Block, Document, Figure, Inline, Table};
@@ -233,6 +233,17 @@ fn inline_runs(inlines: &[Inline], bold: bool, italic: bool) -> Vec<Run> {
                     run = run.bold();
                 }
                 runs.push(run);
+            }
+            Inline::Footnote(content) => {
+                // Render \footnote{...} as a native DOCX footnote reference + footnotes.xml entry.
+                let mut footnote_para = Paragraph::new();
+                for run in inline_runs(content, false, false) {
+                    footnote_para = footnote_para.add_run(run);
+                }
+
+                let mut footnote = Footnote::new();
+                footnote.add_content(footnote_para);
+                runs.push(Run::new().add_footnote_reference(footnote));
             }
         }
     }

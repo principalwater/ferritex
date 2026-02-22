@@ -88,4 +88,6 @@ pub enum Inline {
     Italic(Vec<Inline>),
     /// Inline math from `$…$` — stored as raw LaTeX source.
     InlineMath(String),
+    /// Footnote from `\footnote{…}`.
+    Footnote(Vec<Inline>),
 }

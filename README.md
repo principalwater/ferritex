@@ -4,15 +4,20 @@
 
 ## Status
 
-`ferritex` v0.4 is merged to `master`.
+`ferritex` v0.5 is in progress on top of `master`.
 
 Implemented so far:
 - Sections/subsections, paragraphs, inline styles.
-- Placeholder references (`\label`, `\ref`, `\cite`, `\autocite`) as `[key]`.
+- Placeholder references (`\label`, `\ref`, `\cite`) as `[key]`.
+- `\autocite{...}` style-aware placeholder:
+  - footnote placeholder when project style sets footnote autocites
+  - inline placeholder otherwise
 - Tables (`tabular`, `tblr`, `longtblr`) and source lines.
 - Figures (caption text + source lines).
 - Lists (`itemize`, `enumerate`).
 - Math: inline `$...$`, display `equation` / `equation*` / `\[...\]` (plain-text approximation).
+- Footnotes: `\footnote{...}` rendered as native DOCX footnotes.
+- File inclusion: `\input{...}` and `\include{...}` are recursively expanded.
 
 ## Installation
 

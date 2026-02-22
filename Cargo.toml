@@ -4,7 +4,7 @@ version = "0.1.0"
 edition = "2024"
 description = "Native Rust CLI to convert LaTeX to DOCX"
 license = "MIT"
-authors = []
+authors = ["Vladislav Kuzmin <https://github.com/principalwater>"]
 
 [dependencies]
 anyhow = "1.0.102"

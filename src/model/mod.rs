@@ -1,44 +1,31 @@
-use serde::{Deserialize, Serialize};
-
-/// Full intermediate representation of a parsed LaTeX document.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+/// Intermediate representation of a parsed LaTeX document.
+///
+/// This AST is the only contract between the parser and the renderer.
+/// Neither stage should import types from the other.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct Document {
     /// Top-level blocks in document order.
     pub blocks: Vec<Block>,
 }
 
-/// Structural block-level element.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+/// A block-level element.
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Block {
-    /// Section heading with optional nesting level.
-    Section(Section),
-    /// Plain paragraph.
-    Paragraph(Paragraph),
+    /// A section heading at the given nesting level.
+    ///
+    /// `level` is 1-based: 1 = `\section`, 2 = `\subsection`, 3 = `\subsubsection`.
+    Section { level: u8, title: Vec<Inline> },
+    /// A body paragraph consisting of inline elements.
+    Paragraph(Vec<Inline>),
 }
 
-/// Section node with title and hierarchy level.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct Section {
-    /// 1-based section level.
-    pub level: u8,
-    /// Human-readable section title.
-    pub title: String,
-}
-
-/// Paragraph with inline content.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
-pub struct Paragraph {
-    /// Ordered inline elements.
-    pub inlines: Vec<Inline>,
-}
-
-/// Inline text elements.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+/// An inline text element.
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Inline {
-    /// Raw text span.
+    /// Plain text span.
     Text(String),
-    /// Bold text span.
-    Bold(String),
-    /// Italic text span.
-    Italic(String),
+    /// Bold text — may contain nested inlines.
+    Bold(Vec<Inline>),
+    /// Italic text — may contain nested inlines.
+    Italic(Vec<Inline>),
 }

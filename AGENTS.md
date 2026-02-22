@@ -83,7 +83,8 @@ ZERO references to any specific person, institution, research domain,
 dissertation, or private project.
 
 ### What must never appear in this repository
-- Real names, initials, or usernames of contributors or users
+- Real names or usernames in source code, comments, fixtures, or docs
+  (exception: `Cargo.toml authors` field — that is standard OSS practice)
 - University or organization names
 - Dissertation or thesis titles, chapter names, or subject matter
 - Absolute local file paths (use relative paths or CLI args)

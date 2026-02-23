@@ -270,9 +270,14 @@ fn segment(src: &str) -> Vec<Segment> {
                     segments.push(Segment::Float(float_text));
                     pos = total_end;
                 } else {
-                    // Unmatched \begin — treat as text.
-                    segments.push(Segment::Text(src[begin_pos..].to_string()));
-                    pos = len;
+                    // Unmatched \begin{env} — skip past the tag and continue.
+                    let skip_end = begin_pos + 8 + env_name.len(); // \begin{} = 8 + env
+                    if begin_pos > pos {
+                        segments.push(Segment::Text(src[pos..skip_end].to_string()));
+                    } else {
+                        segments.push(Segment::Text(src[begin_pos..skip_end].to_string()));
+                    }
+                    pos = skip_end;
                 }
             }
             Some((begin_pos, SegmentStart::DisplayMathBrackets)) => {
@@ -287,9 +292,14 @@ fn segment(src: &str) -> Vec<Segment> {
                     segments.push(Segment::Float(src[begin_pos..block_end].to_string()));
                     pos = block_end;
                 } else {
-                    // Unmatched \[ — treat as text.
-                    segments.push(Segment::Text(src[begin_pos..].to_string()));
-                    pos = len;
+                    // Unmatched \[ — not display math (e.g. macro definition).
+                    // Include the \[ as plain text and continue segmenting.
+                    if begin_pos > pos {
+                        segments.push(Segment::Text(src[pos..begin_pos + 2].to_string()));
+                    } else {
+                        segments.push(Segment::Text(src[begin_pos..begin_pos + 2].to_string()));
+                    }
+                    pos = begin_pos + 2;
                 }
             }
             None => {
@@ -1505,5 +1515,23 @@ Beta & 2 \\
         );
 
         let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn test_unmatched_display_math_bracket_does_not_swallow_rest() {
+        // \[ used in a macro definition (not as display math) must not
+        // prevent subsequent block environments from being segmented.
+        let src = concat!(
+            "\\def\\zz{\\ifx\\[$\\else\\fi}\n\n",
+            "Before.\n\n",
+            "\\begin{itemize}\n\\item One\n\\item Two\n\\end{itemize}\n\n",
+            "After."
+        );
+        let doc = parse_latex(src);
+        let has_list = doc.blocks.iter().any(|b| matches!(b, Block::List(_)));
+        assert!(
+            has_list,
+            "unmatched \\[ in preamble must not hide subsequent list blocks"
+        );
     }
 }

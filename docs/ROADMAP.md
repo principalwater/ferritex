@@ -28,9 +28,15 @@
 - `\input{}` file inclusion ✅
 - `\include{}` file inclusion ✅
 
-## v0.6
+## v0.6 ✅
 - TUI mode on `ratatui` for interactive conversion
 - Explicit CLI subcommands (`convert`, `tui`) with compatibility for `--input/--output`
+
+## v0.7 (in progress)
+- Unified build-core orchestrator (`src/build/`)
+- `ferritex build --format docx|pdf|both` CLI entrypoint
+- `convert` and `tui` routed through shared build core
+- Path resolution and artifact naming centralized
 
 ## v1.0
 - PDF output via `printpdf` or similar

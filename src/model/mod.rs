@@ -13,7 +13,7 @@ pub struct Document {
 pub enum Block {
     /// A section heading at the given nesting level.
     ///
-    /// `level` is 1-based: 1 = `\section`, 2 = `\subsection`, 3 = `\subsubsection`.
+    /// `level` is 1-based: 1 = `\chapter`, 2 = `\section`, 3 = `\subsection` / `\subsubsection`.
     Section { level: u8, title: Vec<Inline> },
     /// A body paragraph consisting of inline elements.
     Paragraph(Vec<Inline>),

@@ -11,7 +11,7 @@ enum AutociteMode {
 /// Parse a LaTeX source string into a [`Document`] AST.
 ///
 /// Supported constructs:
-/// - `\section{…}`, `\subsection{…}`, `\subsubsection{…}`
+/// - `\chapter{…}`, `\section{…}`, `\subsection{…}`, `\subsubsection{…}`
 /// - Plain paragraphs (blank-line separated)
 /// - `\textbf{…}`, `\textit{…}`, `{\bf …}`, `{\it …}`
 /// - `\label{…}`, `\ref{…}`, `\cite{…}` — emitted as placeholder text
@@ -41,7 +41,8 @@ pub fn parse_latex_file(input_path: &Path) -> anyhow::Result<Document> {
 
 fn parse_latex_with_mode(source: &str, autocite_mode: AutociteMode) -> Document {
     let source = strip_comments(source);
-    let filtered = filter_skippable_lines(&source);
+    let body = extract_document_body(&source);
+    let filtered = filter_skippable_lines(body);
     // Segment the source into typed spans before paragraph-splitting,
     // so that multi-line environments are kept intact.
     let segments = segment(&filtered);
@@ -699,8 +700,35 @@ fn split_table_rows(src: &str) -> Vec<&str> {
 }
 
 // ---------------------------------------------------------------------------
-// Shared line-level helpers (unchanged from v0.1)
+// Shared line-level helpers
 // ---------------------------------------------------------------------------
+
+/// Extract the document body between `\begin{document}` and `\end{document}`.
+///
+/// If `\begin{document}` is present, everything before it (preamble) is
+/// discarded.  If `\end{document}` is present, everything after it is
+/// discarded as well.  When neither marker exists the full source is returned
+/// unchanged — this keeps the parser usable on bare LaTeX fragments and test
+/// fixtures.
+fn extract_document_body(src: &str) -> &str {
+    let start = src
+        .find("\\begin{document}")
+        .map(|i| {
+            let after = i + "\\begin{document}".len();
+            // Skip optional trailing whitespace / newline.
+            src[after..]
+                .find(|c: char| !c.is_whitespace())
+                .map_or(after, |ws| after + ws)
+        })
+        .unwrap_or(0);
+
+    let end = src[start..]
+        .find("\\end{document}")
+        .map(|i| start + i)
+        .unwrap_or(src.len());
+
+    &src[start..end]
+}
 
 /// Remove lines that are purely preamble directives or environment delimiters.
 fn filter_skippable_lines(src: &str) -> String {
@@ -770,15 +798,36 @@ fn is_skippable(chunk: &str) -> bool {
         || c.starts_with("\\end{document}")
         || c.starts_with("\\maketitle")
         || c.starts_with("\\tableofcontents")
+        || c.starts_with("\\listoffigures")
+        || c.starts_with("\\listoftables")
+        || c.starts_with("\\addcontentsline")
+        || c.starts_with("\\addtocontents")
+        || c.starts_with("\\setcounter")
+        || c.starts_with("\\newpage")
+        || c.starts_with("\\clearpage")
+        || c.starts_with("\\cleardoublepage")
+        || c.starts_with("\\vspace")
+        || c.starts_with("\\ifdefmacro")
+        || c.starts_with("\\endTOCtrue")
+        || c.starts_with("\\pagestyle")
+        || c.starts_with("\\thispagestyle")
 }
 
-/// Try to parse `\section{…}` / `\subsection{…}` / `\subsubsection{…}`.
+/// Try to parse `\chapter{…}` / `\section{…}` / `\subsection{…}` / `\subsubsection{…}`.
+///
+/// Heading level mapping:
+/// - `\chapter`       → level 1 (Heading1)
+/// - `\section`       → level 2 (Heading2)
+/// - `\subsection`    → level 3 (Heading3)
+/// - `\subsubsection` → level 3 (Heading3, clamped)
 fn try_parse_section(chunk: &str, autocite_mode: AutociteMode) -> Option<Block> {
     let (level, rest) = if let Some(r) = chunk.strip_prefix("\\subsubsection") {
         (3u8, r)
     } else if let Some(r) = chunk.strip_prefix("\\subsection") {
-        (2u8, r)
+        (3u8, r)
     } else if let Some(r) = chunk.strip_prefix("\\section") {
+        (2u8, r)
+    } else if let Some(r) = chunk.strip_prefix("\\chapter") {
         (1u8, r)
     } else {
         return None;
@@ -1061,24 +1110,36 @@ mod tests {
     use crate::model::{Block, Inline};
 
     #[test]
-    fn test_section_level1() {
-        let doc = parse_latex("\\section{Introduction}");
+    fn test_chapter_level1() {
+        let doc = parse_latex("\\chapter{Overview}");
         assert_eq!(
             doc.blocks,
             vec![Block::Section {
                 level: 1,
-                title: vec![Inline::Text("Introduction".into())]
+                title: vec![Inline::Text("Overview".into())]
             }]
         );
     }
 
     #[test]
     fn test_section_level2() {
+        let doc = parse_latex("\\section{Introduction}");
+        assert_eq!(
+            doc.blocks,
+            vec![Block::Section {
+                level: 2,
+                title: vec![Inline::Text("Introduction".into())]
+            }]
+        );
+    }
+
+    #[test]
+    fn test_subsection_level3() {
         let doc = parse_latex("\\subsection{Background}");
         assert_eq!(
             doc.blocks[0],
             Block::Section {
-                level: 2,
+                level: 3,
                 title: vec![Inline::Text("Background".into())]
             }
         );
@@ -1090,7 +1151,7 @@ mod tests {
         assert_eq!(
             doc.blocks[0],
             Block::Section {
-                level: 1,
+                level: 2,
                 title: vec![Inline::Text("Preface".into())]
             }
         );

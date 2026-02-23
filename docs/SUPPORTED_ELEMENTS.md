@@ -2,13 +2,13 @@
 
 | Element | Status | Notes |
 |---|---|---|
-| `\section{}`, `\subsection{}`, `\subsubsection{}` | ✅ v0.1 | Including `*` (unnumbered) variants |
+| `\chapter{}`, `\section{}`, `\subsection{}`, `\subsubsection{}` | ✅ v0.1 | Including `*` (unnumbered) variants; chapter→H1, section→H2, subsection/subsubsection→H3 |
 | Paragraph text | ✅ v0.1 | Blank-line separated, whitespace normalized |
 | `\textbf{}`, `{\bf …}`, `{\bfseries …}` | ✅ v0.1 | Recursive nesting supported |
 | `\textit{}`, `\emph{}`, `{\it …}`, `{\itshape …}` | ✅ v0.1 | Recursive nesting supported |
 | `\label{}`, `\ref{}`, `\cite{}` | ✅ v0.1 | Emitted as `[key]` placeholder text |
 | `\autocite{}` | ✅ v0.5 | Style-aware placeholder: footnote or inline (`[key]`) based on LaTeX style config |
-| `\documentclass`, `\usepackage`, preamble | ✅ v0.1 | Silently stripped |
+| Preamble (`\documentclass`, `\usepackage`, etc.) | ✅ v0.1 | Everything before `\begin{document}` is discarded; layout commands (`\vspace`, `\newpage`, `\tableofcontents`, etc.) skipped |
 | `%` comments | ✅ v0.1 | Stripped before parsing |
 | `\begin{tabular}…\end{tabular}`, `\begin{tblr}…\end{tblr}`, `\begin{longtblr}…\end{longtblr}` | ✅ v0.2 | Basic table layout |
 | `\tablesource{…}`, `\figuresource{…}` | ✅ v0.2 | Rendered as source line below table/figure |

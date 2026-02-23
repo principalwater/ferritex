@@ -19,6 +19,16 @@ Implemented so far:
 - Footnotes: `\footnote{...}` rendered as native DOCX footnotes.
 - File inclusion: `\input{...}` and `\include{...}` are recursively expanded.
 
+## Conversion Contract
+
+`ferritex` follows a **LaTeX-first rendering contract**:
+- Document layout, numbering, spacing, references, and typography should be derived from the source LaTeX project configuration.
+- Format backends (DOCX now, PDF next) must consume the same AST semantics and produce equivalent structure.
+- Backend-side hardcoded styling is a fallback only when the source project does not provide the required signal.
+- Output produced by `ferritex build` must reflect the same effective formatting parameters as the canonical LaTeX build workflow (geometry, heading formatting, page numbering, footnotes/citations, counters, and related style options).
+- New rendering fixes must be implemented through generic parameter extraction and mapping (`LaTeX -> AST/metadata -> renderer`), never through corpus-specific constants.
+- Validation on one project is acceptable as QA coverage, but implementation must stay reusable for arbitrary LaTeX projects.
+
 ## Installation
 
 ```bash

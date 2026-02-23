@@ -6,6 +6,83 @@
 pub struct Document {
     /// Top-level blocks in document order.
     pub blocks: Vec<Block>,
+    /// Effective layout settings extracted from LaTeX project sources.
+    pub layout: DocumentLayout,
+}
+
+/// Rendering-related layout settings extracted from LaTeX sources.
+///
+/// Every `Option` field defaults to `None`, meaning "the LaTeX source did not
+/// express a preference — the renderer should use its own fallback default."
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct DocumentLayout {
+    // ── Page geometry ──────────────────────────────────────────────────
+    /// Top page margin in twips.
+    pub page_margin_top_twips: Option<i32>,
+    /// Bottom page margin in twips.
+    pub page_margin_bottom_twips: Option<i32>,
+    /// Left page margin in twips.
+    pub page_margin_left_twips: Option<i32>,
+    /// Right page margin in twips.
+    pub page_margin_right_twips: Option<i32>,
+    /// Header distance in twips.
+    pub page_margin_header_twips: Option<i32>,
+    /// Footer distance in twips.
+    pub page_margin_footer_twips: Option<i32>,
+
+    // ── Line spacing ───────────────────────────────────────────────────
+    /// Body paragraph line spacing in twips (`240 = single`, `360 = 1.5`).
+    pub body_line_spacing_twips: Option<i32>,
+
+    // ── Float counter scoping ──────────────────────────────────────────
+    /// Whether figure numbers are scoped per chapter (`true`) or global (`false`).
+    ///
+    /// Maps to `\counterwithin{figure}{chapter}` vs `\counterwithout{figure}{chapter}`.
+    pub figure_counter_within_chapter: Option<bool>,
+    /// Whether table numbers are scoped per chapter (`true`) or global (`false`).
+    pub table_counter_within_chapter: Option<bool>,
+    /// Whether equation numbers are scoped per chapter (`true`) or global (`false`).
+    pub equation_counter_within_chapter: Option<bool>,
+
+    // ── Font ───────────────────────────────────────────────────────────
+    /// Main (serif) font family name. Parsed from `\setmainfont{...}` or
+    /// `\renewcommand{\rmdefault}{...}`.
+    pub font_family_body: Option<String>,
+    /// Body font size in half-points (e.g. `28` = 14 pt).
+    /// Parsed from `\documentclass[14pt]` or `\fontsize`.
+    pub font_size_body_hp: Option<usize>,
+    /// Table cell font size in half-points.
+    pub font_size_table_hp: Option<usize>,
+    /// Footnote font size in half-points.
+    pub font_size_footnote_hp: Option<usize>,
+    /// Caption font size in half-points.
+    pub font_size_caption_hp: Option<usize>,
+
+    // ── Paragraph indent ───────────────────────────────────────────────
+    /// First-line indent for body paragraphs in twips.
+    /// Parsed from `\setlength{\parindent}{...}` or `\parindent=...`.
+    pub body_first_line_indent_twips: Option<i32>,
+
+    // ── Caption / float labels ─────────────────────────────────────────
+    /// Figure caption prefix, e.g. `"Figure"` or `"Рисунок"`.
+    /// Parsed from `\renewcommand{\figurename}{...}`.
+    pub caption_label_figure: Option<String>,
+    /// Table caption prefix, e.g. `"Table"` or `"Таблица"`.
+    /// Parsed from `\renewcommand{\tablename}{...}`.
+    pub caption_label_table: Option<String>,
+
+    // ── Heading formatting ─────────────────────────────────────────────
+    /// Chapter name prefix (e.g. `"Глава"`, `"Chapter"`, `""`).
+    /// Parsed from `\renewcommand{\chaptername}{...}`.
+    pub chapter_name: Option<String>,
+    /// Whether chapter titles should be rendered in uppercase.
+    /// Detected from `\MakeUppercase` in chapter format definitions.
+    pub heading_uppercase: Option<bool>,
+
+    // ── Document language ──────────────────────────────────────────────
+    /// BCP-47 language tag (e.g. `"ru-RU"`, `"en-US"`).
+    /// Parsed from `\usepackage[russian]{babel}` or `\setdefaultlanguage{...}`.
+    pub document_language: Option<String>,
 }
 
 /// A block-level element.
@@ -14,12 +91,21 @@ pub enum Block {
     /// A section heading at the given nesting level.
     ///
     /// `level` is 1-based: 1 = `\chapter`, 2 = `\section`, 3 = `\subsection` / `\subsubsection`.
-    Section { level: u8, title: Vec<Inline> },
+    ///
+    /// `number` is `None` for unnumbered headings (`\section*`, `\chapter*`).
+    /// For numbered headings, it stores the computed visible number (e.g. `2.1`).
+    Section {
+        level: u8,
+        number: Option<String>,
+        /// Optional label from a trailing `\label{...}` attached to heading.
+        label: Option<String>,
+        title: Vec<Inline>,
+    },
     /// A body paragraph consisting of inline elements.
     Paragraph(Vec<Inline>),
     /// A table with an optional caption and rows of cells.
     Table(Table),
-    /// A figure with an optional caption (image embedding is not yet supported).
+    /// A figure with an optional embedded image and caption.
     Figure(Figure),
     /// A bullet or numbered list.
     List(List),
@@ -33,6 +119,8 @@ pub enum Block {
 pub struct Table {
     /// Caption text, if any (`\caption{…}` before or inside the float).
     pub caption: Vec<Inline>,
+    /// Optional `\label{...}` attached to this table float.
+    pub label: Option<String>,
     /// Source/attribution line (`\tablesource{…}`), if present.
     pub source: Vec<Inline>,
     /// Rows of cells; each cell contains inline content.
@@ -54,15 +142,18 @@ pub struct TableCell {
 }
 
 /// A figure block (image reference + caption).
-///
-/// ferritex does not embed images in v0.2; the image path is stored for
-/// future use when image embedding is implemented.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct Figure {
     /// Relative path from `\includegraphics[…]{path}`, if present.
     pub image_path: Option<String>,
+    /// Optional requested width from `\includegraphics[width=...]{...}`.
+    ///
+    /// Stored as thousandths of text width (`1000` = `1.0\textwidth`).
+    pub width_permille: Option<u16>,
     /// Caption text from `\caption{…}`, if any.
     pub caption: Vec<Inline>,
+    /// Optional `\label{...}` attached to this figure float.
+    pub label: Option<String>,
     /// Source/attribution line (`\figuresource{…}`), if present.
     pub source: Vec<Inline>,
 }
@@ -88,6 +179,10 @@ pub enum Inline {
     Italic(Vec<Inline>),
     /// Inline math from `$…$` — stored as raw LaTeX source.
     InlineMath(String),
+    /// Cross-reference target from commands like `\ref{label}`.
+    ///
+    /// Resolved to plain text in a post-parse pass.
+    Reference(String),
     /// Footnote from `\footnote{…}`.
     Footnote(Vec<Inline>),
 }

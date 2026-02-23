@@ -17,6 +17,42 @@
   types leak into the renderer.
 - New LaTeX elements go in: src/parser/latex.rs + src/model/mod.rs
   + src/renderer/docx.rs — always all three.
+- Rendering parameters must be propagated from LaTeX sources (including
+  included style/config files) so ferritex output matches the effective
+  LaTeX build settings for layout, numbering, spacing, page headers, and
+  footnote/citation behavior.
+- Never implement project-specific formatting fixes by hardcoding constants
+  in the renderer when the source LaTeX project already expresses the setting.
+  Instead:
+  1. Parse the parameter from LaTeX sources.
+  2. Store it in AST/metadata with generic naming.
+  3. Consume it in renderer via mapping with fallback defaults.
+- Manual validation feedback must be translated into parser/model extraction
+  improvements first, not one-off renderer hacks bound to a single corpus.
+
+### LaTeX-driven parameter policy (comprehensive)
+Every formatting decision in the renderer must trace back to a
+`DocumentLayout` field. The field, in turn, must be populated by the
+parser from effective LaTeX sources. Renderer constants serve only as
+**fallback defaults** for when the LaTeX project does not express a
+preference. The following parameter categories must all follow this
+pattern — no exceptions:
+
+| Category | LaTeX source | Model field(s) | Renderer fallback |
+|----------|-------------|----------------|-------------------|
+| Font family | `\setmainfont`, `\renewcommand{\familydefault}`, `\documentclass` font options | `font_family_body`, `font_family_mono` | "Times New Roman" |
+| Font sizes | `\documentclass[14pt]`, `\fontsize`, `\footnotesize`, `\small` in `\captionsetup` | `font_size_body_hp`, `font_size_table_hp`, `font_size_footnote_hp`, `font_size_caption_hp` | 28, 24, 20, 28 (half-points) |
+| Paragraph indent | `\setlength{\parindent}{...}` | `body_first_line_indent_twips` | 709 (1.25 cm) |
+| Heading format | `\chaptername`, uppercase macros, numbering delimiter, alignment | `chapter_name`, `heading_uppercase`, `heading_alignment`, `heading_number_delimiter` | "", false, Left, "." |
+| Caption labels | `\renewcommand{\figurename}{...}`, `\renewcommand{\tablename}{...}` | `caption_label_figure`, `caption_label_table` | "Figure", "Table" |
+| Page size | `\geometry` `paperwidth`/`paperheight`, `\documentclass[a4paper]` | `page_width_twips`, `page_height_twips` | A4 (11906 × 16838 tw) |
+| Language | babel/polyglossia main language | `document_language` | None (no language tag) |
+
+**Test requirement**: every new `DocumentLayout` field must have a
+unit test in `parser/latex.rs` that:
+1. Verifies extraction from a representative LaTeX snippet.
+2. Verifies `None` when the command is absent.
+3. Verifies the renderer fallback default produces valid output.
 
 ## DOCX structure notes
 - DOCX is a ZIP containing XML files (word/document.xml, etc.)

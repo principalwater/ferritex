@@ -23,3 +23,27 @@ backend is planned but not yet implemented.
 - Parser and renderer are decoupled by AST types.
 - No subprocess wrappers around external converters.
 - Single build core with format-specific backends (DOCX now, PDF next).
+- LaTeX-first parameter propagation: backend layout/styling decisions must be driven by source LaTeX metadata whenever available.
+
+## LaTeX-first propagation
+
+The parser is responsible for extracting style-relevant intent from LaTeX sources
+(counters, labels, bibliography/citation behavior, include graph, layout hints).
+The renderer must consume this intent through AST/metadata rather than introducing
+document-specific hardcoded formatting rules.
+
+This requirement is strict for all backends: the effective parameters of the
+source LaTeX build configuration must be propagated to ferritex outputs. In
+practice this includes page geometry, paragraph/heading formatting, page number
+placement, and footnote/citation presentation.
+
+## Mapping rule (mandatory)
+
+For every visual/formatting issue discovered during manual QA:
+1. Identify the corresponding LaTeX-origin parameter or semantic signal.
+2. Add/extend parser extraction logic.
+3. Normalize into generic AST/metadata fields.
+4. Apply in renderer through deterministic mapping and keep backend defaults as fallback.
+
+Do not patch renderer output with project-tailored constants when the same
+effect can be achieved by propagating LaTeX semantics.

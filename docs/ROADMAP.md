@@ -4,6 +4,14 @@
 - Required CI quality gate: fmt + clippy + test
 - Optional bot-assisted merge path with `bot-merge` label (squash + delete branch after repository gates)
 
+## Cross-version requirement
+- Preserve a single LaTeX-driven semantic core for all output formats.
+- New formatting features should be implemented as parser/model semantics first, then rendered in DOCX/PDF backends.
+- Avoid backend-only visual hacks when source LaTeX intent can be propagated.
+- Keep ferritex output aligned with the effective parameters of the canonical LaTeX build configuration (layout, numbering, headings, page numbers, footnotes/citations).
+- Treat manual QA deltas as extraction/mapping gaps, not as invitations for corpus-specific hardcoded tweaks.
+- Every formatting milestone must explicitly list which LaTeX parameters are now parsed and how they map to renderer settings.
+
 ## v0.1 ✅
 - Sections and subsections
 - Paragraph text blocks

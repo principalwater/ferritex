@@ -1,3 +1,4 @@
+mod build;
 mod cli;
 mod error;
 mod model;
@@ -6,6 +7,7 @@ mod renderer;
 mod tui;
 
 use anyhow::Result;
+use build::BuildConfig;
 use clap::Parser;
 use cli::{Cli, Mode};
 use std::path::Path;
@@ -16,7 +18,26 @@ fn main() -> Result<()> {
     init_logging(verbose);
 
     match mode {
-        Mode::Convert { input, output } => convert_paths(&input, &output),
+        Mode::Build {
+            input,
+            format,
+            output_dir,
+        } => {
+            let config = BuildConfig::from_build_args(&input, output_dir.as_deref(), format);
+            let result = build::run_build(&config)?;
+            if let Some(ref docx) = result.docx {
+                log::info!("DOCX: {}", docx.display());
+            }
+            if let Some(ref pdf) = result.pdf {
+                log::info!("PDF: {}", pdf.display());
+            }
+            Ok(())
+        }
+        Mode::Convert { input, output } => {
+            let config = BuildConfig::from_convert_paths(&input, &output);
+            build::run_build(&config)?;
+            Ok(())
+        }
         Mode::Tui { input, output } => tui::run_tui(input, output, convert_paths),
     }
 }
@@ -27,14 +48,12 @@ fn init_logging(verbose: bool) {
     env_logger::Builder::from_env(env).init();
 }
 
+/// Legacy conversion function used by TUI mode.
+///
+/// TUI still calls this directly because it manages its own UI loop
+/// and needs a simple `(&Path, &Path) -> Result<()>` callback.
 fn convert_paths(input: &Path, output: &Path) -> Result<()> {
-    log::info!("Reading {}", input.display());
-    let document = parser::latex::parse_latex_file(input)?;
-    log::debug!("Parsed {} block(s)", document.blocks.len());
-
-    log::info!("Writing {}", output.display());
-    renderer::docx::render_docx(&document, output)?;
-
-    log::info!("Done.");
+    let config = BuildConfig::from_convert_paths(input, output);
+    build::run_build(&config)?;
     Ok(())
 }

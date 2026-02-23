@@ -1,10 +1,10 @@
 # ferritex
 
-`ferritex` is a production-oriented native Rust TUI/CLI utility for converting LaTeX (`.tex`) files to Microsoft Word DOCX (`.docx`).
+`ferritex` is a production-oriented native Rust TUI/CLI utility for building LaTeX (`.tex`) projects into DOCX (`.docx`) and PDF output formats.
 
 ## Status
 
-`ferritex` v0.6 is in progress on top of `master`.
+`ferritex` v0.7 is in progress — unified build core with format selection.
 
 Implemented so far:
 - Sections/subsections, paragraphs, inline styles.
@@ -28,15 +28,17 @@ cargo install --path .
 ## Usage
 
 ```bash
-# Non-interactive (compatible with previous versions)
-ferritex --input thesis.tex --output thesis.docx
+# Unified build (recommended)
+ferritex build --input main.tex --format docx
+ferritex build --input main.tex --format both --output-dir out/
 
-# Explicit non-interactive mode
-ferritex convert --input thesis.tex --output thesis.docx
+# Legacy non-interactive (compatible with previous versions)
+ferritex --input main.tex --output main.docx
+ferritex convert --input main.tex --output main.docx
 
 # Interactive TUI mode
 ferritex tui
-ferritex tui --input thesis.tex --output thesis.docx
+ferritex tui --input main.tex --output main.docx
 ```
 
 ### TUI Keys

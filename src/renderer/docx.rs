@@ -1,10 +1,15 @@
-use std::{fs::File, path::Path};
+use std::{
+    fs::File,
+    panic::{AssertUnwindSafe, catch_unwind},
+    path::{Path, PathBuf},
+};
 
+use anyhow::{Context, anyhow};
 use docx_rs::{
-    AbstractNumbering, AlignmentType, Docx, Footnote, IndentLevel, Level, LevelJc, LevelText,
-    LineSpacing, LineSpacingType, NumberFormat, Numbering, NumberingId, PageMargin, Paragraph, Run,
-    RunFonts, SpecialIndentType, Start, Style, StyleType, Table as DocxTable,
-    TableCell as DocxCell, TableRow as DocxRow,
+    AbstractNumbering, AlignmentType, BreakType, Docx, Footnote, IndentLevel, Level, LevelJc,
+    LevelText, LineSpacing, LineSpacingType, NumberFormat, Numbering, NumberingId, PageMargin,
+    Paragraph, Pic, Run, RunFonts, SpecialIndentType, Start, Style, StyleType, Table as DocxTable,
+    TableCell as DocxCell, TableRow as DocxRow, VertAlignType,
 };
 
 use crate::model::{Block, Document, Figure, Inline, Table};
@@ -27,6 +32,14 @@ const LINE_SPACING_SINGLE_TWIPS: i32 = 240;
 const LINE_SPACING_ONE_AND_HALF_TWIPS: i32 = 360;
 
 const FIRST_LINE_INDENT_TWIPS: i32 = 709;
+const IMAGE_EXTENSIONS: &[&str] = &["png", "jpg", "jpeg", "bmp", "tif", "tiff", "gif", "webp"];
+const EMU_PER_TWIP: u32 = 635;
+const TEXT_WIDTH_TWIPS: u32 =
+    PAGE_A4_WIDTH_TWIPS - PAGE_MARGIN_LEFT_TWIPS as u32 - PAGE_MARGIN_RIGHT_TWIPS as u32;
+const IMAGE_SAFE_SCALE_NUM: u32 = 92;
+const IMAGE_SAFE_SCALE_DEN: u32 = 100;
+const MAX_IMAGE_WIDTH_EMU: u32 =
+    TEXT_WIDTH_TWIPS * EMU_PER_TWIP * IMAGE_SAFE_SCALE_NUM / IMAGE_SAFE_SCALE_DEN;
 
 /// Render the intermediate [`Document`] AST to a `.docx` file at `output_path`.
 ///
@@ -36,18 +49,42 @@ const FIRST_LINE_INDENT_TWIPS: i32 = 709;
 /// - Section headings use `Heading1` / `Heading2` / `Heading3` styles.
 /// - Bold runs use `Run::bold()`, italic runs use `Run::italic()`.
 /// - No `<w:sectPr>` is inserted inside paragraph properties.
+#[allow(dead_code)]
 pub fn render_docx(document: &Document, output_path: &Path) -> anyhow::Result<()> {
+    render_docx_with_context(document, output_path, None)
+}
+
+/// Render the intermediate [`Document`] AST to a `.docx` file at `output_path`,
+/// using `input_tex_path` as base for resolving figure files.
+pub fn render_docx_with_context(
+    document: &Document,
+    output_path: &Path,
+    input_tex_path: Option<&Path>,
+) -> anyhow::Result<()> {
     let mut docx = create_styled_docx();
+    let figure_base_dir = input_tex_path.and_then(Path::parent);
 
     // Assign a stable numbering ID for each list block we encounter.
     // abstractNumId == numId for simplicity (one-to-one mapping).
     let mut next_num_id: usize = 1;
+    let mut rendered_any_block = false;
 
     for block in &document.blocks {
         match block {
-            Block::Section { .. } | Block::Paragraph(_) => {
+            Block::Section { level, .. } => {
+                if *level == 1 && rendered_any_block {
+                    docx = docx.add_paragraph(
+                        Paragraph::new().add_run(Run::new().add_break(BreakType::Page)),
+                    );
+                }
                 let para = build_paragraph(block);
                 docx = docx.add_paragraph(para);
+                rendered_any_block = true;
+            }
+            Block::Paragraph(_) => {
+                let para = build_paragraph(block);
+                docx = docx.add_paragraph(para);
+                rendered_any_block = true;
             }
             Block::Table(t) => {
                 if !t.caption.is_empty() {
@@ -57,12 +94,11 @@ pub fn render_docx(document: &Document, output_path: &Path) -> anyhow::Result<()
                 if !t.source.is_empty() {
                     docx = docx.add_paragraph(source_paragraph(&t.source));
                 }
+                rendered_any_block = true;
             }
             Block::Figure(f) => {
-                docx = docx.add_paragraph(build_figure_paragraph(f));
-                if !f.source.is_empty() {
-                    docx = docx.add_paragraph(source_paragraph(&f.source));
-                }
+                docx = render_figure_block(docx, f, figure_base_dir);
+                rendered_any_block = true;
             }
             Block::List(list) => {
                 let num_id = next_num_id;
@@ -72,9 +108,11 @@ pub fn render_docx(document: &Document, output_path: &Path) -> anyhow::Result<()
                     let para = build_list_item(item_inlines, num_id);
                     docx = docx.add_paragraph(para);
                 }
+                rendered_any_block = true;
             }
             Block::DisplayMath(src) => {
                 docx = docx.add_paragraph(build_display_math_paragraph(src));
+                rendered_any_block = true;
             }
         }
     }
@@ -110,6 +148,15 @@ fn create_styled_docx() -> Docx {
 }
 
 fn gost_styles(fonts: RunFonts) -> Vec<Style> {
+    let mut footnote_reference = Style::new("FootnoteReference", StyleType::Character)
+        .name("Footnote Reference")
+        .based_on("DefaultParagraphFont")
+        .fonts(fonts.clone())
+        .size(FONT_SIZE_FOOTNOTE_HP);
+    footnote_reference.run_property = footnote_reference
+        .run_property
+        .vert_align(VertAlignType::SuperScript);
+
     // docx-rs always emits a minimal "Normal" style by default.
     // We still append an explicit GOST-tuned "Normal" definition and inherit from it.
     vec![
@@ -161,6 +208,7 @@ fn gost_styles(fonts: RunFonts) -> Vec<Style> {
             .align(AlignmentType::Both)
             .line_spacing(one_and_half_spacing())
             .indent(Some(0), None, None, None),
+        footnote_reference,
     ]
 }
 
@@ -288,11 +336,11 @@ fn caption_paragraph(inlines: &[Inline]) -> Paragraph {
     para
 }
 
-/// A centred plain paragraph used for source attributions.
+/// A left-aligned plain paragraph used for source attributions.
 fn source_paragraph(inlines: &[Inline]) -> Paragraph {
     let mut para = Paragraph::new()
         .style("Normal")
-        .align(AlignmentType::Center)
+        .align(AlignmentType::Left)
         .line_spacing(single_spacing())
         .indent(Some(0), None, None, None);
     for run in inline_runs(inlines, false, false) {
@@ -303,26 +351,183 @@ fn source_paragraph(inlines: &[Inline]) -> Paragraph {
 
 /// A centred italic paragraph for display-math blocks.
 fn build_display_math_paragraph(src: &str) -> Paragraph {
+    let visible = strip_label_commands(src);
     Paragraph::new()
         .style("Normal")
         .align(AlignmentType::Center)
         .line_spacing(single_spacing())
         .indent(Some(0), None, None, None)
-        .add_run(Run::new().add_text(src).italic())
+        .add_run(Run::new().add_text(visible).italic())
+}
+
+fn strip_label_commands(src: &str) -> String {
+    let mut out = String::with_capacity(src.len());
+    let mut pos = 0usize;
+
+    while pos < src.len() {
+        let Some(rel) = src[pos..].find("\\label") else {
+            out.push_str(&src[pos..]);
+            break;
+        };
+
+        let start = pos + rel;
+        out.push_str(&src[pos..start]);
+        let cmd_end = start + "\\label".len();
+        let mut arg_pos = cmd_end;
+        while arg_pos < src.len() && src.as_bytes()[arg_pos].is_ascii_whitespace() {
+            arg_pos += 1;
+        }
+
+        if arg_pos < src.len() && src.as_bytes()[arg_pos] == b'{' {
+            if let Some(end_rel) = src[arg_pos + 1..].find('}') {
+                pos = arg_pos + 1 + end_rel + 1;
+            } else {
+                pos = cmd_end;
+            }
+        } else {
+            pos = cmd_end;
+        }
+    }
+
+    out.split_whitespace().collect::<Vec<_>>().join(" ")
 }
 
 // ---------------------------------------------------------------------------
 // Figure rendering
 // ---------------------------------------------------------------------------
 
-/// For v0.2+, figures are rendered as text-only blocks (caption + source).
-/// Image embedding is deferred to v1.0.
-fn build_figure_paragraph(figure: &Figure) -> Paragraph {
-    if !figure.caption.is_empty() {
-        caption_paragraph(&figure.caption)
+fn render_figure_block(mut docx: Docx, figure: &Figure, base_dir: Option<&Path>) -> Docx {
+    let mut embedded = false;
+
+    if let Some(raw_path) = figure.image_path.as_deref() {
+        if let Some(resolved) = resolve_figure_path(raw_path, base_dir) {
+            match read_figure_pic(&resolved, figure.width_permille) {
+                Ok(pic) => {
+                    docx = docx.add_paragraph(figure_image_paragraph(pic));
+                    embedded = true;
+                }
+                Err(error) => {
+                    log::warn!(
+                        "Failed to embed figure image {}: {error}",
+                        resolved.display()
+                    );
+                }
+            }
+        } else {
+            log::warn!("Figure image not found for includegraphics path: {raw_path}");
+        }
     } else {
-        Paragraph::new()
+        log::warn!("Figure block has no includegraphics path");
     }
+
+    if !embedded {
+        let fallback = figure
+            .image_path
+            .as_deref()
+            .unwrap_or("missing includegraphics path");
+        docx = docx.add_paragraph(figure_placeholder_paragraph(fallback));
+    }
+
+    if !figure.caption.is_empty() {
+        docx = docx.add_paragraph(caption_paragraph(&figure.caption));
+    }
+
+    if !figure.source.is_empty() {
+        docx = docx.add_paragraph(source_paragraph(&figure.source));
+    }
+
+    docx
+}
+
+fn read_figure_pic(path: &Path, width_permille: Option<u16>) -> anyhow::Result<Pic> {
+    let image = std::fs::read(path)
+        .with_context(|| format!("failed to read image bytes from {}", path.display()))?;
+
+    let pic = catch_unwind(AssertUnwindSafe(|| Pic::new(&image))).map_err(|_| {
+        anyhow!(
+            "docx-rs failed to decode image {} (unsupported or corrupt image format)",
+            path.display()
+        )
+    })?;
+
+    Ok(scale_pic_to_text_width(pic, width_permille))
+}
+
+fn scale_pic_to_text_width(pic: Pic, width_permille: Option<u16>) -> Pic {
+    let (width_emu, height_emu) = pic.size;
+    if width_emu == 0 {
+        return pic;
+    }
+
+    let latex_target_emu = width_permille.map(|permille| {
+        (TEXT_WIDTH_TWIPS as u64 * EMU_PER_TWIP as u64 * permille as u64 / 1000) as u32
+    });
+    let target_width_emu = latex_target_emu
+        .unwrap_or(MAX_IMAGE_WIDTH_EMU)
+        .min(MAX_IMAGE_WIDTH_EMU);
+
+    if width_emu <= target_width_emu {
+        return pic;
+    }
+
+    let scaled_height =
+        ((height_emu as u64) * (target_width_emu as u64) / (width_emu as u64)).max(1) as u32;
+    pic.size(target_width_emu, scaled_height)
+}
+
+fn figure_image_paragraph(pic: Pic) -> Paragraph {
+    Paragraph::new()
+        .style("Normal")
+        .align(AlignmentType::Center)
+        .line_spacing(single_spacing())
+        .indent(Some(0), None, None, None)
+        .add_run(Run::new().add_image(pic))
+}
+
+fn figure_placeholder_paragraph(path_hint: &str) -> Paragraph {
+    Paragraph::new()
+        .style("Normal")
+        .align(AlignmentType::Center)
+        .line_spacing(single_spacing())
+        .indent(Some(0), None, None, None)
+        .add_run(
+            Run::new()
+                .add_text(format!("[Figure image not embedded: {path_hint}]"))
+                .italic(),
+        )
+}
+
+fn resolve_figure_path(raw: &str, base_dir: Option<&Path>) -> Option<PathBuf> {
+    let raw = raw.trim().trim_matches('"');
+    if raw.is_empty() {
+        return None;
+    }
+
+    let input = Path::new(raw);
+    let mut candidates = Vec::new();
+
+    if input.is_absolute() {
+        candidates.push(input.to_path_buf());
+    } else if let Some(base_dir) = base_dir {
+        candidates.push(base_dir.join(input));
+        for asset_dir in ["images", "figures", "img"] {
+            candidates.push(base_dir.join(asset_dir).join(input));
+        }
+    } else {
+        candidates.push(input.to_path_buf());
+    }
+
+    if input.extension().is_none() {
+        let mut with_extensions = Vec::new();
+        for candidate in &candidates {
+            for ext in IMAGE_EXTENSIONS {
+                with_extensions.push(candidate.with_extension(ext));
+            }
+        }
+        candidates.extend(with_extensions);
+    }
+
+    candidates.into_iter().find(|candidate| candidate.is_file())
 }
 
 // ---------------------------------------------------------------------------
@@ -332,13 +537,25 @@ fn build_figure_paragraph(figure: &Figure) -> Paragraph {
 /// Convert a [`Block::Section`] or [`Block::Paragraph`] into a docx-rs [`Paragraph`].
 fn build_paragraph(block: &Block) -> Paragraph {
     match block {
-        Block::Section { level, title } => {
+        Block::Section {
+            level,
+            number,
+            title,
+            ..
+        } => {
             let style = heading_style(*level);
             let mut para = Paragraph::new()
                 .style(style)
                 .align(AlignmentType::Left)
                 .line_spacing(single_spacing())
                 .indent(Some(0), None, None, None);
+            if let Some(number) = number {
+                let mut prefix = number.clone();
+                if !title.is_empty() {
+                    prefix.push(' ');
+                }
+                para = para.add_run(Run::new().add_text(prefix).bold());
+            }
             for run in inline_runs(title, true, false) {
                 para = para.add_run(run);
             }
@@ -406,6 +623,16 @@ fn inline_runs(inlines: &[Inline], bold: bool, italic: bool) -> Vec<Run> {
                 }
                 runs.push(run);
             }
+            Inline::Reference(label) => {
+                let mut run = Run::new().add_text(label.as_str());
+                if bold {
+                    run = run.bold();
+                }
+                if italic {
+                    run = run.italic();
+                }
+                runs.push(run);
+            }
             Inline::Footnote(content) => {
                 // Render \footnote{...} as a native DOCX footnote reference + footnotes.xml entry.
                 let mut footnote_para = Paragraph::new()
@@ -429,4 +656,49 @@ fn inline_runs(inlines: &[Inline], bold: bool, italic: bool) -> Vec<Run> {
         }
     }
     runs
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn resolve_figure_path_uses_images_fallback_and_extension_guess() {
+        use std::time::{SystemTime, UNIX_EPOCH};
+
+        let unique = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("clock should be monotonic")
+            .as_nanos();
+        let root = std::env::temp_dir().join(format!("ferritex_figure_path_{unique}"));
+        let images_dir = root.join("images").join("part2");
+        std::fs::create_dir_all(&images_dir).expect("failed to create images dir");
+        let image_path = images_dir.join("chart.png");
+        std::fs::write(&image_path, b"fake").expect("failed to write image");
+
+        let resolved = resolve_figure_path("part2/chart", Some(&root));
+        assert_eq!(resolved, Some(image_path.clone()));
+
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn resolve_figure_path_accepts_absolute_path() {
+        use std::time::{SystemTime, UNIX_EPOCH};
+
+        let unique = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("clock should be monotonic")
+            .as_nanos();
+        let root = std::env::temp_dir().join(format!("ferritex_figure_abs_{unique}"));
+        std::fs::create_dir_all(&root).expect("failed to create dir");
+        let image_path = root.join("figure.jpg");
+        std::fs::write(&image_path, b"fake").expect("failed to write image");
+
+        let absolute = image_path.to_string_lossy().to_string();
+        let resolved = resolve_figure_path(&absolute, None);
+        assert_eq!(resolved, Some(image_path.clone()));
+
+        let _ = std::fs::remove_dir_all(&root);
+    }
 }

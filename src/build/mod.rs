@@ -144,7 +144,7 @@ fn run_docx_pipeline(input: &Path, output: &Path) -> Result<()> {
     log::debug!("Parsed {} block(s)", document.blocks.len());
 
     log::info!("Writing {}", output.display());
-    renderer::docx::render_docx(&document, output)
+    renderer::docx::render_docx_with_context(&document, output, Some(input))
         .with_context(|| format!("failed to write {}", output.display()))?;
 
     log::info!("Done.");

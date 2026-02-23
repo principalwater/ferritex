@@ -1,4 +1,7 @@
-use std::path::{Path, PathBuf};
+use std::{
+    collections::HashMap,
+    path::{Path, PathBuf},
+};
 
 use crate::model::{Block, Document, Figure, Inline, List, Table, TableCell, TableRow};
 
@@ -34,13 +37,15 @@ pub fn parse_latex(source: &str) -> Document {
 ///
 /// Missing input files are kept as-is in the expanded source (best-effort mode).
 pub fn parse_latex_file(input_path: &Path) -> anyhow::Result<Document> {
+    let root_dir = input_path.parent().unwrap_or_else(|| Path::new("."));
     let mut stack = Vec::new();
-    let expanded = expand_inputs_recursive(input_path, &mut stack)?;
+    let expanded = expand_inputs_recursive(input_path, root_dir, &mut stack)?;
     Ok(parse_latex(&expanded))
 }
 
 fn parse_latex_with_mode(source: &str, autocite_mode: AutociteMode) -> Document {
     let source = strip_comments(source);
+    let declared_labels = collect_declared_labels(&source);
     let body = extract_document_body(&source);
     let filtered = filter_skippable_lines(body);
     // Segment the source into typed spans before paragraph-splitting,
@@ -65,7 +70,7 @@ fn parse_latex_with_mode(source: &str, autocite_mode: AutociteMode) -> Document 
                         blocks.push(block);
                     } else {
                         let inlines = parse_inlines(chunk, autocite_mode);
-                        if !inlines.is_empty() {
+                        if !inlines.is_empty() && !is_single_brace_paragraph(&inlines) {
                             blocks.push(Block::Paragraph(inlines));
                         }
                     }
@@ -74,6 +79,8 @@ fn parse_latex_with_mode(source: &str, autocite_mode: AutociteMode) -> Document 
         }
     }
 
+    assign_section_numbers(&mut blocks);
+    resolve_references(&mut blocks, &declared_labels);
     Document { blocks }
 }
 
@@ -123,7 +130,11 @@ fn extract_latex_option_value(line: &str, key: &str) -> Option<String> {
     }
 }
 
-fn expand_inputs_recursive(path: &Path, stack: &mut Vec<PathBuf>) -> anyhow::Result<String> {
+fn expand_inputs_recursive(
+    path: &Path,
+    root_dir: &Path,
+    stack: &mut Vec<PathBuf>,
+) -> anyhow::Result<String> {
     let canonical = std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
     if stack.contains(&canonical) {
         return Ok(String::new());
@@ -162,9 +173,9 @@ fn expand_inputs_recursive(path: &Path, stack: &mut Vec<PathBuf>) -> anyhow::Res
                     let arg_src = &source[arg_pos + 1..arg_pos + arg_len - 1];
                     let included = arg_src.trim();
                     if !included.is_empty() {
-                        let include_path = resolve_input_path(base_dir, included);
-                        if include_path.exists() {
-                            let expanded = expand_inputs_recursive(&include_path, stack)?;
+                        if let Some(include_path) = resolve_input_path(base_dir, root_dir, included)
+                        {
+                            let expanded = expand_inputs_recursive(&include_path, root_dir, stack)?;
                             out.push_str(&expanded);
                         } else {
                             // Missing include: keep original command for best-effort parsing.
@@ -189,17 +200,39 @@ fn expand_inputs_recursive(path: &Path, stack: &mut Vec<PathBuf>) -> anyhow::Res
     Ok(out)
 }
 
-fn resolve_input_path(base_dir: &Path, include_arg: &str) -> PathBuf {
-    let raw = base_dir.join(include_arg);
-    if raw.exists() {
-        return raw;
+fn resolve_input_path(base_dir: &Path, root_dir: &Path, include_arg: &str) -> Option<PathBuf> {
+    if include_arg.trim().is_empty() {
+        return None;
     }
-    if raw.extension().is_none() {
-        let mut with_tex = raw.clone();
-        with_tex.set_extension("tex");
-        return with_tex;
+
+    let raw = Path::new(include_arg);
+    let mut candidates = Vec::new();
+
+    if raw.is_absolute() {
+        candidates.push(raw.to_path_buf());
+    } else {
+        candidates.push(base_dir.join(raw));
+        if root_dir != base_dir {
+            candidates.push(root_dir.join(raw));
+        }
     }
-    raw
+
+    for candidate in &candidates {
+        if candidate.is_file() {
+            return Some(candidate.clone());
+        }
+    }
+
+    for candidate in candidates {
+        if candidate.extension().is_none() {
+            let with_tex = candidate.with_extension("tex");
+            if with_tex.is_file() {
+                return Some(with_tex);
+            }
+        }
+    }
+
+    None
 }
 
 // ---------------------------------------------------------------------------
@@ -224,6 +257,11 @@ const BLOCK_ENVS: &[&str] = &[
     "figure",
     "table*",
     "figure*",
+    "tabular",
+    "tabular*",
+    "tblr",
+    "longtblr",
+    "refsection",
     "itemize",
     "enumerate",
     "equation",
@@ -398,14 +436,22 @@ fn parse_float(src: &str, autocite_mode: AutociteMode) -> Option<Block> {
     let src = src.trim();
     if src.starts_with("\\[") || src.starts_with("\\begin{equation") {
         Some(Block::DisplayMath(extract_display_math_body(src)))
+    } else if src.starts_with("\\begin{refsection") {
+        None
     } else if src.starts_with("\\begin{figure") {
         Some(Block::Figure(parse_figure(src, autocite_mode)))
     } else if src.starts_with("\\begin{itemize") {
         Some(Block::List(parse_list(src, false, autocite_mode)))
     } else if src.starts_with("\\begin{enumerate") {
         Some(Block::List(parse_list(src, true, autocite_mode)))
-    } else {
+    } else if src.starts_with("\\begin{table")
+        || src.starts_with("\\begin{tabular")
+        || src.starts_with("\\begin{tblr")
+        || src.starts_with("\\begin{longtblr")
+    {
         Some(Block::Table(parse_table(src, autocite_mode)))
+    } else {
+        None
     }
 }
 
@@ -436,7 +482,13 @@ fn extract_display_math_body(src: &str) -> String {
 
 /// Parse a `\begin{table}…\end{table}` segment into a [`Table`].
 fn parse_table(src: &str, autocite_mode: AutociteMode) -> Table {
-    let caption = extract_caption(src, autocite_mode);
+    let mut caption = extract_caption(src, autocite_mode);
+    if caption.is_empty()
+        && let Some(value) = extract_option_value(src, "caption")
+    {
+        caption = parse_inlines(value.as_str(), autocite_mode);
+    }
+    let label = extract_label_macro(src).or_else(|| extract_option_label(src));
     let source = extract_source_macro(src, autocite_mode);
 
     // Find the inner tabular/tblr/longtblr environment.
@@ -444,6 +496,7 @@ fn parse_table(src: &str, autocite_mode: AutociteMode) -> Table {
 
     Table {
         caption,
+        label,
         source,
         rows,
     }
@@ -452,11 +505,15 @@ fn parse_table(src: &str, autocite_mode: AutociteMode) -> Table {
 /// Parse a `\begin{figure}…\end{figure}` segment into a [`Figure`].
 fn parse_figure(src: &str, autocite_mode: AutociteMode) -> Figure {
     let caption = extract_caption(src, autocite_mode);
+    let label = extract_label_macro(src).or_else(|| extract_option_label(src));
     let source = extract_source_macro(src, autocite_mode);
     let image_path = extract_includegraphics_path(src);
+    let width_permille = extract_includegraphics_width_permille(src);
     Figure {
         image_path,
+        width_permille,
         caption,
+        label,
         source,
     }
 }
@@ -536,6 +593,59 @@ fn extract_source_macro(src: &str, autocite_mode: AutociteMode) -> Vec<Inline> {
     Vec::new()
 }
 
+/// Extract the first `\label{...}` payload from `src`.
+fn extract_label_macro(src: &str) -> Option<String> {
+    let pos = src.find("\\label")?;
+    let after = src[pos + "\\label".len()..].trim_start_matches([' ', '\t']);
+    let content = extract_braced(after)?;
+    let label = content.trim();
+    if label.is_empty() {
+        None
+    } else {
+        Some(label.to_string())
+    }
+}
+
+/// Extract tabularray-style label option, e.g. `label = {tab:foo}`.
+fn extract_option_label(src: &str) -> Option<String> {
+    extract_option_value(src, "label")
+}
+
+fn extract_option_value(src: &str, key: &str) -> Option<String> {
+    let mut search_pos = 0usize;
+    while search_pos < src.len() {
+        let Some(rel) = src[search_pos..].find(key) else {
+            break;
+        };
+        let pos = search_pos + rel;
+        let after_kw = pos + key.len();
+        let mut tail = &src[after_kw..];
+        tail = tail.trim_start_matches([' ', '\t']);
+        if !tail.starts_with('=') {
+            search_pos = after_kw;
+            continue;
+        }
+        tail = tail[1..].trim_start_matches([' ', '\t']);
+
+        if tail.starts_with('{') {
+            if let Some(len) = braced_len(tail) {
+                let candidate = tail[1..len - 1].trim();
+                if !candidate.is_empty() && !candidate.eq_ignore_ascii_case("none") {
+                    return Some(candidate.to_string());
+                }
+            }
+        } else {
+            let end = tail.find([',', ']', '\n', '\r']).unwrap_or(tail.len());
+            let candidate = tail[..end].trim();
+            if !candidate.is_empty() && !candidate.eq_ignore_ascii_case("none") {
+                return Some(candidate.to_string());
+            }
+        }
+        search_pos = after_kw;
+    }
+    None
+}
+
 /// Extract the path from `\includegraphics[…]{path}`.
 fn extract_includegraphics_path(src: &str) -> Option<String> {
     let pos = src.find("\\includegraphics")?;
@@ -549,6 +659,47 @@ fn extract_includegraphics_path(src: &str) -> Option<String> {
     };
     let content = extract_braced(after)?;
     Some(content.trim().to_string())
+}
+
+fn extract_includegraphics_width_permille(src: &str) -> Option<u16> {
+    let pos = src.find("\\includegraphics")?;
+    let after = src[pos + 16..].trim_start_matches([' ', '\t']);
+    if !after.starts_with('[') {
+        return None;
+    }
+
+    let close = after.find(']')?;
+    let options = &after[1..close];
+    parse_width_permille_from_options(options)
+}
+
+fn parse_width_permille_from_options(options: &str) -> Option<u16> {
+    for option in options.split(',') {
+        let (key, value) = option.split_once('=')?;
+        if key.trim() != "width" {
+            continue;
+        }
+
+        let value = value.trim().trim_matches(['{', '}']);
+        for unit in ["\\textwidth", "\\linewidth"] {
+            if let Some(unit_pos) = value.find(unit) {
+                let factor_src = value[..unit_pos].trim();
+                let factor = if factor_src.is_empty() {
+                    1.0
+                } else {
+                    factor_src.parse::<f64>().ok()?
+                };
+                if !factor.is_finite() || factor <= 0.0 {
+                    return None;
+                }
+
+                let permille_f64 = (factor * 1000.0).round();
+                let clamped = permille_f64.clamp(1.0, u16::MAX as f64);
+                return Some(clamped as u16);
+            }
+        }
+    }
+    None
 }
 
 /// Parse rows from within a `tabular`, `tblr`, or `longtblr` environment.
@@ -796,21 +947,275 @@ fn is_skippable(chunk: &str) -> bool {
         || c.starts_with("\\usepackage")
         || c.starts_with("\\begin{document}")
         || c.starts_with("\\end{document}")
+        || c.starts_with("\\begin{landscape}")
+        || c.starts_with("\\end{landscape}")
         || c.starts_with("\\maketitle")
+        || c.starts_with("\\printnomenclature")
+        || c.starts_with("\\makenomenclature")
         || c.starts_with("\\tableofcontents")
         || c.starts_with("\\listoffigures")
         || c.starts_with("\\listoftables")
         || c.starts_with("\\addcontentsline")
         || c.starts_with("\\addtocontents")
+        || c.starts_with("\\counterwithout")
+        || c.starts_with("\\counterwithin")
         || c.starts_with("\\setcounter")
+        || c.starts_with("\\setlength")
+        || c.starts_with("\\refstepcounter")
+        || c.starts_with("\\newcommand")
+        || c.starts_with("\\renewcommand")
+        || c.starts_with("\\DeclareMathOperator")
         || c.starts_with("\\newpage")
         || c.starts_with("\\clearpage")
         || c.starts_with("\\cleardoublepage")
         || c.starts_with("\\vspace")
         || c.starts_with("\\ifdefmacro")
+        || c.starts_with("\\captionsetup")
+        || c.starts_with("\\DefTblrTemplate")
+        || c.starts_with("\\SetTblrTemplate")
+        || c.starts_with("\\UseTblrTemplate")
+        || c.starts_with("\\SetCell")
+        || c.starts_with("\\begingroup")
+        || c.starts_with("\\endgroup")
+        || c.starts_with("\\appendix")
+        || c.starts_with("\\landscape")
+        || c.starts_with("\\endlandscape")
+        || c.starts_with("\\centering")
+        || c.starts_with("\\raggedright")
+        || c.starts_with("\\raggedleft")
         || c.starts_with("\\endTOCtrue")
         || c.starts_with("\\pagestyle")
         || c.starts_with("\\thispagestyle")
+}
+
+fn assign_section_numbers(blocks: &mut [Block]) {
+    let mut chapter_no = 0usize;
+    let mut section_no = 0usize;
+    let mut subsection_no = 0usize;
+
+    for block in blocks.iter_mut() {
+        let Block::Section { level, number, .. } = block else {
+            continue;
+        };
+
+        if number.is_none() {
+            continue;
+        }
+
+        match *level {
+            1 => {
+                chapter_no += 1;
+                section_no = 0;
+                subsection_no = 0;
+                *number = Some(format!("{chapter_no}."));
+            }
+            2 => {
+                section_no += 1;
+                subsection_no = 0;
+                *number = if chapter_no > 0 {
+                    Some(format!("{chapter_no}.{section_no}"))
+                } else {
+                    Some(section_no.to_string())
+                };
+            }
+            _ => {
+                subsection_no += 1;
+                *number = if chapter_no > 0 && section_no > 0 {
+                    Some(format!("{chapter_no}.{section_no}.{subsection_no}"))
+                } else if section_no > 0 {
+                    Some(format!("{section_no}.{subsection_no}"))
+                } else {
+                    Some(subsection_no.to_string())
+                };
+            }
+        }
+    }
+}
+
+fn collect_declared_labels(source: &str) -> Vec<String> {
+    extract_labels(source)
+}
+
+fn extract_labels(source: &str) -> Vec<String> {
+    let mut labels = Vec::new();
+    let mut pos = 0usize;
+    while pos < source.len() {
+        let Some(rel) = source[pos..].find("\\label") else {
+            break;
+        };
+        let cmd_start = pos + rel;
+        let cmd_end = cmd_start + "\\label".len();
+        if source[cmd_end..]
+            .chars()
+            .next()
+            .is_some_and(|c| c.is_ascii_alphabetic())
+        {
+            pos = cmd_end;
+            continue;
+        }
+
+        let mut arg_pos = cmd_end;
+        while arg_pos < source.len() && source.as_bytes()[arg_pos].is_ascii_whitespace() {
+            arg_pos += 1;
+        }
+        if arg_pos < source.len()
+            && source.as_bytes()[arg_pos] == b'{'
+            && let Some(len) = braced_len(&source[arg_pos..])
+        {
+            let value = source[arg_pos + 1..arg_pos + len - 1].trim();
+            if !value.is_empty() {
+                labels.push(value.to_string());
+            }
+            pos = arg_pos + len;
+            continue;
+        }
+        pos = cmd_end;
+    }
+    labels
+}
+
+fn resolve_references(blocks: &mut [Block], declared_labels: &[String]) {
+    let labels = build_label_registry(blocks, declared_labels);
+
+    for block in blocks.iter_mut() {
+        match block {
+            Block::Section { title, .. } | Block::Paragraph(title) => {
+                resolve_inline_references(title, &labels);
+            }
+            Block::Table(table) => {
+                resolve_inline_references(&mut table.caption, &labels);
+                resolve_inline_references(&mut table.source, &labels);
+                for row in &mut table.rows {
+                    for cell in &mut row.cells {
+                        resolve_inline_references(&mut cell.content, &labels);
+                    }
+                }
+            }
+            Block::Figure(figure) => {
+                resolve_inline_references(&mut figure.caption, &labels);
+                resolve_inline_references(&mut figure.source, &labels);
+            }
+            Block::List(list) => {
+                for item in &mut list.items {
+                    resolve_inline_references(item, &labels);
+                }
+            }
+            Block::DisplayMath(_) => {}
+        }
+    }
+}
+
+fn build_label_registry(blocks: &[Block], declared_labels: &[String]) -> HashMap<String, String> {
+    let mut labels = HashMap::new();
+    let mut chapter_no = 0usize;
+    let mut figure_no = 0usize;
+    let mut table_no = 0usize;
+    let mut equation_no = 0usize;
+
+    for block in blocks {
+        match block {
+            Block::Section {
+                level,
+                number,
+                label,
+                ..
+            } => {
+                if *level == 1 && number.is_some() {
+                    chapter_no += 1;
+                    figure_no = 0;
+                    table_no = 0;
+                }
+
+                if let (Some(label), Some(number)) = (label.as_ref(), number.as_ref()) {
+                    let value = if *level == 1 {
+                        number.trim_end_matches('.').to_string()
+                    } else {
+                        number.clone()
+                    };
+                    labels.insert(label.clone(), value);
+                }
+            }
+            Block::Figure(figure) => {
+                if let Some(label) = figure.label.as_ref() {
+                    figure_no += 1;
+                    let value = if chapter_no > 0 {
+                        format!("{chapter_no}.{figure_no}")
+                    } else {
+                        figure_no.to_string()
+                    };
+                    labels.insert(label.clone(), value);
+                }
+            }
+            Block::Table(table) => {
+                if let Some(label) = table.label.as_ref() {
+                    table_no += 1;
+                    let value = if chapter_no > 0 {
+                        format!("{chapter_no}.{table_no}")
+                    } else {
+                        table_no.to_string()
+                    };
+                    labels.insert(label.clone(), value);
+                }
+            }
+            Block::DisplayMath(body) => {
+                equation_no += 1;
+                let value = equation_no.to_string();
+                for label in extract_labels(body) {
+                    labels.insert(label, value.clone());
+                }
+            }
+            Block::Paragraph(_) | Block::List(_) => {}
+        }
+    }
+
+    for label in declared_labels {
+        if labels.contains_key(label) {
+            continue;
+        }
+        if let Some(value) = infer_appendix_label_value(label) {
+            labels.insert(label.clone(), value);
+        }
+    }
+
+    labels
+}
+
+fn infer_appendix_label_value(label: &str) -> Option<String> {
+    let suffix = label
+        .strip_prefix("app:")
+        .or_else(|| label.strip_prefix("appendix:"))?;
+    let token = suffix.trim();
+    if token.is_empty() {
+        return None;
+    }
+
+    let candidate = token
+        .chars()
+        .take_while(|c| c.is_alphanumeric())
+        .collect::<String>();
+    if candidate.is_empty() {
+        None
+    } else {
+        Some(candidate)
+    }
+}
+
+fn resolve_inline_references(inlines: &mut [Inline], labels: &HashMap<String, String>) {
+    for inline in inlines {
+        match inline {
+            Inline::Reference(label) => {
+                let text = labels
+                    .get(label)
+                    .cloned()
+                    .unwrap_or_else(|| format!("[ref:{label}]"));
+                *inline = Inline::Text(text);
+            }
+            Inline::Bold(children) | Inline::Italic(children) | Inline::Footnote(children) => {
+                resolve_inline_references(children, labels);
+            }
+            Inline::Text(_) | Inline::InlineMath(_) => {}
+        }
+    }
 }
 
 /// Try to parse `\chapter{…}` / `\section{…}` / `\subsection{…}` / `\subsubsection{…}`.
@@ -833,10 +1238,26 @@ fn try_parse_section(chunk: &str, autocite_mode: AutociteMode) -> Option<Block> 
         return None;
     };
 
-    let rest = rest.strip_prefix('*').unwrap_or(rest).trim_start();
+    let (is_starred, rest) = if let Some(rest) = rest.strip_prefix('*') {
+        (true, rest)
+    } else {
+        (false, rest)
+    };
+    let rest = rest.trim_start();
+    let title_len = braced_len(rest)?;
     let title_src = extract_braced(rest)?;
+    let tail = &rest[title_len..];
     let title = parse_inlines(title_src, autocite_mode);
-    Some(Block::Section { level, title })
+    Some(Block::Section {
+        level,
+        number: if is_starred {
+            None
+        } else {
+            Some(String::new())
+        },
+        label: extract_label_macro(tail),
+        title,
+    })
 }
 
 /// Extract the content of the first `{…}` group from the start of `src`.
@@ -905,11 +1326,23 @@ fn parse_inlines(src: &str, autocite_mode: AutociteMode) -> Vec<Inline> {
                         .map(|i| pos + 1 + i)
                         .unwrap_or(len);
                     pos = end;
-                    let remaining = src[pos..].trim_start();
-                    if remaining.starts_with('{')
-                        && let Some(arg_len) = braced_len(remaining)
-                    {
-                        pos += src[pos..].len() - remaining.len() + arg_len;
+                    loop {
+                        let remaining = src[pos..].trim_start();
+                        pos += src[pos..].len() - remaining.len();
+
+                        if remaining.starts_with('{')
+                            && let Some(arg_len) = braced_len(remaining)
+                        {
+                            pos += arg_len;
+                            continue;
+                        }
+                        if remaining.starts_with('[')
+                            && let Some(arg_len) = bracketed_len(remaining)
+                        {
+                            pos += arg_len;
+                            continue;
+                        }
+                        break;
                     }
                 }
             }
@@ -948,6 +1381,21 @@ fn try_parse_inline_command(
     src: &str,
     autocite_mode: AutociteMode,
 ) -> Option<(Vec<Inline>, usize)> {
+    if let Some(rest) = src.strip_prefix("\\\\") {
+        let mut consumed = 2usize;
+        if rest.starts_with('[')
+            && let Some(arg_len) = bracketed_len(rest)
+        {
+            consumed += arg_len;
+        }
+        return Some((vec![Inline::Text(" ".to_string())], consumed));
+    }
+    if let Some(rest) = src.strip_prefix("\\cdot")
+        && !rest.chars().next().is_some_and(|c| c.is_ascii_alphabetic())
+    {
+        return Some((vec![Inline::Text("·".to_string())], "\\cdot".len()));
+    }
+
     if let Some(r) = src.strip_prefix("\\textbf") {
         let r = r.trim_start_matches(' ');
         if let Some(arg_len) = braced_len(r) {
@@ -973,6 +1421,25 @@ fn try_parse_inline_command(
             ));
         }
     }
+    for textual_cmd in &[
+        "\\texttt",
+        "\\textrm",
+        "\\textnormal",
+        "\\textup",
+        "\\mbox",
+        "\\enquote",
+        "\\uline",
+        "\\url",
+    ] {
+        if let Some(r) = src.strip_prefix(textual_cmd) {
+            let r = r.trim_start_matches(' ');
+            if let Some(arg_len) = braced_len(r) {
+                let inner = &r[1..arg_len - 1];
+                let consumed = src.len() - r.len() + arg_len;
+                return Some((parse_inlines(inner, autocite_mode), consumed));
+            }
+        }
+    }
     if let Some(r) = src.strip_prefix("\\footnote") {
         let r = r.trim_start_matches(' ');
         if let Some(arg_len) = braced_len(r) {
@@ -984,15 +1451,167 @@ fn try_parse_inline_command(
             ));
         }
     }
-    for cmd in &["\\label", "\\ref", "\\cite"] {
+    if let Some(r) = src.strip_prefix("\\ifnumequal") {
+        let mut consumed = src.len() - r.len();
+        let mut args: Vec<String> = Vec::new();
+
+        for _ in 0..4 {
+            while consumed < src.len() && src.as_bytes()[consumed].is_ascii_whitespace() {
+                consumed += 1;
+            }
+            let Some(arg_len) = braced_len(&src[consumed..]) else {
+                break;
+            };
+            args.push(src[consumed + 1..consumed + arg_len - 1].to_string());
+            consumed += arg_len;
+        }
+
+        if args.len() >= 3 {
+            // Prefer the "equal" branch. This keeps human-readable text and
+            // avoids leaking control-flow internals into output.
+            let final_consumed = if args.len() == 4 { consumed } else { src.len() };
+            return Some((
+                parse_inlines(args[2].as_str(), autocite_mode),
+                final_consumed,
+            ));
+        }
+    }
+    if src.starts_with("\\ifnum") {
+        let mut pos = "\\ifnum".len();
+        while pos < src.len() && src.as_bytes()[pos].is_ascii_whitespace() {
+            pos += 1;
+        }
+
+        let (lhs_consumed, lhs_value) = consume_ifnum_operand(&src[pos..])?;
+        pos += lhs_consumed;
+        while pos < src.len() && src.as_bytes()[pos].is_ascii_whitespace() {
+            pos += 1;
+        }
+
+        let cmp = src[pos..].chars().next()?;
+        if !matches!(cmp, '<' | '=' | '>') {
+            return None;
+        }
+        pos += cmp.len_utf8();
+
+        while pos < src.len() && src.as_bytes()[pos].is_ascii_whitespace() {
+            pos += 1;
+        }
+
+        let (rhs_consumed, rhs_value) = consume_ifnum_operand(&src[pos..])?;
+        pos += rhs_consumed;
+
+        let Some(fi_rel) = src[pos..].find("\\fi") else {
+            return Some((Vec::new(), src.len()));
+        };
+        let fi_pos = pos + fi_rel;
+        let else_pos = src[pos..].find("\\else").map(|rel| pos + rel);
+
+        let (then_branch, else_branch) = if let Some(else_pos) = else_pos {
+            if else_pos < fi_pos {
+                (
+                    &src[pos..else_pos],
+                    Some(&src[else_pos + "\\else".len()..fi_pos]),
+                )
+            } else {
+                (&src[pos..fi_pos], None)
+            }
+        } else {
+            (&src[pos..fi_pos], None)
+        };
+
+        let condition_true = match (lhs_value, rhs_value) {
+            (Some(lhs), Some(rhs)) => match cmp {
+                '<' => lhs < rhs,
+                '=' => lhs == rhs,
+                '>' => lhs > rhs,
+                _ => true,
+            },
+            _ => true,
+        };
+        let chosen = if condition_true {
+            then_branch
+        } else {
+            else_branch.unwrap_or("")
+        };
+
+        return Some((
+            parse_inlines(chosen.trim(), autocite_mode),
+            fi_pos + "\\fi".len(),
+        ));
+    }
+    if src.starts_with("\\else") {
+        return Some((Vec::new(), "\\else".len()));
+    }
+    if src.starts_with("\\fi") {
+        return Some((Vec::new(), "\\fi".len()));
+    }
+    if let Some(r) = src.strip_prefix("\\label") {
+        let r = r.trim_start_matches(' ');
+        if let Some(arg_len) = braced_len(r) {
+            let consumed = src.len() - r.len() + arg_len;
+            return Some((Vec::new(), consumed));
+        }
+    }
+    if let Some(r) = src.strip_prefix("\\formbytotal") {
+        let mut consumed = src.len() - r.len();
+        let mut args: Vec<String> = Vec::new();
+
+        for _ in 0..5 {
+            while consumed < src.len() && src.as_bytes()[consumed].is_ascii_whitespace() {
+                consumed += 1;
+            }
+
+            let Some(arg_len) = braced_len(&src[consumed..]) else {
+                break;
+            };
+            args.push(src[consumed + 1..consumed + arg_len - 1].to_string());
+            consumed += arg_len;
+        }
+
+        if args.len() == 5 {
+            let stem = args[1].trim();
+            let chosen_suffix = [&args[4], &args[3], &args[2]]
+                .iter()
+                .map(|s| s.trim())
+                .find(|s| !s.is_empty())
+                .unwrap_or("");
+            let replacement = format!("{stem}{chosen_suffix}");
+            return Some((vec![Inline::Text(replacement)], consumed));
+        }
+    }
+    for cmd in &["\\ref", "\\autoref", "\\cref", "\\Cref"] {
         if let Some(r) = src.strip_prefix(cmd) {
             let r = r.trim_start_matches(' ');
             if let Some(arg_len) = braced_len(r) {
-                let inner = &r[1..arg_len - 1];
-                let placeholder = format!("[{}]", inner);
+                let inner = r[1..arg_len - 1].trim().to_string();
                 let consumed = src.len() - r.len() + arg_len;
-                return Some((vec![Inline::Text(placeholder)], consumed));
+                return Some((vec![Inline::Reference(inner)], consumed));
             }
+        }
+    }
+    if let Some(r) = src.strip_prefix("\\eqref") {
+        let r = r.trim_start_matches(' ');
+        if let Some(arg_len) = braced_len(r) {
+            let inner = r[1..arg_len - 1].trim().to_string();
+            let consumed = src.len() - r.len() + arg_len;
+            return Some((
+                vec![
+                    Inline::Text("(".to_string()),
+                    Inline::Reference(inner),
+                    Inline::Text(")".to_string()),
+                ],
+                consumed,
+            ));
+        }
+    }
+    if let Some(r) = src.strip_prefix("\\cite") {
+        let r = r.trim_start_matches(' ');
+        if let Some(arg_len) = braced_len(r) {
+            let inner = &r[1..arg_len - 1];
+            let placeholder = format!("[{}]", inner);
+            let consumed = src.len() - r.len() + arg_len;
+            return Some((vec![Inline::Text(placeholder)], consumed));
         }
     }
     if let Some(r) = src.strip_prefix("\\autocite") {
@@ -1083,11 +1702,112 @@ fn braced_len(src: &str) -> Option<usize> {
     None
 }
 
+fn bracketed_len(src: &str) -> Option<usize> {
+    if !src.starts_with('[') {
+        return None;
+    }
+    let mut depth = 0usize;
+    for (i, ch) in src.char_indices() {
+        match ch {
+            '[' => depth += 1,
+            ']' => {
+                depth -= 1;
+                if depth == 0 {
+                    return Some(i + 1);
+                }
+            }
+            _ => {}
+        }
+    }
+    None
+}
+
+fn consume_ifnum_operand(src: &str) -> Option<(usize, Option<i64>)> {
+    if src.is_empty() {
+        return None;
+    }
+
+    if let Some(value_len) = parse_leading_int_len(src) {
+        return Some((value_len, src[..value_len].parse::<i64>().ok()));
+    }
+
+    if src.starts_with('\\') {
+        let mut consumed = 1usize;
+        while consumed < src.len() && src.as_bytes()[consumed].is_ascii_alphabetic() {
+            consumed += 1;
+        }
+        loop {
+            let remaining = &src[consumed..];
+            let trimmed = remaining.trim_start();
+            consumed += remaining.len() - trimmed.len();
+
+            if trimmed.starts_with('{')
+                && let Some(arg_len) = braced_len(trimmed)
+            {
+                consumed += arg_len;
+                continue;
+            }
+            if trimmed.starts_with('[')
+                && let Some(arg_len) = bracketed_len(trimmed)
+            {
+                consumed += arg_len;
+                continue;
+            }
+            break;
+        }
+        return Some((consumed, None));
+    }
+
+    None
+}
+
+fn parse_leading_int_len(src: &str) -> Option<usize> {
+    let mut chars = src.char_indices();
+    let mut end = 0usize;
+
+    if let Some((_, '-')) = chars.next() {
+        end = 1;
+    } else {
+        chars = src.char_indices();
+    }
+
+    let mut saw_digit = false;
+    for (i, ch) in chars {
+        if ch.is_ascii_digit() {
+            saw_digit = true;
+            end = i + ch.len_utf8();
+        } else {
+            break;
+        }
+    }
+
+    if saw_digit { Some(end) } else { None }
+}
+
+fn is_single_brace_paragraph(inlines: &[Inline]) -> bool {
+    if inlines
+        .iter()
+        .any(|inline| !matches!(inline, Inline::Text(_)))
+    {
+        return false;
+    }
+
+    let text = inlines
+        .iter()
+        .filter_map(|inline| match inline {
+            Inline::Text(value) => Some(value.as_str()),
+            _ => None,
+        })
+        .collect::<String>();
+    let trimmed = text.trim();
+    trimmed == "{" || trimmed == "}"
+}
+
 fn normalize_whitespace(s: &str) -> String {
     let mut out = String::with_capacity(s.len());
     let mut prev_space = false;
     for ch in s.chars() {
-        if ch.is_whitespace() {
+        if ch.is_whitespace() || ch == '~' {
             if !prev_space {
                 out.push(' ');
             }
@@ -1097,7 +1817,9 @@ fn normalize_whitespace(s: &str) -> String {
             prev_space = false;
         }
     }
-    out
+    out = out.replace("<<", "«").replace(">>", "»");
+    out = out.replace("\"---", "—");
+    out.replace(" -- ", " — ")
 }
 
 // ---------------------------------------------------------------------------
@@ -1116,6 +1838,8 @@ mod tests {
             doc.blocks,
             vec![Block::Section {
                 level: 1,
+                number: Some("1.".into()),
+                label: None,
                 title: vec![Inline::Text("Overview".into())]
             }]
         );
@@ -1128,6 +1852,8 @@ mod tests {
             doc.blocks,
             vec![Block::Section {
                 level: 2,
+                number: Some("1".into()),
+                label: None,
                 title: vec![Inline::Text("Introduction".into())]
             }]
         );
@@ -1140,6 +1866,8 @@ mod tests {
             doc.blocks[0],
             Block::Section {
                 level: 3,
+                number: Some("1".into()),
+                label: None,
                 title: vec![Inline::Text("Background".into())]
             }
         );
@@ -1152,9 +1880,55 @@ mod tests {
             doc.blocks[0],
             Block::Section {
                 level: 2,
+                number: None,
+                label: None,
                 title: vec![Inline::Text("Preface".into())]
             }
         );
+    }
+
+    #[test]
+    fn test_section_numbering_sequence_inside_chapter() {
+        let doc = parse_latex(
+            "\\chapter{One}\n\n\\section{A}\n\n\\subsection{A.1}\n\n\\section{B}\n\n\\subsection{B.1}",
+        );
+        let numbers: Vec<String> = doc
+            .blocks
+            .iter()
+            .filter_map(|b| {
+                if let Block::Section {
+                    number: Some(n), ..
+                } = b
+                {
+                    Some(n.clone())
+                } else {
+                    None
+                }
+            })
+            .collect();
+        assert_eq!(numbers, vec!["1.", "1.1", "1.1.1", "1.2", "1.2.1"]);
+    }
+
+    #[test]
+    fn test_section_numbering_resets_after_new_chapter() {
+        let doc = parse_latex("\\chapter{One}\n\n\\section{A}\n\n\\chapter{Two}\n\n\\section{B}");
+        let section_numbers: Vec<String> = doc
+            .blocks
+            .iter()
+            .filter_map(|b| {
+                if let Block::Section {
+                    level: 2,
+                    number: Some(n),
+                    ..
+                } = b
+                {
+                    Some(n.clone())
+                } else {
+                    None
+                }
+            })
+            .collect();
+        assert_eq!(section_numbers, vec!["1.1", "2.1"]);
     }
 
     #[test]
@@ -1232,6 +2006,231 @@ mod tests {
             }
             other => panic!("expected paragraph, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn test_ref_resolved_for_section_label() {
+        let src = "\\chapter{Intro}\\label{ch:intro}\n\nSee chapter \\ref{ch:intro}.";
+        let doc = parse_latex(src);
+        let resolved = doc.blocks.iter().find_map(|b| {
+            if let Block::Paragraph(inlines) = b {
+                Some(
+                    inlines
+                        .iter()
+                        .filter_map(|i| {
+                            if let Inline::Text(s) = i {
+                                Some(s.as_str())
+                            } else {
+                                None
+                            }
+                        })
+                        .collect::<String>(),
+                )
+            } else {
+                None
+            }
+        });
+        let resolved = resolved.expect("missing paragraph");
+        assert!(
+            resolved.contains("1"),
+            "expected resolved section reference number, got: {resolved}"
+        );
+    }
+
+    #[test]
+    fn test_ref_resolved_for_figure_label() {
+        let src = r"
+\chapter{Intro}
+
+\begin{figure}[H]
+\caption{Sample}
+\label{fig:sample}
+\end{figure}
+
+See Figure \ref{fig:sample}.
+";
+        let doc = parse_latex(src);
+        let resolved = doc.blocks.iter().find_map(|b| {
+            if let Block::Paragraph(inlines) = b {
+                Some(
+                    inlines
+                        .iter()
+                        .filter_map(|i| {
+                            if let Inline::Text(s) = i {
+                                Some(s.as_str())
+                            } else {
+                                None
+                            }
+                        })
+                        .collect::<String>(),
+                )
+            } else {
+                None
+            }
+        });
+        let resolved = resolved.expect("missing paragraph");
+        assert!(
+            resolved.contains("1.1"),
+            "expected chapter-aware figure reference number, got: {resolved}"
+        );
+    }
+
+    #[test]
+    fn test_ref_missing_becomes_explicit_placeholder() {
+        let doc = parse_latex("See \\ref{missing:label}.");
+        match &doc.blocks[0] {
+            Block::Paragraph(inlines) => {
+                assert!(
+                    inlines
+                        .iter()
+                        .any(|i| matches!(i, Inline::Text(s) if s.contains("[ref:missing:label]")))
+                );
+            }
+            other => panic!("expected paragraph, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_ref_resolved_for_tblr_option_label() {
+        let src = r"
+\chapter{Intro}
+
+\begin{longtblr}[
+label = {tab:opt_label},
+]{
+colspec = {|l|l|},
+hlines
+}
+A & B \\
+\end{longtblr}
+
+See table \cref{tab:opt_label}.
+";
+        let doc = parse_latex(src);
+        let resolved = doc.blocks.iter().find_map(|b| {
+            if let Block::Paragraph(inlines) = b {
+                Some(
+                    inlines
+                        .iter()
+                        .filter_map(|i| {
+                            if let Inline::Text(s) = i {
+                                Some(s.as_str())
+                            } else {
+                                None
+                            }
+                        })
+                        .collect::<String>(),
+                )
+            } else {
+                None
+            }
+        });
+        let resolved = resolved.expect("missing paragraph");
+        assert!(
+            resolved.contains("1.1"),
+            "expected resolved table number from tabularray option label, got: {resolved}"
+        );
+    }
+
+    #[test]
+    fn test_ref_resolved_for_appendix_label_from_standalone_label() {
+        let src = "\\chapter*{Appendix}\n\n\\label{app:C}\n\nSee \\ref{app:C}.";
+        let doc = parse_latex(src);
+        let resolved = doc.blocks.iter().find_map(|b| {
+            if let Block::Paragraph(inlines) = b {
+                Some(
+                    inlines
+                        .iter()
+                        .filter_map(|i| {
+                            if let Inline::Text(s) = i {
+                                Some(s.as_str())
+                            } else {
+                                None
+                            }
+                        })
+                        .collect::<String>(),
+                )
+            } else {
+                None
+            }
+        });
+        let resolved = resolved.expect("missing paragraph");
+        assert!(
+            resolved.contains("C"),
+            "expected appendix fallback value from app:C label, got: {resolved}"
+        );
+    }
+
+    #[test]
+    fn test_ref_resolved_for_equation_label() {
+        let src = r"
+\begin{equation}
+W = x + y
+\label{eq:welfare}
+\end{equation}
+
+As shown in \ref{eq:welfare}, objective is linear.
+";
+        let doc = parse_latex(src);
+        let resolved = doc.blocks.iter().find_map(|b| {
+            if let Block::Paragraph(inlines) = b {
+                Some(
+                    inlines
+                        .iter()
+                        .filter_map(|i| {
+                            if let Inline::Text(s) = i {
+                                Some(s.as_str())
+                            } else {
+                                None
+                            }
+                        })
+                        .collect::<String>(),
+                )
+            } else {
+                None
+            }
+        });
+        let resolved = resolved.expect("missing paragraph");
+        assert!(
+            resolved.contains("1"),
+            "expected resolved equation reference number, got: {resolved}"
+        );
+    }
+
+    #[test]
+    fn test_eqref_wraps_resolved_equation_number() {
+        let src = r"
+\begin{equation}
+W = x + y
+\label{eq:welfare}
+\end{equation}
+
+As shown in \eqref{eq:welfare}, objective is linear.
+";
+        let doc = parse_latex(src);
+        let resolved = doc.blocks.iter().find_map(|b| {
+            if let Block::Paragraph(inlines) = b {
+                Some(
+                    inlines
+                        .iter()
+                        .filter_map(|i| {
+                            if let Inline::Text(s) = i {
+                                Some(s.as_str())
+                            } else {
+                                None
+                            }
+                        })
+                        .collect::<String>(),
+                )
+            } else {
+                None
+            }
+        });
+        let resolved = resolved.expect("missing paragraph");
+        assert!(
+            resolved.contains("(1)"),
+            "expected eqref format '(1)', got: {resolved}"
+        );
     }
 
     #[test]
@@ -1325,6 +2324,7 @@ Beta & 2 \\
                     Some("images/chart.png"),
                     "image path mismatch"
                 );
+                assert_eq!(f.width_permille, Some(1000), "width hint mismatch");
                 assert!(!f.caption.is_empty(), "caption should be parsed");
                 assert!(!f.source.is_empty(), "figuresource should be parsed");
             }
@@ -1576,6 +2576,350 @@ Beta & 2 \\
         );
 
         let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn test_parse_latex_file_resolves_input_from_root_fallback() {
+        use std::time::{SystemTime, UNIX_EPOCH};
+
+        let unique = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("clock should be monotonic")
+            .as_nanos();
+        let root = std::env::temp_dir().join(format!("ferritex_root_fallback_{unique}"));
+        let chapters = root.join("chapters");
+        let common = root.join("common");
+        std::fs::create_dir_all(&chapters).expect("failed to create chapters dir");
+        std::fs::create_dir_all(&common).expect("failed to create common dir");
+
+        let main_tex = root.join("main.tex");
+        let chapter_tex = chapters.join("chapter1.tex");
+        let shared_tex = common.join("shared.tex");
+
+        std::fs::write(&shared_tex, "Shared paragraph from root fallback.")
+            .expect("failed to write shared.tex");
+        std::fs::write(&chapter_tex, "\\input{common/shared}\n")
+            .expect("failed to write chapter1.tex");
+        std::fs::write(&main_tex, "\\include{chapters/chapter1}\n")
+            .expect("failed to write main.tex");
+
+        let doc = parse_latex_file(&main_tex).expect("parse_latex_file failed");
+        let has_shared_text = doc.blocks.iter().any(|b| {
+            if let Block::Paragraph(inlines) = b {
+                inlines.iter().any(
+                    |i| matches!(i, Inline::Text(s) if s.contains("Shared paragraph from root fallback")),
+                )
+            } else {
+                false
+            }
+        });
+        assert!(
+            has_shared_text,
+            "expected text from root fallback include path"
+        );
+
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn test_unknown_control_command_does_not_leak_argument_text() {
+        let doc = parse_latex("Alpha \\unknownmacro{SHOULD_NOT_LEAK} Beta.");
+        match &doc.blocks[0] {
+            Block::Paragraph(inlines) => {
+                let text = inlines
+                    .iter()
+                    .filter_map(|i| {
+                        if let Inline::Text(t) = i {
+                            Some(t.as_str())
+                        } else {
+                            None
+                        }
+                    })
+                    .collect::<String>();
+                assert!(text.contains("Alpha"));
+                assert!(text.contains("Beta."));
+                assert!(!text.contains("SHOULD_NOT_LEAK"));
+            }
+            other => panic!("expected paragraph, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_ifnumequal_keeps_primary_branch_and_omits_else_macros() {
+        let src = r"
+\ifnumequal{\value{bibliosel}}{0}
+{
+Primary branch text.
+}%
+{
+\begin{refsection}[bl-author]
+\printbibliography[heading=nobibheading, section=1, env=countauthor, keyword=biblioauthor]
+\end{refsection}
+}%
+";
+        let doc = parse_latex(src);
+        let text = doc
+            .blocks
+            .iter()
+            .filter_map(|b| {
+                if let Block::Paragraph(inlines) = b {
+                    Some(
+                        inlines
+                            .iter()
+                            .filter_map(|i| {
+                                if let Inline::Text(t) = i {
+                                    Some(t.as_str())
+                                } else {
+                                    None
+                                }
+                            })
+                            .collect::<String>(),
+                    )
+                } else {
+                    None
+                }
+            })
+            .collect::<String>();
+
+        assert!(text.contains("Primary branch text."));
+        assert!(!text.contains("bl-author"));
+        assert!(!text.contains("heading=nobibheading"));
+    }
+
+    #[test]
+    fn test_standalone_brace_paragraphs_are_filtered() {
+        let doc = parse_latex("{\n\nVisible text.\n\n}");
+        let mut texts = doc
+            .blocks
+            .iter()
+            .filter_map(|block| match block {
+                Block::Paragraph(inlines) => Some(
+                    inlines
+                        .iter()
+                        .filter_map(|inline| match inline {
+                            Inline::Text(value) => Some(value.as_str()),
+                            _ => None,
+                        })
+                        .collect::<String>(),
+                ),
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        texts.retain(|value| !value.trim().is_empty());
+
+        assert_eq!(texts.len(), 1, "unexpected paragraph texts: {texts:?}");
+        assert!(
+            texts[0].contains("Visible text."),
+            "unexpected text: {}",
+            texts[0]
+        );
+    }
+
+    #[test]
+    fn test_ifnum_prefers_then_branch_for_unknown_operands() {
+        let doc = parse_latex(
+            "Prefix \\ifnum\\totvalue{totalappendix}>0, keeps then-branch\\else keeps else-branch\\fi suffix.",
+        );
+        let text = doc
+            .blocks
+            .iter()
+            .filter_map(|block| match block {
+                Block::Paragraph(inlines) => Some(
+                    inlines
+                        .iter()
+                        .filter_map(|inline| match inline {
+                            Inline::Text(value) => Some(value.as_str()),
+                            _ => None,
+                        })
+                        .collect::<String>(),
+                ),
+                _ => None,
+            })
+            .collect::<String>();
+
+        assert!(text.contains("then-branch"), "unexpected text: {text}");
+        assert!(!text.contains("else-branch"), "unexpected text: {text}");
+    }
+
+    #[test]
+    fn test_ifnum_numeric_comparison_uses_else_branch_when_false() {
+        let doc = parse_latex("Prefix \\ifnum 1>2 then\\else else\\fi suffix.");
+        let text = doc
+            .blocks
+            .iter()
+            .filter_map(|block| match block {
+                Block::Paragraph(inlines) => Some(
+                    inlines
+                        .iter()
+                        .filter_map(|inline| match inline {
+                            Inline::Text(value) => Some(value.as_str()),
+                            _ => None,
+                        })
+                        .collect::<String>(),
+                ),
+                _ => None,
+            })
+            .collect::<String>();
+
+        assert!(text.contains("else"), "unexpected text: {text}");
+        assert!(!text.contains(" then "), "unexpected text: {text}");
+    }
+
+    #[test]
+    fn test_longtblr_caption_option_parsed() {
+        let src = r"
+\begin{longtblr}[
+caption = {Option caption text},
+label = {tab:opt},
+]{
+colspec = {|l|l|},
+hlines
+}
+A & B \\
+\end{longtblr}
+";
+        let doc = parse_latex(src);
+        match &doc.blocks[0] {
+            Block::Table(table) => {
+                let caption_text = table
+                    .caption
+                    .iter()
+                    .filter_map(|i| {
+                        if let Inline::Text(t) = i {
+                            Some(t.as_str())
+                        } else {
+                            None
+                        }
+                    })
+                    .collect::<String>();
+                assert!(
+                    caption_text.contains("Option caption text"),
+                    "unexpected caption: {caption_text}"
+                );
+            }
+            other => panic!("expected table, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_printnomenclature_line_is_skipped() {
+        let doc = parse_latex("\\printnomenclature[3.5cm]");
+        assert!(doc.blocks.is_empty(), "unexpected blocks: {:?}", doc.blocks);
+    }
+
+    #[test]
+    fn test_typography_normalization_for_quotes_and_dash() {
+        let doc = parse_latex("<<чистыми>> и Третий вектор -- новая фаза. X \"--- в тезисах.");
+        match &doc.blocks[0] {
+            Block::Paragraph(inlines) => {
+                let text = inlines
+                    .iter()
+                    .filter_map(|i| {
+                        if let Inline::Text(t) = i {
+                            Some(t.as_str())
+                        } else {
+                            None
+                        }
+                    })
+                    .collect::<String>();
+                assert!(text.contains("«чистыми»"), "unexpected text: {text}");
+                assert!(text.contains("вектор —"), "unexpected text: {text}");
+                assert!(text.contains("X —"), "unexpected text: {text}");
+                assert!(
+                    !text.contains("<<") && !text.contains(">>"),
+                    "unexpected text: {text}"
+                );
+            }
+            other => panic!("expected paragraph, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_cdot_command_converted_to_middle_dot() {
+        let doc = parse_latex("кВт\\cdotч");
+        match &doc.blocks[0] {
+            Block::Paragraph(inlines) => {
+                let text = inlines
+                    .iter()
+                    .filter_map(|i| {
+                        if let Inline::Text(t) = i {
+                            Some(t.as_str())
+                        } else {
+                            None
+                        }
+                    })
+                    .collect::<String>();
+                assert!(text.contains("кВт·ч"), "unexpected text: {text}");
+            }
+            other => panic!("expected paragraph, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_formbytotal_prefers_plural_suffix() {
+        let doc = parse_latex(
+            "Полный объём составляет \\formbytotal{TotPages}{страниц}{у}{ы}{} в документе.",
+        );
+        match &doc.blocks[0] {
+            Block::Paragraph(inlines) => {
+                let text = inlines
+                    .iter()
+                    .filter_map(|i| {
+                        if let Inline::Text(t) = i {
+                            Some(t.as_str())
+                        } else {
+                            None
+                        }
+                    })
+                    .collect::<String>();
+                assert!(text.contains("страницы"), "unexpected text: {text}");
+                assert!(!text.contains("страницуы"), "unexpected text: {text}");
+            }
+            other => panic!("expected paragraph, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_nonbreaking_space_tilde_normalized_to_regular_space() {
+        let doc = parse_latex("См. Рисунок~\\ref{fig:sample}.");
+        match &doc.blocks[0] {
+            Block::Paragraph(inlines) => {
+                let text = inlines
+                    .iter()
+                    .filter_map(|i| {
+                        if let Inline::Text(t) = i {
+                            Some(t.as_str())
+                        } else {
+                            None
+                        }
+                    })
+                    .collect::<String>();
+                assert!(text.contains("Рисунок "));
+                assert!(!text.contains("Рисунок~"));
+            }
+            other => panic!("expected paragraph, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_textual_passthrough_command_keeps_braced_content() {
+        let doc = parse_latex("Quoted: \\enquote{important text}.");
+        match &doc.blocks[0] {
+            Block::Paragraph(inlines) => {
+                let text = inlines
+                    .iter()
+                    .filter_map(|i| {
+                        if let Inline::Text(t) = i {
+                            Some(t.as_str())
+                        } else {
+                            None
+                        }
+                    })
+                    .collect::<String>();
+                assert!(text.contains("important text"));
+            }
+            other => panic!("expected paragraph, got {other:?}"),
+        }
     }
 
     #[test]

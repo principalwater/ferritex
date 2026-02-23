@@ -1,5 +1,11 @@
 # Supported LaTeX Elements
 
+Rendering policy:
+- Prefer LaTeX-originated semantics over backend-local defaults.
+- DOCX/PDF backends should produce equivalent structure from the same AST.
+- Effective LaTeX build parameters are the source of truth for layout and style decisions; backend constants are fallback-only.
+- New visual fixes must be implemented as generic parameter mapping, not hardcoded values for a specific project.
+
 | Element | Status | Notes |
 |---|---|---|
 | `\chapter{}`, `\section{}`, `\subsection{}`, `\subsubsection{}` | ✅ v0.1 | Including `*` (unnumbered) variants; chapter→H1, section→H2, subsection/subsubsection→H3 |

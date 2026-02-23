@@ -6,6 +6,83 @@
 pub struct Document {
     /// Top-level blocks in document order.
     pub blocks: Vec<Block>,
+    /// Effective layout settings extracted from LaTeX project sources.
+    pub layout: DocumentLayout,
+}
+
+/// Rendering-related layout settings extracted from LaTeX sources.
+///
+/// Every `Option` field defaults to `None`, meaning "the LaTeX source did not
+/// express a preference — the renderer should use its own fallback default."
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct DocumentLayout {
+    // ── Page geometry ──────────────────────────────────────────────────
+    /// Top page margin in twips.
+    pub page_margin_top_twips: Option<i32>,
+    /// Bottom page margin in twips.
+    pub page_margin_bottom_twips: Option<i32>,
+    /// Left page margin in twips.
+    pub page_margin_left_twips: Option<i32>,
+    /// Right page margin in twips.
+    pub page_margin_right_twips: Option<i32>,
+    /// Header distance in twips.
+    pub page_margin_header_twips: Option<i32>,
+    /// Footer distance in twips.
+    pub page_margin_footer_twips: Option<i32>,
+
+    // ── Line spacing ───────────────────────────────────────────────────
+    /// Body paragraph line spacing in twips (`240 = single`, `360 = 1.5`).
+    pub body_line_spacing_twips: Option<i32>,
+
+    // ── Float counter scoping ──────────────────────────────────────────
+    /// Whether figure numbers are scoped per chapter (`true`) or global (`false`).
+    ///
+    /// Maps to `\counterwithin{figure}{chapter}` vs `\counterwithout{figure}{chapter}`.
+    pub figure_counter_within_chapter: Option<bool>,
+    /// Whether table numbers are scoped per chapter (`true`) or global (`false`).
+    pub table_counter_within_chapter: Option<bool>,
+    /// Whether equation numbers are scoped per chapter (`true`) or global (`false`).
+    pub equation_counter_within_chapter: Option<bool>,
+
+    // ── Font ───────────────────────────────────────────────────────────
+    /// Main (serif) font family name. Parsed from `\setmainfont{...}` or
+    /// `\renewcommand{\rmdefault}{...}`.
+    pub font_family_body: Option<String>,
+    /// Body font size in half-points (e.g. `28` = 14 pt).
+    /// Parsed from `\documentclass[14pt]` or `\fontsize`.
+    pub font_size_body_hp: Option<usize>,
+    /// Table cell font size in half-points.
+    pub font_size_table_hp: Option<usize>,
+    /// Footnote font size in half-points.
+    pub font_size_footnote_hp: Option<usize>,
+    /// Caption font size in half-points.
+    pub font_size_caption_hp: Option<usize>,
+
+    // ── Paragraph indent ───────────────────────────────────────────────
+    /// First-line indent for body paragraphs in twips.
+    /// Parsed from `\setlength{\parindent}{...}` or `\parindent=...`.
+    pub body_first_line_indent_twips: Option<i32>,
+
+    // ── Caption / float labels ─────────────────────────────────────────
+    /// Figure caption prefix, e.g. `"Figure"` or `"Рисунок"`.
+    /// Parsed from `\renewcommand{\figurename}{...}`.
+    pub caption_label_figure: Option<String>,
+    /// Table caption prefix, e.g. `"Table"` or `"Таблица"`.
+    /// Parsed from `\renewcommand{\tablename}{...}`.
+    pub caption_label_table: Option<String>,
+
+    // ── Heading formatting ─────────────────────────────────────────────
+    /// Chapter name prefix (e.g. `"Глава"`, `"Chapter"`, `""`).
+    /// Parsed from `\renewcommand{\chaptername}{...}`.
+    pub chapter_name: Option<String>,
+    /// Whether chapter titles should be rendered in uppercase.
+    /// Detected from `\MakeUppercase` in chapter format definitions.
+    pub heading_uppercase: Option<bool>,
+
+    // ── Document language ──────────────────────────────────────────────
+    /// BCP-47 language tag (e.g. `"ru-RU"`, `"en-US"`).
+    /// Parsed from `\usepackage[russian]{babel}` or `\setdefaultlanguage{...}`.
+    pub document_language: Option<String>,
 }
 
 /// A block-level element.

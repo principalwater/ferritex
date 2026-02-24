@@ -171,6 +171,14 @@ dissertation, or private project.
 - API tokens, SSH keys, credentials of any kind
 - Email addresses (unless explicitly public and consented)
 
+### Private build artifacts (mandatory)
+- Personal/private corpus sources and generated files must stay outside `ferritex`.
+- Build personal dissertation outputs only to external paths, default:
+  - `/tmp/dissertation.docx`
+- Never place personal dissertation outputs under repository paths (tracked or untracked).
+- Transfer workflow example:
+  - `scp principalwater@alfheim-home.local:/tmp/dissertation.docx ~/Desktop/dissertation.docx`
+
 ### Commit / PR metadata policy
 - The same privacy rules apply to commit messages, PR titles, PR bodies,
   release notes, CI logs, and validation notes.

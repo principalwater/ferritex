@@ -20,14 +20,16 @@ Rendering policy:
 | TOC chapter prefix (`\cftchaptername`) | ✅ | Parsed and rendered for numbered chapter entries (for example `Chapter 1.` / `ГЛАВА 1.`) |
 | TOC indent/number width (`\cftsetindents{...}{...}{...}`, `\setlength{\cft...indent}{...}`, `\setlength{\cft...numwidth}{...}`) | ✅ | Parsed for chapter/section/subsection/subsubsection; rendered as level indent and hanging indent when `numwidth` is provided |
 | `\begin{tabular}…\end{tabular}`, `\begin{tblr}…\end{tblr}`, `\begin{longtblr}…\end{longtblr}` | ✅ v0.2 | Basic table layout |
-| `\tablesource{…}`, `\figuresource{…}` | ✅ v0.2 | Rendered as source line below table/figure |
+| `\tablesource{…}`, `\figuresource{…}` | ✅ v0.9 | Rendered as left-aligned small italic source line; `\vspace{...}` before line is extracted from macro definition |
 | `\begin{figure}…\end{figure}` + `\caption{}` | ✅ v0.2 | Caption text only (no image embed yet) |
-| `\begin{itemize}`, `\begin{enumerate}` | ✅ v0.3 | Bullet and numbered lists |
+| `\begin{itemize}`, `\begin{enumerate}` | ✅ v0.9 | List geometry is LaTeX-driven via `\setlist{labelsep=...,labelwidth=...}` and bullet marker via `\renewcommand{\labelitemi}{...}` |
 | Math (`$…$`) | ✅ v0.4 | Rendered as italic plain-text approximation |
 | Math (`\begin{equation}`, `\begin{equation*}`) | ✅ v0.4 | Rendered as centered italic plain-text approximation |
 | Math (`\[…\]`) | ✅ v0.5 | Rendered as centered italic plain-text approximation |
 | Footnotes (`\footnote{}`) | ✅ v0.5 | Native DOCX footnote references + footnotes.xml |
-| Bibliography (`\bibliography`, `\bibitem`) | ⬜ v0.5 | |
+| Bibliography heading (`\printbibliography`, `\insertbibliofullsorted`, `\insertbiblioauthor`, `\insertbibliofull`) | ✅ v0.9 | Emits chapter-level heading (`title=...` respected for `\printbibliography`); bibliography entries are not parsed yet |
+| Bibliography entries (`\bibliography`, `\bibitem`, `.bib`) | ⬜ | Entry list rendering is not implemented yet |
+| Title page first-page number suppression (`\thispagestyle{empty}` in `titlepage`/`titlingpage`) | ✅ v0.9 | Maps to DOCX different-first-page mode (`titlePg`) so page 1 number is hidden |
 | Cross-references (`\ref`, resolved) | ⬜ v0.5 | Currently emitted as placeholder |
 | File inclusion (`\input{}`, `\include{}`) | ✅ v0.5 | Recursive expansion from entry `.tex` file |
 | PDF output | ⬜ v1.0 | |

@@ -198,11 +198,30 @@ pub struct DocumentLayout {
     pub list_left_indent_twips: Option<i32>,
     /// Hanging indent for list items in twips.
     pub list_hanging_indent_twips: Option<i32>,
+    /// Label separator in twips (from `\setlist{labelsep=...}`).
+    pub list_label_sep_twips: Option<i32>,
+    /// Label width in twips (from `\setlist{labelwidth=...}`; `None` if `!`/auto).
+    pub list_label_width_twips: Option<i32>,
+    /// Bullet character for unordered list items (from `\renewcommand{\labelitemi}{...}`).
+    pub list_bullet_char: Option<String>,
 
     // ── Caption alignment ────────────────────────────────────────────
     /// Caption alignment (e.g. `"center"`, `"left"`, `"both"`).
     /// Parsed from `\captionsetup{justification=centering}`.
     pub caption_alignment: Option<String>,
+
+    // ── Source attribution lines ─────────────────────────────────────
+    /// Vertical space above `\tablesource` line in twips.
+    /// Parsed from `\newcommand{\tablesource}[1]{\par\vspace{...}...}`.
+    pub source_vspace_table_twips: Option<i32>,
+    /// Vertical space above `\figuresource` line in twips.
+    /// Parsed from `\newcommand{\figuresource}[1]{\par\vspace{...}...}`.
+    pub source_vspace_figure_twips: Option<i32>,
+
+    // ── Title page ──────────────────────────────────────────────────
+    /// Whether to suppress the page number on the first (title) page.
+    /// Detected from `\thispagestyle{empty}` inside `\begin{titlingpage}`.
+    pub title_page_suppress_number: Option<bool>,
 
     // ── Graphics paths ───────────────────────────────────────────────
     /// Search paths for included graphics, parsed from `\graphicspath{{./figures/}{./img/}}`.
@@ -278,6 +297,11 @@ pub enum Block {
     /// A display-math block from `\begin{equation}…\end{equation}` or `\[…\]`.
     /// Stored as raw LaTeX source.
     DisplayMath(String),
+    /// A bibliography section rendered as a chapter-level heading.
+    ///
+    /// Emitted for `\printbibliography`, `\insertbibliofullsorted`, and similar commands.
+    /// No bibliography entries are parsed — only the section heading is produced.
+    BibliographyHeading { title: String },
 }
 
 /// A table block.

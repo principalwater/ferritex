@@ -16,6 +16,7 @@ jobs:
             (github.event_name == 'pull_request_target' && github.event.action == 'labeled' && github.event.label.name == 'bot-merge')
 
         permissions:
+            actions: write
             contents: write
             pull-requests: write
 
@@ -78,10 +79,36 @@ jobs:
                   steps.gate.outputs.has_bot_merge_label == 'true' &&
                   steps.gate.outputs.is_behind != 'true'
               env:
+                  GH_TOKEN: ${{ github.token }}
                   PR_NUMBER: ${{ steps.pr.outputs.pr_number }}
+                  PR_HEAD_SHA: ${{ steps.gate.outputs.pr_head_sha }}
               run: |
                   echo "PR #${PR_NUMBER} is labeled with bot-merge."
                   echo "Merge will be performed only from the successful CI workflow_run path."
+
+                  CI_RUN_JSON=$(gh run list \
+                    --repo "${{ github.repository }}" \
+                    --workflow "CI" \
+                    --limit 20 \
+                    --json databaseId,headSha,event,status,conclusion \
+                    --jq "map(select(.event == \"pull_request\" and .headSha == \"${PR_HEAD_SHA}\")) | first // {}")
+
+                  CI_RUN_ID=$(echo "$CI_RUN_JSON" | jq -r '.databaseId // empty')
+                  CI_STATUS=$(echo "$CI_RUN_JSON" | jq -r '.status // empty')
+                  CI_CONCLUSION=$(echo "$CI_RUN_JSON" | jq -r '.conclusion // empty')
+
+                  if [ -z "${CI_RUN_ID}" ]; then
+                    echo "No CI run found yet for PR head ${PR_HEAD_SHA}. Waiting for CI completion."
+                    exit 0
+                  fi
+
+                  if [ "${CI_STATUS}" = "completed" ] && [ "${CI_CONCLUSION}" = "success" ]; then
+                    echo "CI already succeeded for this SHA. Re-running CI to trigger workflow_run merge path."
+                    gh run rerun "${CI_RUN_ID}" --repo "${{ github.repository }}"
+                    exit 0
+                  fi
+
+                  echo "CI status is ${CI_STATUS}/${CI_CONCLUSION}. Waiting for normal CI completion."
 
             - name: Sync PR branch with master when behind
               if: |

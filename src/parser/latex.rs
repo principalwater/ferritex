@@ -366,6 +366,8 @@ fn extract_layout_settings(source: &str) -> DocumentLayout {
     if let Some(name) = extract_renewcommand_value(source, "tablename") {
         layout.caption_label_table = Some(name);
     }
+    layout.caption_label_separator_figure = extract_captionsetup_label_separator(source, "figure");
+    layout.caption_label_separator_table = extract_captionsetup_label_separator(source, "table");
 
     // ── Chapter name prefix ────────────────────────────────────────────
     // \renewcommand{\chaptername}{Глава}
@@ -968,8 +970,58 @@ fn extract_heading_number_delimiter(source: &str) -> Option<String> {
 ///
 /// Canonical return values: `"left"`, `"center"`, `"right"`, `"both"`.
 fn extract_captionsetup_justification(source: &str) -> Option<String> {
+    let value = extract_captionsetup_option(source, None, "justification")?;
+    normalize_caption_justification(&value).map(|v| v.to_string())
+}
+
+/// Extract a caption label separator for `target` (`"figure"` or `"table"`).
+///
+/// Handles direct values (`labelsep=colon`) and custom declarations via
+/// `\DeclareCaptionLabelSeparator{name}{...}`.
+fn extract_captionsetup_label_separator(source: &str, target: &str) -> Option<String> {
+    let declarations = extract_caption_label_separator_declarations(source);
+    let raw = extract_captionsetup_option(source, Some(target), "labelsep")?;
+    resolve_caption_label_separator(&raw, &declarations, source)
+}
+
+fn extract_caption_label_separator_declarations(source: &str) -> HashMap<String, String> {
+    let mut map = HashMap::new();
     let mut pos = 0usize;
-    let mut last = None;
+    let needle = "\\DeclareCaptionLabelSeparator";
+
+    while let Some(rel) = source[pos..].find(needle) {
+        let start = pos + rel + needle.len();
+        let mut cur = start;
+        while cur < source.len() && source.as_bytes()[cur].is_ascii_whitespace() {
+            cur += 1;
+        }
+        let Some(name_len) = braced_len(&source[cur..]) else {
+            pos = start;
+            continue;
+        };
+        let name = source[cur + 1..cur + name_len - 1].trim();
+        cur += name_len;
+        while cur < source.len() && source.as_bytes()[cur].is_ascii_whitespace() {
+            cur += 1;
+        }
+        let Some(value_len) = braced_len(&source[cur..]) else {
+            pos = cur;
+            continue;
+        };
+        let value = source[cur + 1..cur + value_len - 1].trim();
+        if !name.is_empty() && !value.is_empty() {
+            map.insert(name.to_ascii_lowercase(), value.to_string());
+        }
+        pos = cur + value_len;
+    }
+
+    map
+}
+
+fn extract_captionsetup_option(source: &str, target: Option<&str>, key: &str) -> Option<String> {
+    let mut pos = 0usize;
+    let mut last_global = None;
+    let mut last_targeted = None;
     let needle = "\\captionsetup";
 
     while let Some(rel) = source[pos..].find(needle) {
@@ -978,9 +1030,12 @@ fn extract_captionsetup_justification(source: &str) -> Option<String> {
         while cur < source.len() && source.as_bytes()[cur].is_ascii_whitespace() {
             cur += 1;
         }
+
+        let mut scope = None;
         if cur < source.len() && source.as_bytes()[cur] == b'[' {
-            if let Some(opt_len) = bracketed_len(&source[cur..]) {
-                cur += opt_len;
+            if let Some(scope_len) = bracketed_len(&source[cur..]) {
+                scope = Some(source[cur + 1..cur + scope_len - 1].to_string());
+                cur += scope_len;
             } else {
                 pos = start;
                 continue;
@@ -995,15 +1050,270 @@ fn extract_captionsetup_justification(source: &str) -> Option<String> {
             continue;
         };
         let body = &source[cur + 1..cur + body_len - 1];
-        if let Some(value) = extract_latex_option_value(body, "justification")
-            && let Some(alignment) = normalize_caption_justification(&value)
-        {
-            last = Some(alignment.to_string());
+        if let Some(value) = extract_top_level_kv_option_value(body, key) {
+            if let Some(target_name) = target {
+                match scope.as_deref() {
+                    Some(scope_expr) if captionsetup_scope_matches(scope_expr, target_name) => {
+                        last_targeted = Some(value);
+                    }
+                    None => {
+                        last_global = Some(value);
+                    }
+                    _ => {}
+                }
+            } else {
+                last_global = Some(value);
+            }
         }
         pos = cur + body_len;
     }
 
-    last
+    if target.is_some() {
+        last_targeted.or(last_global)
+    } else {
+        last_global
+    }
+}
+
+fn captionsetup_scope_matches(scope_expr: &str, target: &str) -> bool {
+    let target = target.to_ascii_lowercase();
+    scope_expr
+        .split(',')
+        .map(|token| token.trim().to_ascii_lowercase())
+        .any(|token| token == target)
+}
+
+fn extract_top_level_kv_option_value(options: &str, key: &str) -> Option<String> {
+    let key = key.to_ascii_lowercase();
+    for segment in split_top_level_by_comma(options) {
+        let segment = segment.trim();
+        if segment.is_empty() {
+            continue;
+        }
+        let Some(eq_pos) = find_top_level_char(segment, '=') else {
+            continue;
+        };
+        let raw_key = segment[..eq_pos].trim().to_ascii_lowercase();
+        if raw_key != key {
+            continue;
+        }
+        let raw_value = segment[eq_pos + 1..].trim();
+        if raw_value.is_empty() {
+            return None;
+        }
+        return Some(raw_value.to_string());
+    }
+    None
+}
+
+fn split_top_level_by_comma(src: &str) -> Vec<&str> {
+    let mut out = Vec::new();
+    let mut start = 0usize;
+    let mut brace_depth = 0usize;
+    let mut bracket_depth = 0usize;
+    let mut paren_depth = 0usize;
+
+    for (idx, ch) in src.char_indices() {
+        match ch {
+            '{' => brace_depth += 1,
+            '}' => brace_depth = brace_depth.saturating_sub(1),
+            '[' => bracket_depth += 1,
+            ']' => bracket_depth = bracket_depth.saturating_sub(1),
+            '(' => paren_depth += 1,
+            ')' => paren_depth = paren_depth.saturating_sub(1),
+            ',' if brace_depth == 0 && bracket_depth == 0 && paren_depth == 0 => {
+                out.push(&src[start..idx]);
+                start = idx + 1;
+            }
+            _ => {}
+        }
+    }
+    out.push(&src[start..]);
+    out
+}
+
+fn find_top_level_char(src: &str, needle: char) -> Option<usize> {
+    let mut brace_depth = 0usize;
+    let mut bracket_depth = 0usize;
+    let mut paren_depth = 0usize;
+
+    for (idx, ch) in src.char_indices() {
+        match ch {
+            '{' => brace_depth += 1,
+            '}' => brace_depth = brace_depth.saturating_sub(1),
+            '[' => bracket_depth += 1,
+            ']' => bracket_depth = bracket_depth.saturating_sub(1),
+            '(' => paren_depth += 1,
+            ')' => paren_depth = paren_depth.saturating_sub(1),
+            _ => {}
+        }
+        if ch == needle && brace_depth == 0 && bracket_depth == 0 && paren_depth == 0 {
+            return Some(idx);
+        }
+    }
+
+    None
+}
+
+fn resolve_caption_label_separator(
+    raw: &str,
+    declarations: &HashMap<String, String>,
+    source: &str,
+) -> Option<String> {
+    let mut visited = HashSet::new();
+    resolve_caption_label_separator_inner(raw, declarations, source, &mut visited, 0)
+}
+
+fn resolve_caption_label_separator_inner(
+    raw: &str,
+    declarations: &HashMap<String, String>,
+    source: &str,
+    visited: &mut HashSet<String>,
+    depth: usize,
+) -> Option<String> {
+    if depth > 8 {
+        return None;
+    }
+
+    let trimmed = raw.trim().trim_matches(['{', '}']).trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+
+    let lowered = trimmed.to_ascii_lowercase();
+    if let Some(mapped) = map_known_caption_separator_keyword(&lowered) {
+        return Some(mapped.to_string());
+    }
+    if !visited.insert(lowered.clone()) {
+        return None;
+    }
+
+    if let Some(value) = declarations.get(&lowered) {
+        return resolve_caption_label_separator_inner(
+            value,
+            declarations,
+            source,
+            visited,
+            depth + 1,
+        );
+    }
+
+    if let Some(cmd_name) = trimmed.strip_prefix('\\') {
+        let cmd_key = cmd_name.to_ascii_lowercase();
+        if let Some(value) = declarations.get(&cmd_key) {
+            return resolve_caption_label_separator_inner(
+                value,
+                declarations,
+                source,
+                visited,
+                depth + 1,
+            );
+        }
+        if let Some(value) = extract_renewcommand_value(source, cmd_name) {
+            return resolve_caption_label_separator_inner(
+                &value,
+                declarations,
+                source,
+                visited,
+                depth + 1,
+            );
+        }
+    }
+
+    let normalized = normalize_caption_separator_literal(trimmed);
+    if normalized.is_empty() {
+        None
+    } else {
+        Some(normalized)
+    }
+}
+
+fn map_known_caption_separator_keyword(value: &str) -> Option<&'static str> {
+    match value {
+        "colon" => Some(": "),
+        "period" => Some(". "),
+        "space" => Some(" "),
+        "quad" => Some("    "),
+        "qquad" => Some("        "),
+        "endash" => Some(" – "),
+        "emdash" => Some(" — "),
+        "dash" => Some(" - "),
+        "newline" => Some(" "),
+        "none" | "empty" => Some(""),
+        _ => None,
+    }
+}
+
+fn normalize_caption_separator_literal(raw: &str) -> String {
+    let mut out = String::new();
+    let mut chars = raw.chars().peekable();
+
+    while let Some(ch) = chars.next() {
+        match ch {
+            '{' | '}' => {}
+            '~' => out.push(' '),
+            '\\' => {
+                if chars.peek().is_some_and(|next| next.is_ascii_alphabetic()) {
+                    let mut command = String::new();
+                    while let Some(next) = chars.peek() {
+                        if next.is_ascii_alphabetic() {
+                            command.push(*next);
+                            chars.next();
+                        } else {
+                            break;
+                        }
+                    }
+                    if let Some(fragment) = map_known_caption_separator_keyword(&command) {
+                        out.push_str(fragment);
+                    } else if let Some(fragment) = map_known_caption_separator_command(&command) {
+                        out.push_str(fragment);
+                    }
+                } else if let Some(next) = chars.next() {
+                    match next {
+                        ' ' | '~' => out.push(' '),
+                        '-' | ':' | ';' | '.' | ',' | '!' | '?' => out.push(next),
+                        _ => {}
+                    }
+                }
+            }
+            '\n' | '\r' | '\t' => out.push(' '),
+            _ => out.push(ch),
+        }
+    }
+
+    let normalized = if out.chars().all(|ch| ch.is_whitespace()) && !out.is_empty() {
+        " ".to_string()
+    } else {
+        out
+    };
+    ensure_caption_separator_spacing(normalized)
+}
+
+fn ensure_caption_separator_spacing(mut separator: String) -> String {
+    if separator.is_empty() || separator.chars().last().is_some_and(char::is_whitespace) {
+        return separator;
+    }
+
+    if separator
+        .chars()
+        .last()
+        .is_some_and(|ch| matches!(ch, '.' | ':' | '-' | '—' | '–'))
+    {
+        separator.push(' ');
+    }
+
+    separator
+}
+
+fn map_known_caption_separator_command(command: &str) -> Option<&'static str> {
+    match command {
+        "space" | "enspace" | "thinspace" => Some(" "),
+        "quad" => Some("    "),
+        "qquad" => Some("        "),
+        "textemdash" | "emdash" => Some("—"),
+        "textendash" | "endash" => Some("–"),
+        _ => None,
+    }
 }
 
 /// Extract graphics search paths from `\graphicspath{{...}{...}}`.
@@ -6295,6 +6605,51 @@ Body.";
         let doc = parse_latex("Body.");
         assert_eq!(doc.layout.caption_label_figure, None);
         assert_eq!(doc.layout.caption_label_table, None);
+    }
+
+    #[test]
+    fn test_extract_caption_label_separator_from_declared_tabsep_and_figsep() {
+        let src = r"
+\newcommand{\tablabelsep}{~---\ }
+\newcommand{\figlabelsep}{:\space}
+\DeclareCaptionLabelSeparator{tabsep}{\tablabelsep}
+\DeclareCaptionLabelSeparator{figsep}{\figlabelsep}
+\captionsetup[table]{labelsep=tabsep}
+\captionsetup[figure]{labelsep=figsep}
+Body.";
+        let doc = parse_latex(src);
+        assert_eq!(
+            doc.layout.caption_label_separator_table.as_deref(),
+            Some(" --- ")
+        );
+        assert_eq!(
+            doc.layout.caption_label_separator_figure.as_deref(),
+            Some(": ")
+        );
+    }
+
+    #[test]
+    fn test_extract_caption_label_separator_prefers_target_over_global() {
+        let src = r"
+\captionsetup{labelsep=colon}
+\captionsetup[figure]{labelsep=period}
+Body.";
+        let doc = parse_latex(src);
+        assert_eq!(
+            doc.layout.caption_label_separator_figure.as_deref(),
+            Some(". ")
+        );
+        assert_eq!(
+            doc.layout.caption_label_separator_table.as_deref(),
+            Some(": ")
+        );
+    }
+
+    #[test]
+    fn test_extract_caption_label_separator_absent() {
+        let doc = parse_latex("Body.");
+        assert_eq!(doc.layout.caption_label_separator_figure, None);
+        assert_eq!(doc.layout.caption_label_separator_table, None);
     }
 
     #[test]

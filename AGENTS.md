@@ -48,7 +48,7 @@ pattern — no exceptions:
 | Font sizes | `\documentclass[14pt]`, `\SetTblrInner{font=…}`, `\captionsetup{font=…}` | `font_size_body_hp`, `font_size_table_hp`, `font_size_footnote_hp`, `font_size_caption_hp` | 28, 24, 20, 28 (half-points) | ✅ parsed + rendered |
 | Paragraph indent | `\setlength{\parindent}{…}` | `body_first_line_indent_twips` | 709 (1.25 cm) | ✅ parsed + rendered |
 | Heading format | `\chaptername`, `\MakeUppercase`, numbering delimiter, alignment | `chapter_name`, `heading_uppercase`, `heading_alignment`, `heading_number_delimiter` | "", false, Left, "." | ✅ parsed + rendered |
-| Caption labels | `\renewcommand{\figurename}{…}`, `\renewcommand{\tablename}{…}` | `caption_label_figure`, `caption_label_table` | "Figure", "Table" | ✅ parsed + rendered |
+| Caption labels | `\renewcommand{\figurename}{…}`, `\renewcommand{\tablename}{…}`, `\captionsetup{labelsep=…}`, `\DeclareCaptionLabelSeparator` | `caption_label_figure`, `caption_label_table`, `caption_label_separator_figure`, `caption_label_separator_table` | "Figure", "Table", ". " | ✅ parsed + rendered |
 | Language | babel/polyglossia main language | `document_language` | None (no language tag) | ✅ parsed + rendered |
 
 **Test requirement**: every `DocumentLayout` field must have a

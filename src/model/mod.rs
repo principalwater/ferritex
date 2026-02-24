@@ -79,6 +79,12 @@ pub struct DocumentLayout {
     /// Table caption prefix, e.g. `"Table"` or `"Таблица"`.
     /// Parsed from `\renewcommand{\tablename}{...}`.
     pub caption_label_table: Option<String>,
+    /// Figure caption label separator text (e.g. `". "`, `": "`, `" --- "`).
+    /// Parsed from `\captionsetup[figure]{labelsep=...}` and related declarations.
+    pub caption_label_separator_figure: Option<String>,
+    /// Table caption label separator text.
+    /// Parsed from `\captionsetup[table]{labelsep=...}` and related declarations.
+    pub caption_label_separator_table: Option<String>,
 
     // ── Heading formatting ─────────────────────────────────────────────
     /// Chapter name prefix (e.g. `"Глава"`, `"Chapter"`, `""`).

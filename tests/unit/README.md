@@ -1,14 +1,15 @@
 # Unit Test Layout
 
-`ferritex` keeps unit tests physically under `tests/unit/` and includes them
+`ferritex` now keeps unit tests alongside backend/core crates and includes them
 from source modules via `include!` wrappers:
 
-- `src/parser/latex.rs` -> `tests/unit/parser_latex_tests.rs`
-- `src/renderer/docx.rs` -> `tests/unit/renderer_docx_tests.rs`
+- `crates/ferritex-core/src/parser/latex.rs` ->
+  `crates/ferritex-core/tests/unit/parser_latex_tests.rs`
+- `crates/ferritex-renderer-docx/src/lib.rs` ->
+  `crates/ferritex-renderer-docx/tests/unit/renderer_docx_tests.rs`
 
 Why:
 - keeps production files shorter and easier to scan,
 - keeps private-unit-test access (`super::*`) without widening API visibility,
-- follows the same high-level idea used in `rust-lang/rust` where tests are
-  organized in dedicated test directories/crates instead of being packed into
-  implementation files.
+- keeps test ownership aligned with crate boundaries (`core`, `docx`, and future
+  `pdf`/`md` backends).

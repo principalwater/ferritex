@@ -15,7 +15,9 @@ use docx_rs::{
 };
 use zip::{ZipArchive, ZipWriter, write::SimpleFileOptions};
 
-use crate::model::{Block, Document, DocumentLayout, Figure, Inline, ParagraphStyle, Table};
+use ferritex_core::model::{
+    Block, Document, DocumentLayout, Figure, Inline, ParagraphStyle, Table,
+};
 
 const PAGE_A4_WIDTH_TWIPS: u32 = 11_906;
 const PAGE_A4_HEIGHT_TWIPS: u32 = 16_838;

@@ -1,0 +1,10 @@
+[package]
+name = "ferritex-renderer-md"
+version = "0.1.0"
+edition = "2024"
+description = "Markdown renderer backend for ferritex"
+license = "MIT"
+
+[dependencies]
+anyhow = { workspace = true }
+ferritex-core = { path = "../ferritex-core" }

@@ -2,3 +2,6 @@
 .DS_Store
 **/*.rs.bk
 agent-docs/compaction/
+# Generated document artifacts (must stay outside repository history)
+*.docx
+*.pdf

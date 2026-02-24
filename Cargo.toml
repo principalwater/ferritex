@@ -1,12 +1,18 @@
-[package]
-name = "ferritex"
-version = "0.1.0"
-edition = "2024"
-description = "Native Rust CLI to convert LaTeX to DOCX"
-license = "MIT"
-authors = ["Vladislav Kuzmin <https://github.com/principalwater>"]
+[workspace]
+members = [
+  ".",
+  "crates/ferritex-core",
+  "crates/ferritex-renderer-docx",
+  "crates/ferritex-renderer-pdf",
+  "crates/ferritex-renderer-md",
+]
+resolver = "2"
 
-[dependencies]
+[workspace.package]
+edition = "2024"
+license = "MIT"
+
+[workspace.dependencies]
 anyhow = "1.0.102"
 clap = { version = "4.5.60", features = ["derive"] }
 crossterm = "0.29.0"
@@ -20,3 +26,25 @@ serde_json = "1.0.149"
 thiserror = "2.0.18"
 walkdir = "2.5.0"
 zip = "8.1.0"
+
+[package]
+name = "ferritex"
+version = "0.1.0"
+edition = "2024"
+description = "Native Rust CLI to convert LaTeX to DOCX/PDF/MD"
+license = "MIT"
+authors = ["Vladislav Kuzmin <https://github.com/principalwater>"]
+
+[dependencies]
+anyhow = { workspace = true }
+clap = { workspace = true }
+crossterm = { workspace = true }
+env_logger = { workspace = true }
+log = { workspace = true }
+ratatui = { workspace = true }
+thiserror = { workspace = true }
+zip = { workspace = true }
+ferritex-core = { path = "crates/ferritex-core" }
+ferritex-renderer-docx = { path = "crates/ferritex-renderer-docx" }
+ferritex-renderer-pdf = { path = "crates/ferritex-renderer-pdf" }
+ferritex-renderer-md = { path = "crates/ferritex-renderer-md" }

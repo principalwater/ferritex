@@ -4,7 +4,8 @@
 - This project is 100% Rust. No Python, no shell scripts, no Pandoc
   subprocess calls, no FFI to non-Rust libraries unless absolutely
   unavoidable (document why in this file if so).
-- ferritex is a generic LaTeX→DOCX tool for arbitrary LaTeX projects
+- ferritex is a generic LaTeX-driven converter for arbitrary LaTeX projects
+  (DOCX implemented, PDF/Markdown backends scaffolded)
   (articles, journal papers, dissertations, books, theses). Do not tune
   implementation to a single corpus.
 - All crate versions must be stable releases from crates.io. Do not
@@ -14,14 +15,16 @@
 - No unwrap() in library code — use anyhow::Result or thiserror types.
 
 ## Architecture rules
-- The pipeline is strictly: LaTeX source → AST (model/) → DOCX output
+- The pipeline is strictly: LaTeX source → AST + StyleMap → backend renderer output
 - The parser and renderer are completely decoupled via the AST.
   Never let docx-rs types leak into the parser, never let nom/regex
   types leak into the renderer.
 - Treat `DocumentLayout` as the project-wide **StyleMap**:
   extracted style/layout semantics passed from parser to renderers.
-- New LaTeX elements go in: src/parser/latex.rs + src/model/mod.rs
-  + src/renderer/docx.rs — always all three.
+- New LaTeX elements go in:
+  `crates/ferritex-core/src/parser/latex.rs` +
+  `crates/ferritex-core/src/model/mod.rs` +
+  `crates/ferritex-renderer-docx/src/lib.rs` — always all three.
 - Rendering parameters must be propagated from LaTeX sources (including
   included style/config files) so ferritex output matches the effective
   LaTeX build settings for layout, numbering, spacing, page headers, and
@@ -97,8 +100,8 @@ Track implementation status in docs/SUPPORTED_ELEMENTS.md.
 
 ## Before every commit
 - cargo fmt --all
-- cargo clippy -- -D warnings
-- cargo test
+- cargo clippy --workspace --all-targets -- -D warnings
+- cargo test --workspace
 
 ## PR automation context
 - CI workflow name is `CI`; bot workflows react to successful CI runs.
@@ -144,8 +147,9 @@ Update this file with: crate name, version pinned, reason for adding.
 
 ### Contributor checklist
 - Keep `src/main.rs` as orchestration only.
-- Put new parsing logic in `src/parser/latex.rs` and output-neutral AST changes in `src/model/mod.rs`.
-- Put DOCX emission logic in `src/renderer/docx.rs`.
+- Put new parsing logic in `crates/ferritex-core/src/parser/latex.rs` and
+  output-neutral AST changes in `crates/ferritex-core/src/model/mod.rs`.
+- Put DOCX emission logic in `crates/ferritex-renderer-docx/src/lib.rs`.
 
 ---
 
@@ -166,6 +170,14 @@ dissertation, or private project.
 - Private GitHub repository names or URLs
 - API tokens, SSH keys, credentials of any kind
 - Email addresses (unless explicitly public and consented)
+
+### Private build artifacts (mandatory)
+- Personal/private corpus sources and generated files must stay outside `ferritex`.
+- Build personal dissertation outputs only to external paths, default:
+  - `/tmp/dissertation.docx`
+- Never place personal dissertation outputs under repository paths (tracked or untracked).
+- Transfer workflow example:
+  - `scp principalwater@alfheim-home.local:/tmp/dissertation.docx ~/Desktop/dissertation.docx`
 
 ### Commit / PR metadata policy
 - The same privacy rules apply to commit messages, PR titles, PR bodies,

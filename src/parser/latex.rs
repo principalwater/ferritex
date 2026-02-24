@@ -382,6 +382,63 @@ fn extract_layout_settings(source: &str) -> DocumentLayout {
         }
     }
 
+    // ── Page size ─────────────────────────────────────────────────────
+    // \geometry{paperwidth=210mm, paperheight=297mm}
+    if let Some(options) = extract_last_macro_braced_argument(source, "\\geometry") {
+        if let Some(w) = extract_latex_option_value(&options, "paperwidth")
+            .and_then(|v| parse_latex_length_to_twips(&v))
+        {
+            layout.page_width_twips = Some(w as u32);
+        }
+        if let Some(h) = extract_latex_option_value(&options, "paperheight")
+            .and_then(|v| parse_latex_length_to_twips(&v))
+        {
+            layout.page_height_twips = Some(h as u32);
+        }
+    }
+    // \documentclass[a4paper]{...} or \documentclass[letterpaper]{...}
+    if layout.page_width_twips.is_none()
+        && let Some(size) = extract_documentclass_paper_size(source)
+    {
+        layout.page_width_twips = Some(size.0);
+        layout.page_height_twips = Some(size.1);
+    }
+
+    // ── Mono font family ─────────────────────────────────────────────
+    // \setmonofont{Courier New}
+    if let Some(font) = extract_setmainfont_conditional_for(source, fontfamily_val, "\\setmonofont")
+    {
+        layout.font_family_mono = Some(font);
+    } else if let Some(font) = extract_last_macro_braced_argument(source, "\\setmonofont") {
+        let font = font.trim().to_string();
+        if !font.is_empty() {
+            layout.font_family_mono = Some(font);
+        }
+    }
+
+    // ── Heading alignment ────────────────────────────────────────────
+    // \titleformat{\chapter}[display]{\centering\bfseries}{...}
+    // or memoir-style heading format commands
+    layout.heading_alignment = extract_heading_alignment(source);
+
+    // ── Heading number delimiter ─────────────────────────────────────
+    // \renewcommand{\thechapter}{\arabic{chapter}.} or similar
+    layout.heading_number_delimiter = extract_heading_number_delimiter(source);
+
+    // ── List indentation ─────────────────────────────────────────────
+    // Derive from \parindent if available — lists typically match body indent.
+    if layout.body_first_line_indent_twips.is_some() {
+        layout.list_left_indent_twips = layout.body_first_line_indent_twips;
+    }
+
+    // ── Caption alignment ────────────────────────────────────────────
+    // \captionsetup{justification=centering}
+    layout.caption_alignment = extract_captionsetup_justification(source);
+
+    // ── Graphics search paths ────────────────────────────────────────
+    // \graphicspath{{./figures/}{./img/}}
+    layout.graphics_search_paths = extract_graphicspath(source);
+
     // ── Document language ──────────────────────────────────────────────
     layout.document_language = extract_document_language(source);
 
@@ -681,7 +738,83 @@ fn extract_last_setcounter_value(source: &str, counter_name: &str) -> Option<i64
 /// If no conditional block matches (or if `fontfamily_val` is `None`), returns `None`
 /// so the caller can fall back to a simpler extraction.
 fn extract_setmainfont_conditional(source: &str, fontfamily_val: Option<i64>) -> Option<String> {
+    extract_setmainfont_conditional_for(source, fontfamily_val, "\\setmainfont")
+}
+
+/// Extract paper size from `\documentclass[...paper]`.
+///
+/// Returns page `(width_twips, height_twips)` for known paper tokens:
+/// - `a4paper`     → `(11906, 16838)`
+/// - `letterpaper` → `(12240, 15840)`
+/// - `a5paper`     → `(8391, 11906)`
+fn extract_documentclass_paper_size(source: &str) -> Option<(u32, u32)> {
+    const A4_PAPER_TWIPS: (u32, u32) = (11_906, 16_838);
+    const LETTER_PAPER_TWIPS: (u32, u32) = (12_240, 15_840);
+    const A5_PAPER_TWIPS: (u32, u32) = (8_391, 11_906);
+
+    let mut pos = 0usize;
+    let mut last = None;
+    let needle = "\\documentclass";
+
+    while let Some(rel) = source[pos..].find(needle) {
+        let start = pos + rel;
+        let cmd_end = start + needle.len();
+        if source[cmd_end..]
+            .chars()
+            .next()
+            .is_some_and(|ch| ch.is_ascii_alphabetic())
+        {
+            pos = cmd_end;
+            continue;
+        }
+
+        let mut cur = cmd_end;
+        while cur < source.len() && source.as_bytes()[cur].is_ascii_whitespace() {
+            cur += 1;
+        }
+
+        if cur < source.len() && source.as_bytes()[cur] == b'[' {
+            let Some(opt_len) = bracketed_len(&source[cur..]) else {
+                pos = cmd_end;
+                continue;
+            };
+            let options = &source[cur + 1..cur + opt_len - 1];
+            for token in options.split(',') {
+                let token = token.trim().to_ascii_lowercase();
+                let size = match token.as_str() {
+                    "a4paper" => Some(A4_PAPER_TWIPS),
+                    "letterpaper" => Some(LETTER_PAPER_TWIPS),
+                    "a5paper" => Some(A5_PAPER_TWIPS),
+                    _ => None,
+                };
+                if size.is_some() {
+                    last = size;
+                }
+            }
+            pos = cur + opt_len;
+            continue;
+        }
+
+        pos = cmd_end;
+    }
+
+    last
+}
+
+/// Extract `cmd{...}` from `\ifnumequal{\value{fontfamily}}{N}{...}` branch
+/// whose `N` matches the effective `fontfamily` counter value.
+///
+/// `cmd` must be a LaTeX macro name like `\setmainfont` or `\setmonofont`.
+fn extract_setmainfont_conditional_for(
+    source: &str,
+    fontfamily_val: Option<i64>,
+    cmd: &str,
+) -> Option<String> {
     let target = fontfamily_val?;
+    if cmd.trim().is_empty() {
+        return None;
+    }
+
     // Search for \ifnumequal{\value{fontfamily}}{N}{ ... }
     let needle = "\\ifnumequal{\\value{fontfamily}}";
     let mut pos = 0usize;
@@ -714,7 +847,7 @@ fn extract_setmainfont_conditional(source: &str, fontfamily_val: Option<i64>) ->
         };
         if n == target {
             let body = &source[cur + 1..cur + body_len - 1];
-            if let Some(font) = extract_last_macro_braced_argument(body, "\\setmainfont") {
+            if let Some(font) = extract_last_macro_braced_argument(body, cmd) {
                 let font = font.trim().to_string();
                 if !font.is_empty() {
                     return Some(font);
@@ -724,6 +857,337 @@ fn extract_setmainfont_conditional(source: &str, fontfamily_val: Option<i64>) ->
         pos = cur + body_len;
     }
     None
+}
+
+/// Extract heading alignment for chapter-like headings from titlesec/memoir formatting commands.
+///
+/// Canonical return values: `"left"`, `"center"`, `"right"`, `"both"`.
+fn extract_heading_alignment(source: &str) -> Option<String> {
+    let mut last = None;
+
+    // titlesec: \titleformat{\chapter}[...]{\centering\bfseries}{...}{...}{...}
+    let needle = "\\titleformat";
+    let mut pos = 0usize;
+    while let Some(rel) = source[pos..].find(needle) {
+        let start = pos + rel + needle.len();
+        let mut cur = start;
+        if cur < source.len() && source.as_bytes()[cur] == b'*' {
+            cur += 1;
+        }
+        while cur < source.len() && source.as_bytes()[cur].is_ascii_whitespace() {
+            cur += 1;
+        }
+
+        let Some(target_len) = braced_len(&source[cur..]) else {
+            pos = start;
+            continue;
+        };
+        let target = source[cur + 1..cur + target_len - 1].trim();
+        cur += target_len;
+        if !target.contains("\\chapter") {
+            pos = cur;
+            continue;
+        }
+
+        while cur < source.len() && source.as_bytes()[cur].is_ascii_whitespace() {
+            cur += 1;
+        }
+        if cur < source.len() && source.as_bytes()[cur] == b'[' {
+            if let Some(shape_len) = bracketed_len(&source[cur..]) {
+                cur += shape_len;
+            } else {
+                pos = start;
+                continue;
+            }
+        }
+        while cur < source.len() && source.as_bytes()[cur].is_ascii_whitespace() {
+            cur += 1;
+        }
+
+        let Some(format_len) = braced_len(&source[cur..]) else {
+            pos = cur;
+            continue;
+        };
+        let format = &source[cur + 1..cur + format_len - 1];
+        if let Some(alignment) = detect_alignment_directive(format) {
+            last = Some(alignment.to_string());
+        }
+        pos = cur + format_len;
+    }
+
+    // memoir/custom chapter format definitions.
+    for line in source.lines() {
+        let trimmed = line.trim();
+        if trimmed.is_empty() {
+            continue;
+        }
+        let lower = trimmed.to_ascii_lowercase();
+        let mentions_heading = lower.contains("chapter")
+            || lower.contains("chapnamefont")
+            || lower.contains("chaptitlefont")
+            || lower.contains("printchaptertitle");
+        if mentions_heading && let Some(alignment) = detect_alignment_directive(trimmed) {
+            last = Some(alignment.to_string());
+        }
+    }
+
+    last
+}
+
+/// Extract heading number delimiter from chapter numbering macros or titlesec labels.
+///
+/// Canonical examples:
+/// - `\renewcommand{\thechapter}{\arabic{chapter}.}` → `"."`
+/// - `\renewcommand{\thechapter}{\arabic{chapter}}` → `""`
+fn extract_heading_number_delimiter(source: &str) -> Option<String> {
+    if let Some(chapter_fmt) = extract_renewcommand_value(source, "thechapter")
+        && let Some(delim) = extract_heading_number_delimiter_from_expr(&chapter_fmt)
+    {
+        return Some(delim);
+    }
+
+    let mut last = None;
+    let needle = "\\titleformat";
+    let mut pos = 0usize;
+    while let Some(rel) = source[pos..].find(needle) {
+        let start = pos + rel + needle.len();
+        let mut cur = start;
+        if cur < source.len() && source.as_bytes()[cur] == b'*' {
+            cur += 1;
+        }
+        while cur < source.len() && source.as_bytes()[cur].is_ascii_whitespace() {
+            cur += 1;
+        }
+
+        let Some(target_len) = braced_len(&source[cur..]) else {
+            pos = start;
+            continue;
+        };
+        let target = source[cur + 1..cur + target_len - 1].trim();
+        cur += target_len;
+        if !target.contains("\\chapter") {
+            pos = cur;
+            continue;
+        }
+
+        while cur < source.len() && source.as_bytes()[cur].is_ascii_whitespace() {
+            cur += 1;
+        }
+        if cur < source.len() && source.as_bytes()[cur] == b'[' {
+            if let Some(shape_len) = bracketed_len(&source[cur..]) {
+                cur += shape_len;
+            } else {
+                pos = start;
+                continue;
+            }
+        }
+        while cur < source.len() && source.as_bytes()[cur].is_ascii_whitespace() {
+            cur += 1;
+        }
+
+        // Skip format argument.
+        let Some(format_len) = braced_len(&source[cur..]) else {
+            pos = cur;
+            continue;
+        };
+        cur += format_len;
+        while cur < source.len() && source.as_bytes()[cur].is_ascii_whitespace() {
+            cur += 1;
+        }
+
+        // Read label argument where number template usually lives.
+        let Some(label_len) = braced_len(&source[cur..]) else {
+            pos = cur;
+            continue;
+        };
+        let label = &source[cur + 1..cur + label_len - 1];
+        if let Some(delim) = extract_heading_number_delimiter_from_expr(label) {
+            last = Some(delim);
+        }
+        pos = cur + label_len;
+    }
+
+    last
+}
+
+/// Extract caption alignment from `\captionsetup{justification=...}`.
+///
+/// Canonical return values: `"left"`, `"center"`, `"right"`, `"both"`.
+fn extract_captionsetup_justification(source: &str) -> Option<String> {
+    let mut pos = 0usize;
+    let mut last = None;
+    let needle = "\\captionsetup";
+
+    while let Some(rel) = source[pos..].find(needle) {
+        let start = pos + rel + needle.len();
+        let mut cur = start;
+        while cur < source.len() && source.as_bytes()[cur].is_ascii_whitespace() {
+            cur += 1;
+        }
+        if cur < source.len() && source.as_bytes()[cur] == b'[' {
+            if let Some(opt_len) = bracketed_len(&source[cur..]) {
+                cur += opt_len;
+            } else {
+                pos = start;
+                continue;
+            }
+        }
+        while cur < source.len() && source.as_bytes()[cur].is_ascii_whitespace() {
+            cur += 1;
+        }
+
+        let Some(body_len) = braced_len(&source[cur..]) else {
+            pos = start;
+            continue;
+        };
+        let body = &source[cur + 1..cur + body_len - 1];
+        if let Some(value) = extract_latex_option_value(body, "justification")
+            && let Some(alignment) = normalize_caption_justification(&value)
+        {
+            last = Some(alignment.to_string());
+        }
+        pos = cur + body_len;
+    }
+
+    last
+}
+
+/// Extract graphics search paths from `\graphicspath{{...}{...}}`.
+///
+/// Returns cleaned paths from the *last* `\graphicspath` command.
+fn extract_graphicspath(source: &str) -> Vec<String> {
+    let mut pos = 0usize;
+    let mut last_paths = Vec::new();
+    let needle = "\\graphicspath";
+
+    while let Some(rel) = source[pos..].find(needle) {
+        let start = pos + rel;
+        let cmd_end = start + needle.len();
+        if source[cmd_end..]
+            .chars()
+            .next()
+            .is_some_and(|ch| ch.is_ascii_alphabetic())
+        {
+            pos = cmd_end;
+            continue;
+        }
+
+        let mut cur = cmd_end;
+        while cur < source.len() && source.as_bytes()[cur].is_ascii_whitespace() {
+            cur += 1;
+        }
+
+        let Some(arg_len) = braced_len(&source[cur..]) else {
+            pos = cmd_end;
+            continue;
+        };
+        let body = &source[cur + 1..cur + arg_len - 1];
+        let mut extracted = Vec::new();
+        let mut inner_pos = 0usize;
+
+        while inner_pos < body.len() {
+            while inner_pos < body.len() && body.as_bytes()[inner_pos].is_ascii_whitespace() {
+                inner_pos += 1;
+            }
+            if inner_pos >= body.len() {
+                break;
+            }
+            if body[inner_pos..].starts_with('{')
+                && let Some(path_len) = braced_len(&body[inner_pos..])
+            {
+                let raw = &body[inner_pos + 1..inner_pos + path_len - 1];
+                if let Some(clean) = normalize_graphics_path_entry(raw)
+                    && !extracted.contains(&clean)
+                {
+                    extracted.push(clean);
+                }
+                inner_pos += path_len;
+                continue;
+            }
+            let consumed = body[inner_pos..]
+                .chars()
+                .next()
+                .map(|ch| ch.len_utf8())
+                .unwrap_or(1);
+            inner_pos += consumed;
+        }
+
+        last_paths = extracted;
+        pos = cur + arg_len;
+    }
+
+    last_paths
+}
+
+fn detect_alignment_directive(src: &str) -> Option<&'static str> {
+    let lower = src.to_ascii_lowercase();
+    if lower.contains("\\centering") || lower.contains("\\filcenter") {
+        Some("center")
+    } else if lower.contains("\\raggedright") || lower.contains("\\flushleft") {
+        Some("left")
+    } else if lower.contains("\\raggedleft") || lower.contains("\\flushright") {
+        Some("right")
+    } else if lower.contains("\\justifying") || lower.contains("\\justified") {
+        Some("both")
+    } else {
+        None
+    }
+}
+
+fn extract_heading_number_delimiter_from_expr(expr: &str) -> Option<String> {
+    let tokens = [
+        "\\thechapter",
+        "\\arabic{chapter}",
+        "\\Roman{chapter}",
+        "\\roman{chapter}",
+        "\\Alph{chapter}",
+        "\\alph{chapter}",
+    ];
+    for token in tokens {
+        if let Some(idx) = expr.rfind(token) {
+            let suffix = &expr[idx + token.len()..];
+            return Some(normalize_delimiter_suffix(suffix));
+        }
+    }
+    None
+}
+
+fn normalize_delimiter_suffix(raw_suffix: &str) -> String {
+    let trimmed = raw_suffix.trim_start();
+    if trimmed.is_empty() {
+        return String::new();
+    }
+
+    let mut delim = String::new();
+    for ch in trimmed.chars() {
+        if ch == '\\' || ch == '{' || ch.is_ascii_alphanumeric() {
+            break;
+        }
+        delim.push(ch);
+    }
+    delim.trim().to_string()
+}
+
+fn normalize_caption_justification(raw: &str) -> Option<&'static str> {
+    let normalized = raw.trim().trim_matches(['{', '}']).to_ascii_lowercase();
+    match normalized.as_str() {
+        "centering" | "center" => Some("center"),
+        "raggedright" | "left" | "flushleft" => Some("left"),
+        "raggedleft" | "right" | "flushright" => Some("right"),
+        "justified" | "justify" | "both" => Some("both"),
+        _ => None,
+    }
+}
+
+fn normalize_graphics_path_entry(raw: &str) -> Option<String> {
+    let mut path = raw.trim().replace('\\', "/");
+    while let Some(stripped) = path.strip_prefix("./") {
+        path = stripped.to_string();
+    }
+    if path.is_empty() || path == "." {
+        return None;
+    }
+    Some(path)
 }
 
 fn extract_last_macro_braced_argument(source: &str, macro_name: &str) -> Option<String> {
@@ -5798,5 +6262,146 @@ Body.";
         let src = "\\usepackage[english]{babel}\nBody.";
         let doc = parse_latex(src);
         assert_eq!(doc.layout.document_language.as_deref(), Some("en-US"));
+    }
+
+    #[test]
+    fn test_extract_documentclass_paper_size_a4() {
+        let src = "\\documentclass[a4paper,14pt]{memoir}\nBody.";
+        assert_eq!(
+            extract_documentclass_paper_size(src),
+            Some((11_906, 16_838))
+        );
+    }
+
+    #[test]
+    fn test_extract_documentclass_paper_size_letter() {
+        let src = "\\documentclass[letterpaper,12pt]{article}\nBody.";
+        assert_eq!(
+            extract_documentclass_paper_size(src),
+            Some((12_240, 15_840))
+        );
+    }
+
+    #[test]
+    fn test_extract_documentclass_paper_size_absent() {
+        let src = "\\documentclass[12pt]{article}\nBody.";
+        assert_eq!(extract_documentclass_paper_size(src), None);
+    }
+
+    #[test]
+    fn test_extract_setmainfont_conditional_for_monofont() {
+        let src = "\
+\\setcounter{fontfamily}{2}
+\\ifnumequal{\\value{fontfamily}}{1}{\\setmonofont{Courier New}}
+\\ifnumequal{\\value{fontfamily}}{2}{\\setmonofont{Fira Code}}
+Body.";
+        assert_eq!(
+            extract_setmainfont_conditional_for(src, Some(2), "\\setmonofont"),
+            Some("Fira Code".to_string())
+        );
+    }
+
+    #[test]
+    fn test_extract_setmainfont_conditional_for_no_matching_branch() {
+        let src = "\\ifnumequal{\\value{fontfamily}}{1}{\\setmonofont{Courier New}}\nBody.";
+        assert_eq!(
+            extract_setmainfont_conditional_for(src, Some(3), "\\setmonofont"),
+            None
+        );
+    }
+
+    #[test]
+    fn test_extract_setmainfont_conditional_for_without_counter_value() {
+        let src = "\\ifnumequal{\\value{fontfamily}}{1}{\\setmonofont{Courier New}}\nBody.";
+        assert_eq!(
+            extract_setmainfont_conditional_for(src, None, "\\setmonofont"),
+            None
+        );
+    }
+
+    #[test]
+    fn test_extract_heading_alignment_from_titleformat_center() {
+        let src =
+            "\\titleformat{\\chapter}[display]{\\centering\\bfseries}{\\thechapter}{1em}{}\nBody.";
+        assert_eq!(extract_heading_alignment(src), Some("center".to_string()));
+    }
+
+    #[test]
+    fn test_extract_heading_alignment_from_memoir_raggedright() {
+        let src = "\\renewcommand{\\printchaptertitle}[1]{\\raggedright\\chaptitlefont #1}\nBody.";
+        assert_eq!(extract_heading_alignment(src), Some("left".to_string()));
+    }
+
+    #[test]
+    fn test_extract_heading_alignment_absent() {
+        assert_eq!(extract_heading_alignment("Body."), None);
+    }
+
+    #[test]
+    fn test_extract_heading_number_delimiter_from_thechapter_dot() {
+        let src = "\\renewcommand{\\thechapter}{\\arabic{chapter}.}\nBody.";
+        assert_eq!(extract_heading_number_delimiter(src), Some(".".to_string()));
+    }
+
+    #[test]
+    fn test_extract_heading_number_delimiter_from_thechapter_empty() {
+        let src = "\\renewcommand{\\thechapter}{\\arabic{chapter}}\nBody.";
+        assert_eq!(extract_heading_number_delimiter(src), Some(String::new()));
+    }
+
+    #[test]
+    fn test_extract_heading_number_delimiter_from_titleformat_label() {
+        let src = "\\titleformat{\\chapter}[display]{\\bfseries}{\\thechapter:}{1em}{}\nBody.";
+        assert_eq!(extract_heading_number_delimiter(src), Some(":".to_string()));
+    }
+
+    #[test]
+    fn test_extract_captionsetup_justification_center() {
+        let src = "\\captionsetup{justification=centering}\nBody.";
+        assert_eq!(
+            extract_captionsetup_justification(src),
+            Some("center".to_string())
+        );
+    }
+
+    #[test]
+    fn test_extract_captionsetup_justification_raggedright() {
+        let src = "\\captionsetup[table]{justification=raggedright}\nBody.";
+        assert_eq!(
+            extract_captionsetup_justification(src),
+            Some("left".to_string())
+        );
+    }
+
+    #[test]
+    fn test_extract_captionsetup_justification_absent() {
+        assert_eq!(extract_captionsetup_justification("Body."), None);
+    }
+
+    #[test]
+    fn test_extract_graphicspath_basic_and_cleaned() {
+        let src = "\\graphicspath{{./figures/}{./img/}{../images/}}\nBody.";
+        assert_eq!(
+            extract_graphicspath(src),
+            vec![
+                "figures/".to_string(),
+                "img/".to_string(),
+                "../images/".to_string()
+            ]
+        );
+    }
+
+    #[test]
+    fn test_extract_graphicspath_uses_last_definition() {
+        let src = "\\graphicspath{{./figures/}}\n\\graphicspath{{./plots/}{./img/}}\nBody.";
+        assert_eq!(
+            extract_graphicspath(src),
+            vec!["plots/".to_string(), "img/".to_string()]
+        );
+    }
+
+    #[test]
+    fn test_extract_graphicspath_absent() {
+        assert!(extract_graphicspath("Body.").is_empty());
     }
 }

@@ -41,13 +41,13 @@ pattern — no exceptions:
 | Category | LaTeX source | Model field(s) | Renderer fallback | Status |
 |----------|-------------|----------------|-------------------|--------|
 | Page margins | `\geometry{top=…, bottom=…, left=…, right=…}` | `page_margin_top/bottom/left/right/header/footer_twips` | GOST: 20/20/25/10 mm | ✅ parsed + rendered |
-| Page size | `\geometry` `paperwidth`/`paperheight`, `\documentclass[a4paper]` | `page_width_twips`, `page_height_twips` | A4 (11906 × 16838 tw) | ⬜ not yet in model |
+| Page size | `\geometry` `paperwidth`/`paperheight`, `\documentclass[a4paper]` | `page_width_twips`, `page_height_twips` | A4 (11906 × 16838 tw) | ✅ parsed + rendered |
 | Line spacing | `\OnehalfSpacing`, `\setSpacing{1.5}`, `\linespread` | `body_line_spacing_twips` | 360 (1.5) | ✅ parsed + rendered |
-| Float counter scoping | `\setcounter{contnumfig/contnumtab/contnumeq}{0\|1}` | `figure/table/equation_counter_within_chapter` | true (per-chapter) | ✅ parsed + rendered (equation: parsed, not yet rendered) |
-| Font family | `\setmainfont` (incl. `\ifnumequal` conditional), `\setmonofont` | `font_family_body`, `font_family_mono` | "Times New Roman" | ✅ body parsed + rendered; ⬜ mono not yet in model |
-| Font sizes | `\documentclass[14pt]`, `\SetTblrInner{font=…}`, `\captionsetup{font=…}` | `font_size_body_hp`, `font_size_table_hp`, `font_size_footnote_hp`, `font_size_caption_hp` | 28, 24, 20, 28 (half-points) | ✅ body parsed; ✅ table/footnote/caption parsed |
+| Float counter scoping | `\setcounter{contnumfig/contnumtab/contnumeq}{0\|1}` | `figure/table/equation_counter_within_chapter` | true (per-chapter) | ✅ parsed + rendered |
+| Font family | `\setmainfont` (incl. `\ifnumequal` conditional), `\setmonofont` | `font_family_body`, `font_family_mono` | "Times New Roman" | ✅ parsed + rendered |
+| Font sizes | `\documentclass[14pt]`, `\SetTblrInner{font=…}`, `\captionsetup{font=…}` | `font_size_body_hp`, `font_size_table_hp`, `font_size_footnote_hp`, `font_size_caption_hp` | 28, 24, 20, 28 (half-points) | ✅ parsed + rendered |
 | Paragraph indent | `\setlength{\parindent}{…}` | `body_first_line_indent_twips` | 709 (1.25 cm) | ✅ parsed + rendered |
-| Heading format | `\chaptername`, `\MakeUppercase`, numbering delimiter, alignment | `chapter_name`, `heading_uppercase`, `heading_alignment`, `heading_number_delimiter` | "", false, Left, "." | ✅ name+uppercase parsed; ⬜ alignment+delimiter not yet in model |
+| Heading format | `\chaptername`, `\MakeUppercase`, numbering delimiter, alignment | `chapter_name`, `heading_uppercase`, `heading_alignment`, `heading_number_delimiter` | "", false, Left, "." | ✅ parsed + rendered |
 | Caption labels | `\renewcommand{\figurename}{…}`, `\renewcommand{\tablename}{…}` | `caption_label_figure`, `caption_label_table` | "Figure", "Table" | ✅ parsed + rendered |
 | Language | babel/polyglossia main language | `document_language` | None (no language tag) | ✅ parsed + rendered |
 

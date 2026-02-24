@@ -14,7 +14,8 @@ Rendering policy:
 | `\textit{}`, `\emph{}`, `{\it …}`, `{\itshape …}` | ✅ v0.1 | Recursive nesting supported |
 | `\label{}`, `\ref{}`, `\cite{}` | ✅ v0.1 | Emitted as `[key]` placeholder text |
 | `\autocite{}` | ✅ v0.5 | Style-aware placeholder: footnote or inline (`[key]`) based on LaTeX style config |
-| Preamble (`\documentclass`, `\usepackage`, etc.) | ✅ v0.1 | Everything before `\begin{document}` is discarded; layout commands (`\vspace`, `\newpage`, `\tableofcontents`, etc.) skipped |
+| Preamble (`\documentclass`, `\usepackage`, etc.) | ✅ v0.1 | Everything before `\begin{document}` is discarded; layout commands (`\vspace`, `\newpage`, etc.) skipped |
+| `\tableofcontents` | ✅ v0.9.1 | Emits `Block::TableOfContents`; renderer generates TOC paragraphs from following section blocks or `.toc` file entries. No language text stored in AST — heading text must come from a preceding `\chapter*{...}` in the document. |
 | `%` comments | ✅ v0.1 | Stripped before parsing |
 | TOC leaders and right margin (`\setrmarg`, `\cft...leader`, `\cftdotfill`) | ✅ | Dot leaders and page tab stop are LaTeX-driven when defined |
 | TOC chapter prefix (`\cftchaptername`) | ✅ | Parsed and rendered for numbered chapter entries (for example `Chapter 1.` / `ГЛАВА 1.`) |
@@ -27,7 +28,7 @@ Rendering policy:
 | Math (`\begin{equation}`, `\begin{equation*}`) | ✅ v0.4 | Rendered as centered italic plain-text approximation |
 | Math (`\[…\]`) | ✅ v0.5 | Rendered as centered italic plain-text approximation |
 | Footnotes (`\footnote{}`) | ✅ v0.5 | Native DOCX footnote references + footnotes.xml |
-| Bibliography heading (`\printbibliography`, `\insertbibliofullsorted`, `\insertbiblioauthor`, `\insertbibliofull`) | ✅ v0.9 | Emits chapter-level heading (`title=...` respected for `\printbibliography`); bibliography entries are not parsed yet |
+| Bibliography heading (`\printbibliography`, `\insertbibliofullsorted`, `\insertbiblioauthor`, `\insertbibliofull`) | ✅ v0.9.1 | Emits chapter-level heading; `title=...` respected; default title derived from `document_language` (e.g. `"REFERENCES"` for English, `"СПИСОК ЛИТЕРАТУРЫ"` for Russian); bibliography entries are not parsed yet |
 | Bibliography entries (`\bibliography`, `\bibitem`, `.bib`) | ⬜ | Entry list rendering is not implemented yet |
 | Title page first-page number suppression (`\thispagestyle{empty}` in `titlepage`/`titlingpage`) | ✅ v0.9 | Maps to DOCX different-first-page mode (`titlePg`) so page 1 number is hidden |
 | Cross-references (`\ref`, resolved) | ⬜ v0.5 | Currently emitted as placeholder |

@@ -1,4 +1,4 @@
-# Session Summary (2026-02-24)
+# Session Summary (2026-02-24, updated after v0.9.1 audit PRs)
 
 ## Project Goal
 
@@ -143,9 +143,46 @@ This means the current tree is an in-progress parity batch, not a merge-ready st
    - input: `/Users/principalwater/Documents/git/phd-eaeu-electricity-market/thesis/dissertation.tex`,
    - outputs by format: `/tmp/dissertation.docx`, `/tmp/dissertation.pdf`, `/tmp/dissertation.md`.
 
+## Completed This Session (2026-02-24)
+
+### PR-1: WIP Stabilization (feat/v0.9.1-wip-stabilize)
+All uncommitted changes committed and submitted as PR #28:
+- parser, model, renderer, tests, agent docs
+
+### PR-2: LaTeX-driven Audit Fixes (feat/v0.9.1-latex-driven-audit)
+Four policy violations identified and fixed:
+
+1. **Block::TableOfContents (CRITICAL)**: `\tableofcontents` now emits
+   `Block::TableOfContents` instead of `Block::Section { title: "ОГЛАВЛЕНИЕ" }`.
+   Renderer detects TOC via AST type. `is_toc_heading()` Russian string match removed.
+
+2. **list labelsep fallback (HIGH)**: Magic constant `142` (0.5em at 14pt)
+   replaced with inline em computation using `layout.font_size_body_hp`.
+
+3. **Bibliography default title (HIGH)**: `try_parse_bibliography_command`
+   now accepts `language: Option<&str>`. Added `default_bibliography_title_for_language()`
+   following the same pattern as `default_chapter_name_for_language()`.
+   Falls back to `"REFERENCES"` for unknown/absent language.
+
+4. **Dissertation counter gate (MEDIUM)**: `apply_known_counter_fallbacks()`
+   now gates on `ParseMetadata.document_class` containing "disser*".
+   All other document classes get an early no-op return.
+
+### Documentation updated
+- `AGENTS.md`: updated parameter table; added `Block::TableOfContents` row;
+  added known exception note for dissertation counter gate.
+- `docs/SUPPORTED_ELEMENTS.md`: added `\tableofcontents` entry; updated bibliography entry.
+- `agent_docs/plans/v0.9.1-latex-driven-audit.md`: plan file added.
+
 ## Immediate Next Steps
 
-1. Continue DOCX parity workstreams now that build/test baseline is green (links/TOC/indent/citations/bibliography/title-page spacing).
-2. Validate updated DOCX behavior on synthetic fixtures plus a large external multi-file LaTeX corpus.
-3. Record resolved vs deferred manual-QA items in `v0.9.1` plan and `SUPPORTED_ELEMENTS`.
+1. Merge PR-1 and PR-2 (both submitted, bot-merge labelled).
+2. Continue remaining DOCX parity workstreams from `v0.9.1-docx-manual-qa-followup.md`:
+   - Title page spacing parity (workstream 2)
+   - TOC parity + active navigation (workstream 3)
+   - First-line indentation correctness (workstream 4)
+   - Math rendering upgrade — OMML (workstream 5)
+   - Footnote citation semantics (workstream 6)
+   - Bibliography section completion (workstream 9)
+3. Validate updated DOCX behavior on synthetic fixtures plus full dissertation corpus.
 4. Only after DOCX parity stabilization, resume v1.0 backend expansion (`pdf`/`md`).

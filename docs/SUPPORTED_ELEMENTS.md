@@ -44,9 +44,16 @@ Mapped into `DocumentLayout` and rendered:
 - `\setlength{\cftsubsectionindent}{...}`, `\setlength{\cftsubsectionnumwidth}{...}`
 - `\setlength{\cftsubsubsectionindent}{...}`, `\setlength{\cftsubsubsectionnumwidth}{...}`
 
+Newly mapped in v0.8:
+- `\renewcommand{\cftchapterfont}{\normalfont}` → `toc_chapter_entry_bold` (bold/non-bold chapter title in TOC)
+- `\renewcommand{\cftchapterpagefont}{\normalfont}` → `toc_chapter_page_bold` (bold/non-bold page number in TOC)
+- `\renewcommand\cftchapteraftersnum{...}` → `toc_aftersnum_chapter` (separator after chapter number in TOC)
+- `\renewcommand\cftsectionaftersnum{...}` → `toc_aftersnum_section`
+- `\renewcommand\cftsubsectionaftersnum{...}` → `toc_aftersnum_subsection`
+- `\renewcommand\cftsubsubsectionaftersnum{...}` → `toc_aftersnum_subsubsection`
+- `\renewcommand{\cftappendixname}{...}` → `toc_appendix_name` (extracted; appendix TOC rendering reserved for future)
+
 Not mapped yet (fallback behavior applies):
 - `\cftbefore...skip` spacing controls
-- `\cft...font` / `\cft...pagefont`
-- `\cft...aftersnum` explicit separators for non-chapter levels
 - `\setpnumwidth{...}` (page number width box)
 - `\settoctitlefont{...}` and other title-level TOC font macros

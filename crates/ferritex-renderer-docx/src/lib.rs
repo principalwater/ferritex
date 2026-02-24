@@ -199,7 +199,13 @@ impl RenderProfile {
             if layout.list_label_sep_twips.is_none() && layout.list_label_width_twips.is_none() {
                 DEFAULT_LIST_HANGING_TWIPS
             } else {
-                let sep = layout.list_label_sep_twips.unwrap_or(142); // 0.5em at 14pt
+                let sep = layout.list_label_sep_twips.unwrap_or_else(|| {
+                    // 0.5em in twips scaled to the actual body font size.
+                    // Formula mirrors em_twips_for_body_font() in ferritex-core:
+                    //   (body_pt * 20.0 * em).round()
+                    let body_hp = layout.font_size_body_hp.unwrap_or(FONT_SIZE_BODY_HP) as f64;
+                    (body_hp / 2.0 * 20.0 * 0.5).round() as i32
+                });
                 let width = layout.list_label_width_twips.unwrap_or(sep); // auto (!) = labelsep
                 sep + width
             }

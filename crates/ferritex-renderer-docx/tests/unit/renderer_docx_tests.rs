@@ -627,6 +627,29 @@ fn list_bullet_char_from_layout() {
     assert_eq!(profile.list_bullet_char, "–");
 }
 
+#[test]
+fn list_label_sep_fallback_scales_with_font_size() {
+    // When list_label_width_twips is set but list_label_sep_twips is absent,
+    // the sep fallback is computed as 0.5em scaled to the actual body font size.
+    // At 12pt (24 half-points): 0.5 * 12pt * 20 twips/pt = 120 twips.
+    // hanging = sep + width = 120 + 200 = 320.
+    let layout = DocumentLayout {
+        font_size_body_hp: Some(24), // 12pt
+        list_label_sep_twips: None,
+        list_label_width_twips: Some(200), // explicit width triggers the sep-fallback path
+        list_hanging_indent_twips: None,
+        list_item_indent_twips: None,
+        ..DocumentLayout::default()
+    };
+    let profile = RenderProfile::from_layout(&layout);
+    // sep = 120 (0.5em at 12pt), width = 200, item_indent = sep + width = 320
+    assert_eq!(
+        profile.list_item_indent_twips,
+        320,
+        "12pt font sep fallback (120) + explicit width (200) should = 320"
+    );
+}
+
 // ── Source vspace tests ───────────────────────────────────────────────────
 
 #[test]

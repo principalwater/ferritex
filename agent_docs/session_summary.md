@@ -49,9 +49,30 @@ Quality gate state after these changes:
   2. Store it in model metadata with generic naming.
   3. Apply it in renderer with deterministic fallback only.
 
+## v0.8: TOC parity + paragraph drift fix (feat/v0.8-toc-parity)
+
+Added 7 new `DocumentLayout` fields for `cft*` TOC formatting:
+- `toc_chapter_entry_bold` / `toc_chapter_page_bold` — driven by `\cftchapterfont` / `\cftchapterpagefont`
+- `toc_aftersnum_chapter`, `toc_aftersnum_section`, `toc_aftersnum_subsection`, `toc_aftersnum_subsubsection` — driven by `\cft...aftersnum`
+- `toc_appendix_name` — driven by `\cftappendixname` (extracted, appendix rendering reserved for future)
+
+Fixed: paragraphs consisting solely of `Inline::LineBreak` (lone `\\`) no longer produce
+empty `Block::Paragraph` entries — reduced spurious blank lines in generated DOCX.
+
+Fixed: `extract_renewcommand_value()` now handles both `\renewcommand{\cmd}{...}` and
+`\renewcommand\cmd{...}` (unbraced name) forms.
+
+Renderer: `build_toc_entry_paragraph()` applies:
+- `disable_bold()` on title runs when `toc_chapter_entry_bold = false`
+- `disable_bold()` on page-number run when `toc_chapter_page_bold = false`
+- `toc_level_aftersnum()` for separator after TOC number (all levels)
+
+Tests added: 11 parser unit tests + 3 renderer unit tests (present/absent/fallback).
+Total: 189 lib tests, all passing. Quality gate: fmt + clippy -D warnings + test — all green.
+
 ## Next development steps
 
-1. Extend TOC mapping for currently uncovered commands (`\setpnumwidth`, `\cftbefore...skip`, additional `\cft...aftersnum` controls where relevant).
-2. Continue reducing DOCX style drift by adding parser-first extraction for missing layout/typography signals.
+1. Add appendix TOC rendering support (use `toc_appendix_name` field already extracted).
+2. Continue reducing DOCX style drift: `\setpnumwidth`, `\cftbefore...skip` spacing.
 3. Keep `docs/SUPPORTED_ELEMENTS.md` aligned with exact mapped vs unmapped LaTeX controls.
 4. Keep tests paired with every new `DocumentLayout` field (extraction present/absent + renderer fallback behavior).

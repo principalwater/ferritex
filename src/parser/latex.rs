@@ -316,9 +316,12 @@ fn extract_layout_settings(source: &str) -> DocumentLayout {
 
     // ── Font family ────────────────────────────────────────────────────
     // XeLaTeX / LuaLaTeX: \setmainfont{Times New Roman}
-    if let Some(font) = extract_last_macro_braced_argument(source, "\\setmainfont") {
-        // \setmainfont may have optional [...] before {name}; extract_last_macro_braced_argument
-        // already handles the braced argument. Strip optional brackets if present in value.
+    // The font may be selected conditionally via \ifnumequal{\value{fontfamily}}{N}.
+    // Try conditional extraction first; fall back to last unconditional occurrence.
+    let fontfamily_val = extract_last_setcounter_value(source, "fontfamily");
+    if let Some(font) = extract_setmainfont_conditional(source, fontfamily_val) {
+        layout.font_family_body = Some(font);
+    } else if let Some(font) = extract_last_macro_braced_argument(source, "\\setmainfont") {
         let font = font.trim().to_string();
         if !font.is_empty() {
             layout.font_family_body = Some(font);
@@ -494,12 +497,17 @@ fn latex_language_to_bcp47(lang: &str) -> Option<String> {
 }
 
 /// Extract the last integer value assigned to `counter_name` via `\setcounter{counter_name}{N}`.
+///
+/// Occurrences inside runtime-only conditionals (`\IfFontExistsTF`, `\IfFileExists`) are
+/// skipped because their execution depends on the host system state which the parser cannot
+/// evaluate.
 fn extract_last_setcounter_value(source: &str, counter_name: &str) -> Option<i64> {
     let mut pos = 0usize;
     let mut last = None;
     let needle = "\\setcounter";
     while let Some(rel) = source[pos..].find(needle) {
-        let start = pos + rel + needle.len();
+        let match_start = pos + rel;
+        let start = match_start + needle.len();
         let mut cur = start;
         while cur < source.len() && source.as_bytes()[cur].is_ascii_whitespace() {
             cur += 1;
@@ -518,7 +526,17 @@ fn extract_last_setcounter_value(source: &str, counter_name: &str) -> Option<i64
             continue;
         };
         let value_src = source[cur + 1..cur + value_len - 1].trim();
+        // Skip \setcounter inside runtime conditionals like \IfFontExistsTF or \IfFileExists.
+        let mut lookback_start = match_start.saturating_sub(120);
+        // Align to a UTF-8 char boundary.
+        while lookback_start > 0 && !source.is_char_boundary(lookback_start) {
+            lookback_start -= 1;
+        }
+        let lookback = &source[lookback_start..match_start];
+        let inside_runtime_conditional =
+            lookback.contains("\\IfFontExistsTF") || lookback.contains("\\IfFileExists");
         if name == counter_name
+            && !inside_runtime_conditional
             && let Ok(v) = value_src.parse::<i64>()
         {
             last = Some(v);
@@ -526,6 +544,57 @@ fn extract_last_setcounter_value(source: &str, counter_name: &str) -> Option<i64
         pos = cur + value_len;
     }
     last
+}
+
+/// Extract `\setmainfont{...}` from the `\ifnumequal{\value{fontfamily}}{N}{...}` branch
+/// whose `N` matches the effective `fontfamily` counter value.
+///
+/// If no conditional block matches (or if `fontfamily_val` is `None`), returns `None`
+/// so the caller can fall back to a simpler extraction.
+fn extract_setmainfont_conditional(source: &str, fontfamily_val: Option<i64>) -> Option<String> {
+    let target = fontfamily_val?;
+    // Search for \ifnumequal{\value{fontfamily}}{N}{ ... }
+    let needle = "\\ifnumequal{\\value{fontfamily}}";
+    let mut pos = 0usize;
+    while let Some(rel) = source[pos..].find(needle) {
+        let start = pos + rel + needle.len();
+        let mut cur = start;
+        // Skip whitespace before {N}
+        while cur < source.len() && source.as_bytes()[cur].is_ascii_whitespace() {
+            cur += 1;
+        }
+        // Read {N}
+        let Some(val_len) = braced_len(&source[cur..]) else {
+            pos = start;
+            continue;
+        };
+        let val_str = source[cur + 1..cur + val_len - 1].trim();
+        let Ok(n) = val_str.parse::<i64>() else {
+            pos = cur + val_len;
+            continue;
+        };
+        cur += val_len;
+        // Skip whitespace before {body}
+        while cur < source.len() && source.as_bytes()[cur].is_ascii_whitespace() {
+            cur += 1;
+        }
+        // Read {body} — the "then" branch
+        let Some(body_len) = braced_len(&source[cur..]) else {
+            pos = cur;
+            continue;
+        };
+        if n == target {
+            let body = &source[cur + 1..cur + body_len - 1];
+            if let Some(font) = extract_last_macro_braced_argument(body, "\\setmainfont") {
+                let font = font.trim().to_string();
+                if !font.is_empty() {
+                    return Some(font);
+                }
+            }
+        }
+        pos = cur + body_len;
+    }
+    None
 }
 
 fn extract_last_macro_braced_argument(source: &str, macro_name: &str) -> Option<String> {
@@ -1831,7 +1900,6 @@ fn parse_float(
             preserve_dynamic_markers,
         )))
     } else if src.starts_with("\\begin{table")
-        || src.starts_with("\\begin{tabular")
         || src.starts_with("\\begin{tblr")
         || src.starts_with("\\begin{longtblr")
     {
@@ -4121,6 +4189,34 @@ Body.";
     }
 
     #[test]
+    fn test_setcounter_inside_iffontexiststf_is_ignored() {
+        // \IfFontExistsTF{Times New Roman}{}{\setcounter{fontfamily}{0}}
+        // The fallback \setcounter inside the runtime conditional should be ignored.
+        let src = "\
+\\setcounter{fontfamily}{1}
+\\IfFontExistsTF{Times New Roman}{}{\\setcounter{fontfamily}{0}}
+\\IfFontExistsTF{LiberationSerif}{}{\\setcounter{fontfamily}{0}}
+Body.";
+        let doc = parse_latex(src);
+        // fontfamily=1 means per-chapter is determined by contnumfig, not fontfamily.
+        // But we can verify the extracted fontfamily indirectly via font_family_body.
+        // With fontfamily=1 and matching \ifnumequal branch:
+        let src2 = "\
+\\setcounter{fontfamily}{1}
+\\IfFontExistsTF{Times New Roman}{}{\\setcounter{fontfamily}{0}}
+\\ifnumequal{\\value{fontfamily}}{0}{\\setmainfont{CMU Serif}}
+\\ifnumequal{\\value{fontfamily}}{1}{\\setmainfont{Times New Roman}}
+Body.";
+        let doc2 = parse_latex(src2);
+        assert_eq!(
+            doc2.layout.font_family_body.as_deref(),
+            Some("Times New Roman"),
+            "\\setcounter inside \\IfFontExistsTF should be skipped; fontfamily stays 1"
+        );
+        let _ = doc; // suppress unused warning
+    }
+
+    #[test]
     fn test_label_registry_global_numbering_produces_flat_refs() {
         // When contnumfig=1 (global), \ref{fig:first} inside chapter 1 should resolve
         // to "1" (not "1.1"). Same for tables.
@@ -5362,6 +5458,52 @@ A & B \\
     fn test_extract_font_family_absent() {
         let doc = parse_latex("Body.");
         assert_eq!(doc.layout.font_family_body, None);
+    }
+
+    #[test]
+    fn test_extract_font_family_conditional_on_fontfamily_counter() {
+        let src = "\
+\\setcounter{fontfamily}{1}
+\\ifnumequal{\\value{fontfamily}}{0}{\\setmainfont{CMU Serif}}
+\\ifnumequal{\\value{fontfamily}}{1}{\\setmainfont{Times New Roman}}
+\\ifnumequal{\\value{fontfamily}}{2}{\\setmainfont{LiberationSerif}}
+Body.";
+        let doc = parse_latex(src);
+        assert_eq!(
+            doc.layout.font_family_body.as_deref(),
+            Some("Times New Roman"),
+            "should pick \\setmainfont from the branch matching fontfamily=1"
+        );
+    }
+
+    #[test]
+    fn test_extract_font_family_conditional_selects_liberation_when_counter_is_2() {
+        let src = "\
+\\setcounter{fontfamily}{2}
+\\ifnumequal{\\value{fontfamily}}{0}{\\setmainfont{CMU Serif}}
+\\ifnumequal{\\value{fontfamily}}{1}{\\setmainfont{Times New Roman}}
+\\ifnumequal{\\value{fontfamily}}{2}{\\setmainfont{LiberationSerif}}
+Body.";
+        let doc = parse_latex(src);
+        assert_eq!(
+            doc.layout.font_family_body.as_deref(),
+            Some("LiberationSerif")
+        );
+    }
+
+    #[test]
+    fn test_bare_tabular_not_parsed_as_table_block() {
+        let src = "\\begin{tabular}{l}\nA \\\\ B\n\\end{tabular}\nBody.";
+        let doc = parse_latex(src);
+        let table_count = doc
+            .blocks
+            .iter()
+            .filter(|b| matches!(b, Block::Table(_)))
+            .count();
+        assert_eq!(
+            table_count, 0,
+            "bare \\begin{{tabular}} should not produce a Block::Table"
+        );
     }
 
     #[test]

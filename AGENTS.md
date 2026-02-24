@@ -18,12 +18,23 @@
 - The parser and renderer are completely decoupled via the AST.
   Never let docx-rs types leak into the parser, never let nom/regex
   types leak into the renderer.
+- Treat `DocumentLayout` as the project-wide **StyleMap**:
+  extracted style/layout semantics passed from parser to renderers.
 - New LaTeX elements go in: src/parser/latex.rs + src/model/mod.rs
   + src/renderer/docx.rs — always all three.
 - Rendering parameters must be propagated from LaTeX sources (including
   included style/config files) so ferritex output matches the effective
   LaTeX build settings for layout, numbering, spacing, page headers, and
   footnote/citation behavior.
+- Style parameters must be extracted from LaTeX preamble/config sources;
+  renderer hardcodes are fallback-only and never project-specific.
+- Renderers consume only AST + StyleMap fields; renderers must not parse
+  LaTeX syntax directly.
+- Adding a new output format means adding a new renderer that consumes the
+  same AST + StyleMap contract. Parser/model changes are required only when
+  a new semantic parameter is needed for all backends.
+- StyleMap must define reasonable deterministic defaults for every field so
+  minimal LaTeX inputs still render without panics.
 - Never implement project-specific formatting fixes by hardcoding constants
   in the renderer when the source LaTeX project already expresses the setting.
   Instead:
@@ -34,12 +45,13 @@
   improvements first, not one-off renderer hacks bound to a single corpus.
 
 ### LaTeX-driven parameter policy (comprehensive)
-Every formatting decision in the renderer must trace back to a
-`DocumentLayout` field. The field, in turn, must be populated by the
-parser from effective LaTeX sources. Renderer constants serve only as
-**fallback defaults** for when the LaTeX project does not express a
-preference. The following parameter categories must all follow this
-pattern — no exceptions:
+Every formatting decision in the renderer must trace back to parser
+extraction:
+- global document-level settings via `DocumentLayout`
+- block-local directives (inside specific float/list blocks) via block fields
+Renderer constants serve only as **fallback defaults** for when the
+LaTeX project does not express a preference. The following parameter
+categories must all follow this pattern — no exceptions:
 
 | Category | LaTeX source | Model field(s) | Renderer fallback | Status |
 |----------|-------------|----------------|-------------------|--------|
@@ -51,8 +63,11 @@ pattern — no exceptions:
 | Font sizes | `\documentclass[14pt]`, `\SetTblrInner{font=…}`, `\captionsetup{font=…}` | `font_size_body_hp`, `font_size_table_hp`, `font_size_footnote_hp`, `font_size_caption_hp` | 28, 24, 20, 28 (half-points) | ✅ parsed + rendered |
 | Paragraph indent | `\setlength{\parindent}{…}` | `body_first_line_indent_twips` | 709 (1.25 cm) | ✅ parsed + rendered |
 | Heading format | `\chaptername`, `\MakeUppercase`, numbering delimiter, alignment | `chapter_name`, `heading_uppercase`, `heading_alignment`, `heading_number_delimiter` | "", false, Left, "." | ✅ parsed + rendered |
+| Heading indents | `\setsecindent`, `\setsubsecindent`, `\setsubsubsecindent` | `heading_indent_section/subsection/subsubsection_twips` | 0 twips | ✅ parsed + rendered |
+| TOC formatting | `\setrmarg`, `\cft...leader`, `\cftchaptername`, `\cftsetindents`, `\setlength{\cft...indent}`, `\setlength{\cft...numwidth}` | `toc_right_margin_twips`, `toc_use_dot_leader`, `toc_chapter_name_prefix`, `toc_indent_*_twips`, `toc_numwidth_*_twips` | level indents from body indent, no hanging (`numwidth=0`) | ✅ parsed + rendered |
 | Caption labels | `\renewcommand{\figurename}{…}`, `\renewcommand{\tablename}{…}`, `\captionsetup{labelsep=…}`, `\DeclareCaptionLabelSeparator` | `caption_label_figure`, `caption_label_table`, `caption_label_separator_figure`, `caption_label_separator_table` | "Figure", "Table", ". " | ✅ parsed + rendered |
 | Caption layout | `\captionsetup{skip=…, position=…, singlelinecheck=…, indent=…}` (global and `[figure]/[table]`) | `caption_skip_twips_figure/table`, `caption_position_figure/table`, `caption_singlelinecheck_figure/table`, `caption_indent_twips_figure/table` | skip=0 twips, figure position=bottom, table position=top, singlelinecheck=true, indent=0 | ✅ parsed + rendered |
+| Float block alignment | `\centering`, `\raggedright`, `\raggedleft`, `\flushleft`, `\flushright` inside `table/figure` blocks | `Table.alignment`, `Figure.alignment` | table: left, figure: center | ✅ parsed + rendered |
 | Language | babel/polyglossia main language | `document_language` | None (no language tag) | ✅ parsed + rendered |
 
 **Test requirement**: every `DocumentLayout` field must have a

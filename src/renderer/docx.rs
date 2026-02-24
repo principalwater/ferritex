@@ -10,11 +10,12 @@ use docx_rs::{
     AbstractNumbering, AlignmentType, BreakType, Docx, Footnote, Header, IndentLevel, Level,
     LevelJc, LevelText, LineSpacing, LineSpacingType, NumberFormat, Numbering, NumberingId,
     PageMargin, PageNum, Paragraph, Pic, Run, RunChild, RunFonts, SpecialIndentType, Start, Style,
-    StyleType, Table as DocxTable, TableCell as DocxCell, TableRow as DocxRow, VertAlignType,
+    StyleType, Tab, TabLeaderType, TabValueType, Table as DocxTable, TableAlignmentType,
+    TableCell as DocxCell, TableRow as DocxRow, VertAlignType,
 };
 use zip::{ZipArchive, ZipWriter, write::SimpleFileOptions};
 
-use crate::model::{Block, Document, DocumentLayout, Figure, Inline, Table};
+use crate::model::{Block, Document, DocumentLayout, Figure, Inline, ParagraphStyle, Table};
 
 const PAGE_A4_WIDTH_TWIPS: u32 = 11_906;
 const PAGE_A4_HEIGHT_TWIPS: u32 = 16_838;
@@ -41,11 +42,12 @@ const DEFAULT_CAPTION_INDENT_TWIPS: i32 = 0;
 const CAPTION_SINGLELINE_ESTIMATE_CHARS: usize = 80;
 const IMAGE_EXTENSIONS: &[&str] = &["png", "jpg", "jpeg", "bmp", "tif", "tiff", "gif", "webp"];
 const EMU_PER_TWIP: u32 = 635;
-const IMAGE_SAFE_SCALE_NUM: u32 = 96;
+const IMAGE_SAFE_SCALE_NUM: u32 = 100;
 const IMAGE_SAFE_SCALE_DEN: u32 = 100;
 const LIST_LEVEL_LEFT_INDENT_TWIPS: i32 = 600;
 const LIST_LEVEL_HANGING_TWIPS: i32 = 240;
 const LIST_NUM_ID_BASE: usize = 100;
+const DEFAULT_TOC_RIGHT_MARGIN_TWIPS: i32 = 0;
 const FOOTNOTE_MARKER_RUN_XML: &str = "<w:r><w:rPr><w:vertAlign w:val=\"superscript\" /></w:rPr><w:footnoteRef/></w:r><w:r><w:t xml:space=\"preserve\"> </w:t></w:r>";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -112,6 +114,20 @@ struct RenderProfile {
     heading_uppercase: bool,
     heading_alignment: AlignmentType,
     heading_number_delimiter: String,
+    heading_indent_section_twips: i32,
+    heading_indent_subsection_twips: i32,
+    heading_indent_subsubsection_twips: i32,
+    toc_right_margin_twips: i32,
+    toc_use_dot_leader: bool,
+    toc_chapter_name_prefix: String,
+    toc_indent_chapter_twips: i32,
+    toc_numwidth_chapter_twips: i32,
+    toc_indent_section_twips: i32,
+    toc_numwidth_section_twips: i32,
+    toc_indent_subsection_twips: i32,
+    toc_numwidth_subsection_twips: i32,
+    toc_indent_subsubsection_twips: i32,
+    toc_numwidth_subsubsection_twips: i32,
 
     // ── List formatting ──────────────────────────────────────────────
     list_left_indent_twips: i32,
@@ -233,6 +249,67 @@ impl RenderProfile {
                 .heading_number_delimiter
                 .clone()
                 .unwrap_or_else(|| ".".to_string()),
+            heading_indent_section_twips: sanitize_nonnegative_twips(
+                layout.heading_indent_section_twips,
+                0,
+            ),
+            heading_indent_subsection_twips: sanitize_nonnegative_twips(
+                layout.heading_indent_subsection_twips,
+                0,
+            ),
+            heading_indent_subsubsection_twips: sanitize_nonnegative_twips(
+                layout.heading_indent_subsubsection_twips,
+                0,
+            ),
+            toc_right_margin_twips: sanitize_nonnegative_twips(
+                layout.toc_right_margin_twips,
+                DEFAULT_TOC_RIGHT_MARGIN_TWIPS,
+            ),
+            toc_use_dot_leader: layout.toc_use_dot_leader.unwrap_or(true),
+            toc_chapter_name_prefix: layout.toc_chapter_name_prefix.clone().unwrap_or_default(),
+            toc_indent_chapter_twips: sanitize_nonnegative_twips(
+                layout.toc_indent_chapter_twips,
+                0,
+            ),
+            toc_numwidth_chapter_twips: sanitize_nonnegative_twips(
+                layout.toc_numwidth_chapter_twips,
+                0,
+            ),
+            toc_indent_section_twips: sanitize_nonnegative_twips(
+                layout.toc_indent_section_twips,
+                layout
+                    .body_first_line_indent_twips
+                    .unwrap_or(FIRST_LINE_INDENT_TWIPS)
+                    / 2,
+            ),
+            toc_numwidth_section_twips: sanitize_nonnegative_twips(
+                layout.toc_numwidth_section_twips,
+                0,
+            ),
+            toc_indent_subsection_twips: sanitize_nonnegative_twips(
+                layout.toc_indent_subsection_twips,
+                layout
+                    .body_first_line_indent_twips
+                    .unwrap_or(FIRST_LINE_INDENT_TWIPS),
+            ),
+            toc_numwidth_subsection_twips: sanitize_nonnegative_twips(
+                layout.toc_numwidth_subsection_twips,
+                0,
+            ),
+            toc_indent_subsubsection_twips: sanitize_nonnegative_twips(
+                layout.toc_indent_subsubsection_twips,
+                layout
+                    .body_first_line_indent_twips
+                    .unwrap_or(FIRST_LINE_INDENT_TWIPS)
+                    + layout
+                        .body_first_line_indent_twips
+                        .unwrap_or(FIRST_LINE_INDENT_TWIPS)
+                        / 2,
+            ),
+            toc_numwidth_subsubsection_twips: sanitize_nonnegative_twips(
+                layout.toc_numwidth_subsubsection_twips,
+                0,
+            ),
             // List indentation: fallback matches body first-line indent.
             list_left_indent_twips: layout
                 .list_left_indent_twips
@@ -268,6 +345,34 @@ impl RenderProfile {
         );
         text_width_twips * EMU_PER_TWIP * IMAGE_SAFE_SCALE_NUM / IMAGE_SAFE_SCALE_DEN
     }
+
+    fn toc_page_tab_stop_twips(&self) -> usize {
+        let text_width_twips = self.page_width_twips.saturating_sub(
+            self.page_margin_left_twips.max(0) as u32 + self.page_margin_right_twips.max(0) as u32,
+        );
+        let stop_twips = (text_width_twips as i32 - self.toc_right_margin_twips.max(0)).max(1_000);
+        stop_twips as usize
+    }
+
+    fn toc_level_indent_twips(&self, level: u8) -> i32 {
+        match level {
+            1 => self.toc_indent_chapter_twips,
+            2 => self.toc_indent_section_twips,
+            3 => self.toc_indent_subsection_twips,
+            4 => self.toc_indent_subsubsection_twips,
+            5 => self.toc_indent_subsubsection_twips + self.body_first_line_indent_twips / 2,
+            _ => self.toc_indent_subsubsection_twips + self.body_first_line_indent_twips,
+        }
+    }
+
+    fn toc_level_numwidth_twips(&self, level: u8) -> i32 {
+        match level {
+            1 => self.toc_numwidth_chapter_twips,
+            2 => self.toc_numwidth_section_twips,
+            3 => self.toc_numwidth_subsection_twips,
+            _ => self.toc_numwidth_subsubsection_twips,
+        }
+    }
 }
 
 /// Convert a string alignment name to a docx-rs [`AlignmentType`].
@@ -278,6 +383,14 @@ fn parse_alignment(s: &str) -> AlignmentType {
         "right" | "flushright" | "raggedleft" => AlignmentType::Right,
         "both" | "justify" | "justified" => AlignmentType::Both,
         _ => AlignmentType::Left,
+    }
+}
+
+fn parse_table_alignment(s: Option<&str>) -> TableAlignmentType {
+    match s.map(str::to_ascii_lowercase).as_deref() {
+        Some("center") | Some("centering") => TableAlignmentType::Center,
+        Some("right") | Some("raggedleft") | Some("flushright") => TableAlignmentType::Right,
+        _ => TableAlignmentType::Left,
     }
 }
 
@@ -357,9 +470,14 @@ pub fn render_docx_with_context(
     let mut next_num_id: usize = LIST_NUM_ID_BASE;
     let mut rendered_any_block = false;
 
-    for block in &document.blocks {
+    for (index, block) in document.blocks.iter().enumerate() {
         match block {
-            Block::Section { level, number, .. } => {
+            Block::Section {
+                level,
+                number,
+                title,
+                ..
+            } => {
                 if *level == 1
                     && let Some(number) = number
                 {
@@ -381,9 +499,19 @@ pub fn render_docx_with_context(
                 }
                 let para = build_paragraph(block, &profile);
                 docx = docx.add_paragraph(para);
+                if *level == 1 && number.is_none() && is_toc_heading(title) {
+                    for toc_para in generated_toc_paragraphs(document, index + 1, &profile) {
+                        docx = docx.add_paragraph(toc_para);
+                    }
+                }
                 rendered_any_block = true;
             }
             Block::Paragraph(_) => {
+                let para = build_paragraph(block, &profile);
+                docx = docx.add_paragraph(para);
+                rendered_any_block = true;
+            }
+            Block::StyledParagraph { .. } => {
                 let para = build_paragraph(block, &profile);
                 docx = docx.add_paragraph(para);
                 rendered_any_block = true;
@@ -516,6 +644,48 @@ fn gost_styles(fonts: RunFonts, profile: &RenderProfile) -> Vec<Style> {
         heading_style_definition("Heading1", "Heading 1", 0, fonts.clone(), profile),
         heading_style_definition("Heading2", "Heading 2", 1, fonts.clone(), profile),
         heading_style_definition("Heading3", "Heading 3", 2, fonts.clone(), profile),
+        toc_style_definition(
+            "TOC1",
+            "TOC 1",
+            profile.toc_level_indent_twips(1),
+            fonts.clone(),
+            profile,
+        ),
+        toc_style_definition(
+            "TOC2",
+            "TOC 2",
+            profile.toc_level_indent_twips(2),
+            fonts.clone(),
+            profile,
+        ),
+        toc_style_definition(
+            "TOC3",
+            "TOC 3",
+            profile.toc_level_indent_twips(3),
+            fonts.clone(),
+            profile,
+        ),
+        toc_style_definition(
+            "TOC4",
+            "TOC 4",
+            profile.toc_level_indent_twips(4),
+            fonts.clone(),
+            profile,
+        ),
+        toc_style_definition(
+            "TOC5",
+            "TOC 5",
+            profile.toc_level_indent_twips(5),
+            fonts.clone(),
+            profile,
+        ),
+        toc_style_definition(
+            "TOC6",
+            "TOC 6",
+            profile.toc_level_indent_twips(6),
+            fonts.clone(),
+            profile,
+        ),
         Style::new("Caption", StyleType::Paragraph)
             .name("Caption")
             .based_on("BodyText")
@@ -564,6 +734,7 @@ fn heading_style_definition(
     fonts: RunFonts,
     profile: &RenderProfile,
 ) -> Style {
+    let level = (outline_level + 1) as u8;
     Style::new(style_id, StyleType::Paragraph)
         .name(style_name)
         .based_on("Normal")
@@ -573,8 +744,46 @@ fn heading_style_definition(
         .bold()
         .align(profile.heading_alignment)
         .line_spacing(line_spacing(profile.body_line_spacing_twips))
-        .indent(Some(0), None, None, None)
+        .indent(
+            Some(heading_left_indent_twips(level, profile)),
+            Some(SpecialIndentType::FirstLine(0)),
+            None,
+            None,
+        )
         .outline_lvl(outline_level)
+}
+
+fn toc_style_definition(
+    style_id: &str,
+    style_name: &str,
+    left_indent_twips: i32,
+    fonts: RunFonts,
+    profile: &RenderProfile,
+) -> Style {
+    Style::new(style_id, StyleType::Paragraph)
+        .name(style_name)
+        .based_on("BodyText")
+        .next(style_id)
+        .fonts(fonts)
+        .size(profile.font_size_body_hp)
+        .align(AlignmentType::Left)
+        .line_spacing(single_spacing())
+        .indent(
+            Some(left_indent_twips.max(0)),
+            Some(SpecialIndentType::FirstLine(0)),
+            None,
+            None,
+        )
+}
+
+fn heading_left_indent_twips(level: u8, profile: &RenderProfile) -> i32 {
+    match level {
+        2 => profile.heading_indent_section_twips,
+        3 => profile
+            .heading_indent_subsection_twips
+            .max(profile.heading_indent_subsubsection_twips),
+        _ => 0,
+    }
 }
 
 fn page_number_header() -> Header {
@@ -687,7 +896,7 @@ fn build_table(table: &Table, profile: &RenderProfile) -> DocxTable {
             DocxRow::new(cells)
         })
         .collect();
-    DocxTable::new(rows)
+    DocxTable::new(rows).align(parse_table_alignment(table.alignment.as_deref()))
 }
 
 fn float_number(chapter_no: usize, local_no: usize) -> String {
@@ -770,6 +979,9 @@ fn collect_caption_text_stats(inlines: &[Inline], chars: &mut usize, has_hard_br
                 }
                 *chars += value.chars().filter(|ch| !ch.is_whitespace()).count();
             }
+            Inline::LineBreak => {
+                *has_hard_break = true;
+            }
             Inline::Bold(children) | Inline::Italic(children) => {
                 collect_caption_text_stats(children, chars, has_hard_break);
             }
@@ -809,6 +1021,7 @@ fn caption_is_prefixed(kind: &str, inlines: &[Inline]) -> bool {
     for inline in inlines {
         match inline {
             Inline::Text(value) => text.push_str(value),
+            Inline::LineBreak => text.push(' '),
             Inline::Bold(children) | Inline::Italic(children) => {
                 for child in children {
                     if let Inline::Text(value) = child {
@@ -892,6 +1105,7 @@ fn normalize_math_text(src: &str) -> String {
         ("\\leq", "≤"),
         ("\\geq", "≥"),
         ("\\neq", "≠"),
+        ("\\sim", "≈"),
         ("\\approx", "≈"),
         ("\\to", "→"),
         ("\\rightarrow", "→"),
@@ -903,6 +1117,8 @@ fn normalize_math_text(src: &str) -> String {
     ] {
         out = out.replace(from, to);
     }
+    out = out.replace("---", "—");
+    out = out.replace("--", "–");
     out = out.replace(['{', '}'], "");
     out.split_whitespace().collect::<Vec<_>>().join(" ")
 }
@@ -922,6 +1138,7 @@ fn render_figure_block(
     let max_image_width_emu = profile.max_image_width_emu();
     let caption_settings = figure_caption_settings(profile);
     let render_caption_before_figure = caption_settings.position == CaptionPosition::Top;
+    let figure_alignment = parse_alignment(figure.alignment.as_deref().unwrap_or("center"));
 
     if render_caption_before_figure && !figure.caption.is_empty() {
         docx = docx.add_paragraph(caption_paragraph(
@@ -939,7 +1156,7 @@ fn render_figure_block(
         {
             match read_figure_pic(&resolved, figure.width_permille, max_image_width_emu) {
                 Ok(pic) => {
-                    docx = docx.add_paragraph(figure_image_paragraph(pic));
+                    docx = docx.add_paragraph(figure_image_paragraph(pic, figure_alignment));
                     embedded = true;
                 }
                 Err(error) => {
@@ -961,7 +1178,7 @@ fn render_figure_block(
             .image_path
             .as_deref()
             .unwrap_or("missing includegraphics path");
-        docx = docx.add_paragraph(figure_placeholder_paragraph(fallback));
+        docx = docx.add_paragraph(figure_placeholder_paragraph(fallback, figure_alignment));
     }
 
     if !render_caption_before_figure && !figure.caption.is_empty() {
@@ -1027,21 +1244,21 @@ fn scale_pic_to_text_width(pic: Pic, width_permille: Option<u16>, max_image_widt
     pic.size(target_width_emu, scaled_height)
 }
 
-fn figure_image_paragraph(pic: Pic) -> Paragraph {
+fn figure_image_paragraph(pic: Pic, alignment: AlignmentType) -> Paragraph {
     Paragraph::new()
         .style("BodyText")
-        .align(AlignmentType::Center)
+        .align(alignment)
         .line_spacing(single_spacing())
-        .indent(Some(0), None, None, None)
+        .indent(Some(0), Some(SpecialIndentType::FirstLine(0)), None, None)
         .add_run(Run::new().add_image(pic))
 }
 
-fn figure_placeholder_paragraph(path_hint: &str) -> Paragraph {
+fn figure_placeholder_paragraph(path_hint: &str, alignment: AlignmentType) -> Paragraph {
     Paragraph::new()
         .style("BodyText")
-        .align(AlignmentType::Center)
+        .align(alignment)
         .line_spacing(single_spacing())
-        .indent(Some(0), None, None, None)
+        .indent(Some(0), Some(SpecialIndentType::FirstLine(0)), None, None)
         .add_run(
             Run::new()
                 .add_text(format!("[Figure image not embedded: {path_hint}]"))
@@ -1090,7 +1307,7 @@ fn resolve_figure_path(
 // Paragraph / section rendering
 // ---------------------------------------------------------------------------
 
-/// Convert a [`Block::Section`] or [`Block::Paragraph`] into a docx-rs [`Paragraph`].
+/// Convert a [`Block::Section`] or body paragraph into a docx-rs [`Paragraph`].
 fn build_paragraph(block: &Block, profile: &RenderProfile) -> Paragraph {
     match block {
         Block::Section {
@@ -1100,11 +1317,17 @@ fn build_paragraph(block: &Block, profile: &RenderProfile) -> Paragraph {
             ..
         } => {
             let style = heading_style(*level);
+            let heading_indent = heading_left_indent_twips(*level, profile);
             let mut para = Paragraph::new()
                 .style(style)
                 .align(profile.heading_alignment)
                 .line_spacing(line_spacing(profile.body_line_spacing_twips))
-                .indent(Some(0), None, None, None);
+                .indent(
+                    Some(heading_indent),
+                    Some(SpecialIndentType::FirstLine(0)),
+                    None,
+                    None,
+                );
             let section_title = if *level == 1 && profile.heading_uppercase {
                 uppercase_inlines(title)
             } else {
@@ -1112,15 +1335,17 @@ fn build_paragraph(block: &Block, profile: &RenderProfile) -> Paragraph {
             };
             if let Some(number) = number {
                 let delim = &profile.heading_number_delimiter;
+                let number = number.trim();
+                let number_core = number.trim_end_matches('.');
                 let mut prefix = if *level == 1 && !profile.chapter_name.is_empty() {
                     let chap_name = if profile.heading_uppercase {
                         profile.chapter_name.to_uppercase()
                     } else {
                         profile.chapter_name.clone()
                     };
-                    format!("{} {}{}", chap_name, number.trim(), delim)
+                    format!("{chap_name} {number_core}{delim}")
                 } else {
-                    format!("{}{}", number.trim_end_matches('.'), delim)
+                    format!("{number_core}{delim}")
                 };
                 if !title.is_empty() {
                     prefix.push(' ');
@@ -1137,31 +1362,97 @@ fn build_paragraph(block: &Block, profile: &RenderProfile) -> Paragraph {
             }
             para
         }
-        Block::Paragraph(inlines) => {
-            let mut para = Paragraph::new()
-                .style("BodyText")
-                .align(AlignmentType::Both)
-                .line_spacing(line_spacing(profile.body_line_spacing_twips))
-                .indent(
-                    Some(0),
-                    Some(SpecialIndentType::FirstLine(
-                        profile.body_first_line_indent_twips,
-                    )),
-                    None,
-                    None,
-                );
-            for run in
-                inline_runs_with_footnote_size(inlines, false, false, profile.font_size_footnote_hp)
-            {
-                para = para.add_run(run);
-            }
-            para
+        Block::Paragraph(inlines) => build_default_body_paragraph(inlines, profile),
+        Block::StyledParagraph { inlines, style } => {
+            build_styled_body_paragraph(inlines, style, profile)
         }
         // Table, Figure, List, DisplayMath are handled separately — unreachable here.
         Block::Table(_) | Block::Figure(_) | Block::List(_) | Block::DisplayMath(_) => {
             unreachable!()
         }
     }
+}
+
+fn build_default_body_paragraph(inlines: &[Inline], profile: &RenderProfile) -> Paragraph {
+    let mut para = Paragraph::new()
+        .style("BodyText")
+        .align(AlignmentType::Both)
+        .line_spacing(line_spacing(profile.body_line_spacing_twips))
+        .indent(
+            Some(0),
+            Some(SpecialIndentType::FirstLine(
+                profile.body_first_line_indent_twips,
+            )),
+            None,
+            None,
+        );
+    for run in inline_runs_with_footnote_size(inlines, false, false, profile.font_size_footnote_hp)
+    {
+        para = para.add_run(run);
+    }
+    para
+}
+
+fn build_styled_body_paragraph(
+    inlines: &[Inline],
+    style: &ParagraphStyle,
+    profile: &RenderProfile,
+) -> Paragraph {
+    let alignment = style
+        .alignment
+        .as_deref()
+        .map(parse_alignment)
+        .unwrap_or(AlignmentType::Both);
+    let line_twips = style
+        .line_spacing_twips
+        .unwrap_or(profile.body_line_spacing_twips);
+    let first_line_indent = style
+        .first_line_indent_twips
+        .unwrap_or(profile.body_first_line_indent_twips);
+    let mut para = Paragraph::new()
+        .style("BodyText")
+        .align(alignment)
+        .line_spacing(line_spacing_with_spacing(
+            line_twips,
+            style.space_before_twips,
+            style.space_after_twips,
+        ))
+        .indent(
+            Some(0),
+            Some(SpecialIndentType::FirstLine(first_line_indent)),
+            None,
+            None,
+        );
+
+    for run in inline_runs_with_footnote_size(inlines, false, false, profile.font_size_footnote_hp)
+    {
+        let run = if let Some(size_hp) = style.font_size_hp {
+            run.size(size_hp)
+        } else {
+            run
+        };
+        para = para.add_run(run);
+    }
+    para
+}
+
+fn line_spacing_with_spacing(
+    line_twips: i32,
+    before_twips: Option<i32>,
+    after_twips: Option<i32>,
+) -> LineSpacing {
+    let mut spacing = line_spacing(line_twips);
+    if let Some(before) = before_twips
+        && before > 0
+    {
+        spacing = spacing.before(before as u32);
+    }
+    if let Some(after) = after_twips
+        && after > 0
+    {
+        spacing = spacing.after(after as u32);
+    }
+    spacing
 }
 
 /// Map a heading level (1-based) to a docx-rs style id string.
@@ -1171,6 +1462,185 @@ fn heading_style(level: u8) -> &'static str {
         2 => "Heading2",
         _ => "Heading3",
     }
+}
+
+fn is_toc_heading(title: &[Inline]) -> bool {
+    let text = collect_inline_text(title).to_uppercase();
+    text.contains("ОГЛАВЛЕНИЕ")
+}
+
+fn generated_toc_paragraphs(
+    document: &Document,
+    start_index: usize,
+    profile: &RenderProfile,
+) -> Vec<Paragraph> {
+    if !document.toc_entries.is_empty() {
+        return generated_toc_paragraphs_from_entries(document, profile);
+    }
+
+    let mut paragraphs = Vec::new();
+
+    for block in document.blocks.iter().skip(start_index) {
+        let Block::Section {
+            level,
+            number,
+            title,
+            ..
+        } = block
+        else {
+            continue;
+        };
+
+        if *level == 0 || *level > 2 {
+            continue;
+        }
+        if *level == 1 && number.is_none() && is_toc_heading(title) {
+            continue;
+        }
+
+        paragraphs.push(build_toc_entry_paragraph(
+            *level,
+            number.as_deref(),
+            title,
+            None,
+            profile,
+        ));
+    }
+
+    paragraphs
+}
+
+fn generated_toc_paragraphs_from_entries(
+    document: &Document,
+    profile: &RenderProfile,
+) -> Vec<Paragraph> {
+    let mut paragraphs = Vec::new();
+    for entry in &document.toc_entries {
+        if entry.level == 0 {
+            if !entry.title.trim().is_empty() {
+                paragraphs.push(build_toc_page_header_paragraph(&entry.title, profile));
+            }
+            continue;
+        }
+        if entry.level > 6 {
+            continue;
+        }
+        let title_inlines = vec![Inline::Text(entry.title.clone())];
+        if entry.level == 1 && entry.number.is_none() && is_toc_heading(&title_inlines) {
+            continue;
+        }
+        paragraphs.push(build_toc_entry_paragraph(
+            entry.level,
+            entry.number.as_deref(),
+            &title_inlines,
+            entry.page.as_deref(),
+            profile,
+        ));
+    }
+    paragraphs
+}
+
+fn build_toc_page_header_paragraph(text: &str, profile: &RenderProfile) -> Paragraph {
+    let mut para = Paragraph::new()
+        .style("TOC1")
+        .align(AlignmentType::Right)
+        .line_spacing(single_spacing());
+    let inlines = vec![Inline::Text(text.to_string())];
+    for run in inline_runs_with_footnote_size(&inlines, false, false, profile.font_size_footnote_hp)
+    {
+        para = para.add_run(run);
+    }
+    para
+}
+
+fn build_toc_entry_paragraph(
+    level: u8,
+    number: Option<&str>,
+    title: &[Inline],
+    page: Option<&str>,
+    profile: &RenderProfile,
+) -> Paragraph {
+    let style = match level {
+        1 => "TOC1",
+        2 => "TOC2",
+        3 => "TOC3",
+        4 => "TOC4",
+        5 => "TOC5",
+        _ => "TOC6",
+    };
+    let mut para = Paragraph::new()
+        .style(style)
+        .align(AlignmentType::Left)
+        .line_spacing(single_spacing());
+    let toc_indent = profile.toc_level_indent_twips(level);
+    let toc_numwidth = profile.toc_level_numwidth_twips(level);
+
+    if let Some(number) = number {
+        if toc_numwidth > 0 {
+            para = para.indent(
+                Some((toc_indent + toc_numwidth).max(0)),
+                Some(SpecialIndentType::Hanging(toc_numwidth)),
+                None,
+                None,
+            );
+        }
+
+        let mut prefix = String::new();
+        if level == 1 {
+            let chapter_prefix = profile.toc_chapter_name_prefix.trim();
+            if !chapter_prefix.is_empty() {
+                prefix.push_str(&chapter_prefix.to_uppercase());
+                prefix.push(' ');
+            }
+            prefix.push_str(number.trim_end_matches('.'));
+            prefix.push_str(&profile.heading_number_delimiter);
+        } else {
+            prefix.push_str(number);
+        }
+        if !prefix.is_empty() {
+            prefix.push(' ');
+            para = para.add_run(Run::new().add_text(prefix));
+        }
+    }
+
+    let title = if level == 1 {
+        uppercase_inlines(title)
+    } else {
+        title.to_vec()
+    };
+    for run in inline_runs_with_footnote_size(&title, false, false, profile.font_size_footnote_hp) {
+        para = para.add_run(run);
+    }
+
+    if let Some(page) = page {
+        let mut tab = Tab::new()
+            .val(TabValueType::Right)
+            .pos(profile.toc_page_tab_stop_twips());
+        if profile.toc_use_dot_leader {
+            tab = tab.leader(TabLeaderType::Dot);
+        }
+        para = para
+            .add_tab(tab)
+            .add_run(Run::new().add_tab())
+            .add_run(Run::new().add_text(page));
+    }
+
+    para
+}
+
+fn collect_inline_text(inlines: &[Inline]) -> String {
+    let mut out = String::new();
+    for inline in inlines {
+        match inline {
+            Inline::Text(text) => out.push_str(text),
+            Inline::LineBreak => out.push(' '),
+            Inline::Bold(children) | Inline::Italic(children) | Inline::Footnote(children) => {
+                out.push_str(&collect_inline_text(children))
+            }
+            Inline::InlineMath(text) | Inline::Reference(text) => out.push_str(text),
+        }
+    }
+    out
 }
 
 /// Recursively convert a slice of [`Inline`] nodes into a flat list of
@@ -1195,6 +1665,9 @@ fn inline_runs_with_footnote_size(
                     run = run.italic();
                 }
                 runs.push(run);
+            }
+            Inline::LineBreak => {
+                runs.push(Run::new().add_break(BreakType::TextWrapping));
             }
             Inline::Bold(children) => {
                 runs.extend(inline_runs_with_footnote_size(
@@ -1290,6 +1763,7 @@ fn uppercase_inlines(inlines: &[Inline]) -> Vec<Inline> {
             Inline::Footnote(children) => Inline::Footnote(uppercase_inlines(children)),
             Inline::InlineMath(value) => Inline::InlineMath(value.clone()),
             Inline::Reference(value) => Inline::Reference(value.clone()),
+            Inline::LineBreak => Inline::LineBreak,
         })
         .collect()
 }
@@ -1409,7 +1883,7 @@ fn ensure_default_language(xml: &str, lang: Option<&str>) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::model::Inline;
+    use crate::model::{Block, Document, Inline, Table, TableCell, TableRow, TocEntry};
     use docx_rs::BuildXML;
 
     #[test]
@@ -1526,6 +2000,224 @@ mod tests {
         );
         let kept_xml = String::from_utf8(kept.build()).expect("paragraph xml should be utf8");
         assert!(kept_xml.contains("w:jc w:val=\"left\""), "xml: {kept_xml}");
+    }
+
+    #[test]
+    fn chapter_prefix_does_not_duplicate_trailing_dot() {
+        let profile = RenderProfile::from_layout(&DocumentLayout {
+            chapter_name: Some("Глава".to_string()),
+            heading_number_delimiter: Some(".".to_string()),
+            ..DocumentLayout::default()
+        });
+        let para = build_paragraph(
+            &Block::Section {
+                level: 1,
+                number: Some("1.".to_string()),
+                label: None,
+                title: vec![Inline::Text("Заголовок".to_string())],
+            },
+            &profile,
+        );
+        let xml = String::from_utf8(para.build()).expect("paragraph xml should be utf8");
+        assert!(xml.contains("Глава 1. "), "xml: {xml}");
+        assert!(!xml.contains("1.."), "xml: {xml}");
+    }
+
+    #[test]
+    fn table_alignment_uses_center_when_requested() {
+        let profile = RenderProfile::from_layout(&DocumentLayout::default());
+        let table = Table {
+            caption: Vec::new(),
+            label: None,
+            source: Vec::new(),
+            alignment: Some("center".to_string()),
+            rows: vec![TableRow {
+                cells: vec![TableCell {
+                    content: vec![Inline::Text("X".to_string())],
+                }],
+            }],
+        };
+        let xml = String::from_utf8(build_table(&table, &profile).build())
+            .expect("table xml should be utf8");
+        assert!(xml.contains("w:jc w:val=\"center\""), "xml: {xml}");
+    }
+
+    #[test]
+    fn section_heading_uses_latex_driven_indent() {
+        let profile = RenderProfile::from_layout(&DocumentLayout {
+            heading_indent_section_twips: Some(709),
+            ..DocumentLayout::default()
+        });
+        let para = build_paragraph(
+            &Block::Section {
+                level: 2,
+                number: Some("1.1".to_string()),
+                label: None,
+                title: vec![Inline::Text("Section".to_string())],
+            },
+            &profile,
+        );
+        let xml = String::from_utf8(para.build()).expect("paragraph xml should be utf8");
+        assert!(xml.contains("w:left=\"709\""), "xml: {xml}");
+    }
+
+    #[test]
+    fn normalize_math_text_supports_sim_and_double_dash_ranges() {
+        assert_eq!(normalize_math_text("\\sim8 300--8 500"), "≈8 300–8 500");
+    }
+
+    #[test]
+    fn generated_toc_paragraphs_include_chapters_and_sections() {
+        let document = Document {
+            blocks: vec![
+                Block::Section {
+                    level: 1,
+                    number: None,
+                    label: None,
+                    title: vec![Inline::Text("ОГЛАВЛЕНИЕ".to_string())],
+                },
+                Block::Section {
+                    level: 1,
+                    number: Some("1.".to_string()),
+                    label: None,
+                    title: vec![Inline::Text("Глава".to_string())],
+                },
+                Block::Section {
+                    level: 2,
+                    number: Some("1.1".to_string()),
+                    label: None,
+                    title: vec![Inline::Text("Раздел".to_string())],
+                },
+            ],
+            layout: DocumentLayout::default(),
+            toc_entries: Vec::new(),
+        };
+        let profile = RenderProfile::from_layout(&document.layout);
+        let paragraphs = generated_toc_paragraphs(&document, 1, &profile);
+        assert_eq!(paragraphs.len(), 2);
+
+        let first_xml = String::from_utf8(paragraphs[0].build()).expect("paragraph xml utf8");
+        let second_xml = String::from_utf8(paragraphs[1].build()).expect("paragraph xml utf8");
+        assert!(
+            first_xml.contains("w:pStyle w:val=\"TOC1\""),
+            "xml: {first_xml}"
+        );
+        assert!(
+            second_xml.contains("w:pStyle w:val=\"TOC2\""),
+            "xml: {second_xml}"
+        );
+        assert!(first_xml.contains("1. "), "xml: {first_xml}");
+        assert!(second_xml.contains("1.1 "), "xml: {second_xml}");
+    }
+
+    #[test]
+    fn generated_toc_paragraphs_from_entries_include_page_header_line() {
+        let document = Document {
+            blocks: Vec::new(),
+            layout: DocumentLayout::default(),
+            toc_entries: vec![
+                TocEntry {
+                    level: 0,
+                    number: None,
+                    title: "Page.".to_string(),
+                    page: None,
+                },
+                TocEntry {
+                    level: 1,
+                    number: Some("1.".to_string()),
+                    title: "Intro".to_string(),
+                    page: Some("3".to_string()),
+                },
+            ],
+        };
+        let profile = RenderProfile::from_layout(&document.layout);
+        let paragraphs = generated_toc_paragraphs(&document, 0, &profile);
+        assert_eq!(paragraphs.len(), 2);
+
+        let header_xml = String::from_utf8(paragraphs[0].build()).expect("paragraph xml utf8");
+        let entry_xml = String::from_utf8(paragraphs[1].build()).expect("paragraph xml utf8");
+        assert!(
+            header_xml.contains("w:jc w:val=\"right\""),
+            "xml: {header_xml}"
+        );
+        assert!(header_xml.contains("Page."), "xml: {header_xml}");
+        assert!(
+            entry_xml.contains("w:pStyle w:val=\"TOC1\""),
+            "xml: {entry_xml}"
+        );
+        assert!(
+            entry_xml.contains("w:tab w:val=\"right\" w:leader=\"dot\""),
+            "xml: {entry_xml}"
+        );
+        assert!(entry_xml.contains("<w:tab "), "xml: {entry_xml}");
+        assert!(entry_xml.contains(">3<"), "xml: {entry_xml}");
+    }
+
+    #[test]
+    fn toc_entry_uses_latex_chapter_name_prefix_when_configured() {
+        let layout = DocumentLayout {
+            toc_chapter_name_prefix: Some("Глава".to_string()),
+            ..DocumentLayout::default()
+        };
+        let document = Document {
+            blocks: Vec::new(),
+            layout: layout.clone(),
+            toc_entries: vec![TocEntry {
+                level: 1,
+                number: Some("1.".to_string()),
+                title: "Раздел".to_string(),
+                page: Some("5".to_string()),
+            }],
+        };
+        let profile = RenderProfile::from_layout(&layout);
+        let paragraphs = generated_toc_paragraphs(&document, 0, &profile);
+        assert_eq!(paragraphs.len(), 1);
+
+        let xml = String::from_utf8(paragraphs[0].build()).expect("paragraph xml utf8");
+        assert!(xml.contains("ГЛАВА 1. "), "xml: {xml}");
+        assert!(!xml.contains("1.."), "xml: {xml}");
+    }
+
+    #[test]
+    fn toc_entry_uses_latex_driven_numwidth_for_hanging_indent() {
+        let layout = DocumentLayout {
+            toc_indent_section_twips: Some(400),
+            toc_numwidth_section_twips: Some(700),
+            ..DocumentLayout::default()
+        };
+        let document = Document {
+            blocks: Vec::new(),
+            layout: layout.clone(),
+            toc_entries: vec![TocEntry {
+                level: 2,
+                number: Some("1.1".to_string()),
+                title: "A very long section title for hanging indent behavior".to_string(),
+                page: Some("12".to_string()),
+            }],
+        };
+        let profile = RenderProfile::from_layout(&layout);
+        let paragraphs = generated_toc_paragraphs(&document, 0, &profile);
+        assert_eq!(paragraphs.len(), 1);
+
+        let xml = String::from_utf8(paragraphs[0].build()).expect("paragraph xml utf8");
+        assert!(xml.contains("w:left=\"1100\""), "xml: {xml}");
+        assert!(xml.contains("w:hanging=\"700\""), "xml: {xml}");
+    }
+
+    #[test]
+    fn linebreak_inline_renders_text_wrapping_break() {
+        let profile = RenderProfile::from_layout(&DocumentLayout::default());
+        let para = build_styled_body_paragraph(
+            &[
+                Inline::Text("Line 1".to_string()),
+                Inline::LineBreak,
+                Inline::Text("Line 2".to_string()),
+            ],
+            &crate::model::ParagraphStyle::default(),
+            &profile,
+        );
+        let xml = String::from_utf8(para.build()).expect("paragraph xml utf8");
+        assert!(xml.contains("w:br w:type=\"textWrapping\""), "xml: {xml}");
     }
 
     #[test]

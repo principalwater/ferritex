@@ -16,6 +16,9 @@ Rendering policy:
 | `\autocite{}` | ✅ v0.5 | Style-aware placeholder: footnote or inline (`[key]`) based on LaTeX style config |
 | Preamble (`\documentclass`, `\usepackage`, etc.) | ✅ v0.1 | Everything before `\begin{document}` is discarded; layout commands (`\vspace`, `\newpage`, `\tableofcontents`, etc.) skipped |
 | `%` comments | ✅ v0.1 | Stripped before parsing |
+| TOC leaders and right margin (`\setrmarg`, `\cft...leader`, `\cftdotfill`) | ✅ | Dot leaders and page tab stop are LaTeX-driven when defined |
+| TOC chapter prefix (`\cftchaptername`) | ✅ | Parsed and rendered for numbered chapter entries (for example `Chapter 1.` / `ГЛАВА 1.`) |
+| TOC indent/number width (`\cftsetindents{...}{...}{...}`, `\setlength{\cft...indent}{...}`, `\setlength{\cft...numwidth}{...}`) | ✅ | Parsed for chapter/section/subsection/subsubsection; rendered as level indent and hanging indent when `numwidth` is provided |
 | `\begin{tabular}…\end{tabular}`, `\begin{tblr}…\end{tblr}`, `\begin{longtblr}…\end{longtblr}` | ✅ v0.2 | Basic table layout |
 | `\tablesource{…}`, `\figuresource{…}` | ✅ v0.2 | Rendered as source line below table/figure |
 | `\begin{figure}…\end{figure}` + `\caption{}` | ✅ v0.2 | Caption text only (no image embed yet) |
@@ -28,3 +31,22 @@ Rendering policy:
 | Cross-references (`\ref`, resolved) | ⬜ v0.5 | Currently emitted as placeholder |
 | File inclusion (`\input{}`, `\include{}`) | ✅ v0.5 | Recursive expansion from entry `.tex` file |
 | PDF output | ⬜ v1.0 | |
+
+## TOC `cft*` coverage
+
+Mapped into `DocumentLayout` and rendered:
+- `\setrmarg{...}`
+- `\renewcommand{\cft...leader}{...}` (dot vs non-dot leader detection)
+- `\renewcommand*{\cftchaptername}{...}`
+- `\cftsetindents{chapter|section|subsection|subsubsection}{indent}{numwidth}`
+- `\setlength{\cftchapterindent}{...}`, `\setlength{\cftchapternumwidth}{...}`
+- `\setlength{\cftsectionindent}{...}`, `\setlength{\cftsectionnumwidth}{...}`
+- `\setlength{\cftsubsectionindent}{...}`, `\setlength{\cftsubsectionnumwidth}{...}`
+- `\setlength{\cftsubsubsectionindent}{...}`, `\setlength{\cftsubsubsectionnumwidth}{...}`
+
+Not mapped yet (fallback behavior applies):
+- `\cftbefore...skip` spacing controls
+- `\cft...font` / `\cft...pagefont`
+- `\cft...aftersnum` explicit separators for non-chapter levels
+- `\setpnumwidth{...}` (page number width box)
+- `\settoctitlefont{...}` and other title-level TOC font macros

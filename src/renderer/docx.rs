@@ -25,8 +25,6 @@ const DEFAULT_PAGE_MARGIN_LEFT_TWIPS: i32 = 1_138;
 const DEFAULT_PAGE_MARGIN_RIGHT_TWIPS: i32 = 288;
 const DEFAULT_PAGE_MARGIN_HEADER_TWIPS: i32 = 342;
 const DEFAULT_PAGE_MARGIN_FOOTER_TWIPS: i32 = 342;
-const HEADING_LEFT_INDENT_TWIPS: i32 = 0;
-
 const FONT_SIZE_BODY_HP: usize = 28;
 const FONT_SIZE_TABLE_HP: usize = 24;
 const FONT_SIZE_FOOTNOTE_HP: usize = 20;
@@ -80,6 +78,22 @@ struct RenderProfile {
     // ── Heading formatting ─────────────────────────────────────────────
     chapter_name: String,
     heading_uppercase: bool,
+    heading_alignment: AlignmentType,
+    heading_number_delimiter: String,
+
+    // ── List formatting ──────────────────────────────────────────────
+    list_left_indent_twips: i32,
+    list_hanging_indent_twips: i32,
+
+    // ── Caption alignment ────────────────────────────────────────────
+    caption_alignment: AlignmentType,
+
+    // ── Page size ────────────────────────────────────────────────────
+    page_width_twips: u32,
+    page_height_twips: u32,
+
+    // ── Graphics search paths ────────────────────────────────────────
+    graphics_search_paths: Vec<String>,
 
     // ── Document language ──────────────────────────────────────────────
     document_language: Option<String>,
@@ -143,19 +157,61 @@ impl RenderProfile {
                 .caption_label_table
                 .clone()
                 .unwrap_or_else(|| "Table".to_string()),
-            // Heading: no chapter prefix by default, no uppercase.
+            // Heading: no chapter prefix by default, no uppercase, left-aligned.
             chapter_name: layout.chapter_name.clone().unwrap_or_default(),
             heading_uppercase: layout.heading_uppercase.unwrap_or(false),
+            heading_alignment: parse_alignment(
+                layout.heading_alignment.as_deref().unwrap_or("left"),
+            ),
+            heading_number_delimiter: layout
+                .heading_number_delimiter
+                .clone()
+                .unwrap_or_else(|| ".".to_string()),
+            // List indentation: fallback matches body first-line indent.
+            list_left_indent_twips: layout
+                .list_left_indent_twips
+                .unwrap_or(LIST_LEVEL_LEFT_INDENT_TWIPS),
+            list_hanging_indent_twips: layout
+                .list_hanging_indent_twips
+                .unwrap_or(LIST_LEVEL_HANGING_TWIPS),
+            // Caption alignment: default centred.
+            caption_alignment: parse_alignment(
+                layout.caption_alignment.as_deref().unwrap_or("center"),
+            ),
+            // Page size: default A4.
+            page_width_twips: layout.page_width_twips.unwrap_or(PAGE_A4_WIDTH_TWIPS),
+            page_height_twips: layout.page_height_twips.unwrap_or(PAGE_A4_HEIGHT_TWIPS),
+            // Graphics search paths.
+            graphics_search_paths: if layout.graphics_search_paths.is_empty() {
+                vec![
+                    "images".to_string(),
+                    "figures".to_string(),
+                    "img".to_string(),
+                ]
+            } else {
+                layout.graphics_search_paths.clone()
+            },
             // Language: None → no explicit language tag in DOCX.
             document_language: layout.document_language.clone(),
         }
     }
 
     fn max_image_width_emu(&self) -> u32 {
-        let text_width_twips = PAGE_A4_WIDTH_TWIPS.saturating_sub(
+        let text_width_twips = self.page_width_twips.saturating_sub(
             self.page_margin_left_twips.max(0) as u32 + self.page_margin_right_twips.max(0) as u32,
         );
         text_width_twips * EMU_PER_TWIP * IMAGE_SAFE_SCALE_NUM / IMAGE_SAFE_SCALE_DEN
+    }
+}
+
+/// Convert a string alignment name to a docx-rs [`AlignmentType`].
+fn parse_alignment(s: &str) -> AlignmentType {
+    match s.to_lowercase().as_str() {
+        "left" | "flushleft" | "raggedright" => AlignmentType::Left,
+        "center" | "centering" => AlignmentType::Center,
+        "right" | "flushright" | "raggedleft" => AlignmentType::Right,
+        "both" | "justify" | "justified" => AlignmentType::Both,
+        _ => AlignmentType::Left,
     }
 }
 
@@ -271,7 +327,7 @@ pub fn render_docx_with_context(
             Block::List(list) => {
                 let num_id = next_num_id;
                 next_num_id += 1;
-                docx = register_numbering(docx, num_id, list.ordered);
+                docx = register_numbering(docx, num_id, list.ordered, &profile);
                 for item_inlines in &list.items {
                     let para = build_list_item(item_inlines, num_id, &profile);
                     docx = docx.add_paragraph(para);
@@ -303,7 +359,7 @@ fn create_styled_docx(profile: &RenderProfile) -> Docx {
     let fonts = build_run_fonts(profile);
 
     let mut docx = Docx::new()
-        .page_size(PAGE_A4_WIDTH_TWIPS, PAGE_A4_HEIGHT_TWIPS)
+        .page_size(profile.page_width_twips, profile.page_height_twips)
         .page_margin(page_margin)
         .default_size(profile.font_size_body_hp)
         .default_fonts(fonts.clone())
@@ -353,7 +409,7 @@ fn gost_styles(fonts: RunFonts, profile: &RenderProfile) -> Vec<Style> {
             .fonts(fonts.clone())
             .size(profile.font_size_caption_hp)
             .bold()
-            .align(AlignmentType::Center)
+            .align(profile.caption_alignment)
             .line_spacing(single_spacing())
             .indent(Some(0), None, None, None),
         Style::new("FootnoteText", StyleType::Paragraph)
@@ -401,9 +457,9 @@ fn heading_style_definition(
         .fonts(fonts)
         .size(profile.font_size_body_hp)
         .bold()
-        .align(AlignmentType::Both)
+        .align(profile.heading_alignment)
         .line_spacing(line_spacing(profile.body_line_spacing_twips))
-        .indent(Some(HEADING_LEFT_INDENT_TWIPS), None, None, None)
+        .indent(Some(0), None, None, None)
         .outline_lvl(outline_level)
 }
 
@@ -440,7 +496,7 @@ fn line_spacing(twips: i32) -> LineSpacing {
 // ---------------------------------------------------------------------------
 
 /// Register an AbstractNumbering + Numbering pair for one list instance.
-fn register_numbering(docx: Docx, num_id: usize, ordered: bool) -> Docx {
+fn register_numbering(docx: Docx, num_id: usize, ordered: bool, profile: &RenderProfile) -> Docx {
     let abs_id = num_id - 1; // abstract IDs are 0-based by convention
 
     let (format, text) = if ordered {
@@ -457,8 +513,10 @@ fn register_numbering(docx: Docx, num_id: usize, ordered: bool) -> Docx {
         LevelJc::new("left"),
     )
     .indent(
-        Some(LIST_LEVEL_LEFT_INDENT_TWIPS),
-        Some(SpecialIndentType::Hanging(LIST_LEVEL_HANGING_TWIPS)),
+        Some(profile.list_left_indent_twips),
+        Some(SpecialIndentType::Hanging(
+            profile.list_hanging_indent_twips,
+        )),
         None,
         None,
     );
@@ -535,7 +593,7 @@ fn caption_paragraph(
 ) -> Paragraph {
     let mut para = Paragraph::new()
         .style("Caption")
-        .align(AlignmentType::Center)
+        .align(profile.caption_alignment)
         .line_spacing(single_spacing())
         .indent(Some(0), None, None, None);
 
@@ -672,7 +730,9 @@ fn render_figure_block(
     let max_image_width_emu = profile.max_image_width_emu();
 
     if let Some(raw_path) = figure.image_path.as_deref() {
-        if let Some(resolved) = resolve_figure_path(raw_path, base_dir) {
+        if let Some(resolved) =
+            resolve_figure_path(raw_path, base_dir, &profile.graphics_search_paths)
+        {
             match read_figure_pic(&resolved, figure.width_permille, max_image_width_emu) {
                 Ok(pic) => {
                     docx = docx.add_paragraph(figure_image_paragraph(pic));
@@ -784,7 +844,11 @@ fn figure_placeholder_paragraph(path_hint: &str) -> Paragraph {
         )
 }
 
-fn resolve_figure_path(raw: &str, base_dir: Option<&Path>) -> Option<PathBuf> {
+fn resolve_figure_path(
+    raw: &str,
+    base_dir: Option<&Path>,
+    search_paths: &[String],
+) -> Option<PathBuf> {
     let raw = raw.trim().trim_matches('"');
     if raw.is_empty() {
         return None;
@@ -797,7 +861,7 @@ fn resolve_figure_path(raw: &str, base_dir: Option<&Path>) -> Option<PathBuf> {
         candidates.push(input.to_path_buf());
     } else if let Some(base_dir) = base_dir {
         candidates.push(base_dir.join(input));
-        for asset_dir in ["images", "figures", "img"] {
+        for asset_dir in search_paths {
             candidates.push(base_dir.join(asset_dir).join(input));
         }
     } else {
@@ -833,24 +897,25 @@ fn build_paragraph(block: &Block, profile: &RenderProfile) -> Paragraph {
             let style = heading_style(*level);
             let mut para = Paragraph::new()
                 .style(style)
-                .align(AlignmentType::Both)
+                .align(profile.heading_alignment)
                 .line_spacing(line_spacing(profile.body_line_spacing_twips))
-                .indent(Some(HEADING_LEFT_INDENT_TWIPS), None, None, None);
+                .indent(Some(0), None, None, None);
             let section_title = if *level == 1 && profile.heading_uppercase {
                 uppercase_inlines(title)
             } else {
                 title.to_vec()
             };
             if let Some(number) = number {
+                let delim = &profile.heading_number_delimiter;
                 let mut prefix = if *level == 1 && !profile.chapter_name.is_empty() {
                     let chap_name = if profile.heading_uppercase {
                         profile.chapter_name.to_uppercase()
                     } else {
                         profile.chapter_name.clone()
                     };
-                    format!("{} {}", chap_name, number.trim())
+                    format!("{} {}{}", chap_name, number.trim(), delim)
                 } else {
-                    format!("{}.", number.trim_end_matches('.'))
+                    format!("{}{}", number.trim_end_matches('.'), delim)
                 };
                 if !title.is_empty() {
                     prefix.push(' ');
@@ -1169,7 +1234,12 @@ mod tests {
         let image_path = images_dir.join("chart.png");
         std::fs::write(&image_path, b"fake").expect("failed to write image");
 
-        let resolved = resolve_figure_path("part2/chart", Some(&root));
+        let default_paths = vec![
+            "images".to_string(),
+            "figures".to_string(),
+            "img".to_string(),
+        ];
+        let resolved = resolve_figure_path("part2/chart", Some(&root), &default_paths);
         assert_eq!(resolved, Some(image_path.clone()));
 
         let _ = std::fs::remove_dir_all(&root);
@@ -1189,7 +1259,7 @@ mod tests {
         std::fs::write(&image_path, b"fake").expect("failed to write image");
 
         let absolute = image_path.to_string_lossy().to_string();
-        let resolved = resolve_figure_path(&absolute, None);
+        let resolved = resolve_figure_path(&absolute, None, &[]);
         assert_eq!(resolved, Some(image_path.clone()));
 
         let _ = std::fs::remove_dir_all(&root);

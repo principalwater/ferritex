@@ -44,10 +44,19 @@ pub struct DocumentLayout {
     /// Whether equation numbers are scoped per chapter (`true`) or global (`false`).
     pub equation_counter_within_chapter: Option<bool>,
 
+    // ── Page size ─────────────────────────────────────────────────────
+    /// Page width in twips. Parsed from `\geometry{paperwidth=...}` or
+    /// `\documentclass[a4paper]`.
+    pub page_width_twips: Option<u32>,
+    /// Page height in twips.
+    pub page_height_twips: Option<u32>,
+
     // ── Font ───────────────────────────────────────────────────────────
     /// Main (serif) font family name. Parsed from `\setmainfont{...}` or
     /// `\renewcommand{\rmdefault}{...}`.
     pub font_family_body: Option<String>,
+    /// Monospace font family name. Parsed from `\setmonofont{...}`.
+    pub font_family_mono: Option<String>,
     /// Body font size in half-points (e.g. `28` = 14 pt).
     /// Parsed from `\documentclass[14pt]` or `\fontsize`.
     pub font_size_body_hp: Option<usize>,
@@ -78,6 +87,27 @@ pub struct DocumentLayout {
     /// Whether chapter titles should be rendered in uppercase.
     /// Detected from `\MakeUppercase` in chapter format definitions.
     pub heading_uppercase: Option<bool>,
+    /// Heading alignment (e.g. `"left"`, `"center"`, `"both"`).
+    /// Detected from titlesec/memoir heading format commands.
+    pub heading_alignment: Option<String>,
+    /// Delimiter after heading number (e.g. `"."`, `""`, `":"`, `" —"`).
+    /// Parsed from `\thechapter` or heading format definitions.
+    pub heading_number_delimiter: Option<String>,
+
+    // ── List formatting ──────────────────────────────────────────────
+    /// Left indent for list items in twips.
+    pub list_left_indent_twips: Option<i32>,
+    /// Hanging indent for list items in twips.
+    pub list_hanging_indent_twips: Option<i32>,
+
+    // ── Caption alignment ────────────────────────────────────────────
+    /// Caption alignment (e.g. `"center"`, `"left"`, `"both"`).
+    /// Parsed from `\captionsetup{justification=centering}`.
+    pub caption_alignment: Option<String>,
+
+    // ── Graphics paths ───────────────────────────────────────────────
+    /// Search paths for included graphics, parsed from `\graphicspath{{./figures/}{./img/}}`.
+    pub graphics_search_paths: Vec<String>,
 
     // ── Document language ──────────────────────────────────────────────
     /// BCP-47 language tag (e.g. `"ru-RU"`, `"en-US"`).

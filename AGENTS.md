@@ -38,21 +38,26 @@ parser from effective LaTeX sources. Renderer constants serve only as
 preference. The following parameter categories must all follow this
 pattern — no exceptions:
 
-| Category | LaTeX source | Model field(s) | Renderer fallback |
-|----------|-------------|----------------|-------------------|
-| Font family | `\setmainfont`, `\renewcommand{\familydefault}`, `\documentclass` font options | `font_family_body`, `font_family_mono` | "Times New Roman" |
-| Font sizes | `\documentclass[14pt]`, `\fontsize`, `\footnotesize`, `\small` in `\captionsetup` | `font_size_body_hp`, `font_size_table_hp`, `font_size_footnote_hp`, `font_size_caption_hp` | 28, 24, 20, 28 (half-points) |
-| Paragraph indent | `\setlength{\parindent}{...}` | `body_first_line_indent_twips` | 709 (1.25 cm) |
-| Heading format | `\chaptername`, uppercase macros, numbering delimiter, alignment | `chapter_name`, `heading_uppercase`, `heading_alignment`, `heading_number_delimiter` | "", false, Left, "." |
-| Caption labels | `\renewcommand{\figurename}{...}`, `\renewcommand{\tablename}{...}` | `caption_label_figure`, `caption_label_table` | "Figure", "Table" |
-| Page size | `\geometry` `paperwidth`/`paperheight`, `\documentclass[a4paper]` | `page_width_twips`, `page_height_twips` | A4 (11906 × 16838 tw) |
-| Language | babel/polyglossia main language | `document_language` | None (no language tag) |
+| Category | LaTeX source | Model field(s) | Renderer fallback | Status |
+|----------|-------------|----------------|-------------------|--------|
+| Page margins | `\geometry{top=…, bottom=…, left=…, right=…}` | `page_margin_top/bottom/left/right/header/footer_twips` | GOST: 20/20/25/10 mm | ✅ parsed + rendered |
+| Page size | `\geometry` `paperwidth`/`paperheight`, `\documentclass[a4paper]` | `page_width_twips`, `page_height_twips` | A4 (11906 × 16838 tw) | ⬜ not yet in model |
+| Line spacing | `\OnehalfSpacing`, `\setSpacing{1.5}`, `\linespread` | `body_line_spacing_twips` | 360 (1.5) | ✅ parsed + rendered |
+| Float counter scoping | `\setcounter{contnumfig/contnumtab/contnumeq}{0\|1}` | `figure/table/equation_counter_within_chapter` | true (per-chapter) | ✅ parsed + rendered (equation: parsed, not yet rendered) |
+| Font family | `\setmainfont` (incl. `\ifnumequal` conditional), `\setmonofont` | `font_family_body`, `font_family_mono` | "Times New Roman" | ✅ body parsed + rendered; ⬜ mono not yet in model |
+| Font sizes | `\documentclass[14pt]`, `\SetTblrInner{font=…}`, `\captionsetup{font=…}` | `font_size_body_hp`, `font_size_table_hp`, `font_size_footnote_hp`, `font_size_caption_hp` | 28, 24, 20, 28 (half-points) | ✅ body parsed; ✅ table/footnote/caption parsed |
+| Paragraph indent | `\setlength{\parindent}{…}` | `body_first_line_indent_twips` | 709 (1.25 cm) | ✅ parsed + rendered |
+| Heading format | `\chaptername`, `\MakeUppercase`, numbering delimiter, alignment | `chapter_name`, `heading_uppercase`, `heading_alignment`, `heading_number_delimiter` | "", false, Left, "." | ✅ name+uppercase parsed; ⬜ alignment+delimiter not yet in model |
+| Caption labels | `\renewcommand{\figurename}{…}`, `\renewcommand{\tablename}{…}` | `caption_label_figure`, `caption_label_table` | "Figure", "Table" | ✅ parsed + rendered |
+| Language | babel/polyglossia main language | `document_language` | None (no language tag) | ✅ parsed + rendered |
 
-**Test requirement**: every new `DocumentLayout` field must have a
+**Test requirement**: every `DocumentLayout` field must have a
 unit test in `parser/latex.rs` that:
 1. Verifies extraction from a representative LaTeX snippet.
-2. Verifies `None` when the command is absent.
-3. Verifies the renderer fallback default produces valid output.
+2. Verifies `None`/default when the command is absent.
+3. Verifies the renderer produces valid DOCX with only fallback defaults
+   (i.e. a minimal document without the LaTeX command must not panic and
+   must use the documented fallback value).
 
 ## DOCX structure notes
 - DOCX is a ZIP containing XML files (word/document.xml, etc.)

@@ -331,6 +331,27 @@ fn extract_layout_settings(source: &str) -> DocumentLayout {
     // ── Body font size from \documentclass options ─────────────────────
     layout.font_size_body_hp = extract_documentclass_fontsize_hp(source);
 
+    // ── Table body font size ─────────────────────────────────────────
+    // \SetTblrInner{font=\footnotesize} → 12pt at 14pt base
+    layout.font_size_table_hp = extract_tblr_inner_font_size_hp(source, &layout);
+
+    // ── Caption font size ────────────────────────────────────────────
+    // \captionsetup[table]{font={normalsize,bf}} or \captionsetup[figure]{font={normalsize,bf}}
+    layout.font_size_caption_hp = extract_captionsetup_font_size_hp(source, &layout);
+
+    // ── Footnote font size ───────────────────────────────────────────
+    // Derive from body size: 14pt → 10pt, 12pt → 8pt (LaTeX convention: body − 4pt).
+    if layout.font_size_footnote_hp.is_none()
+        && let Some(body_hp) = layout.font_size_body_hp
+    {
+        // Standard LaTeX \footnotesize is body − 4pt (in half-points: − 8).
+        let footnote_hp = body_hp.saturating_sub(8);
+        if footnote_hp >= 12 {
+            // Minimum 6pt
+            layout.font_size_footnote_hp = Some(footnote_hp);
+        }
+    }
+
     // ── Paragraph indent ───────────────────────────────────────────────
     if let Some(indent_twips) = extract_setlength_value_twips(source, "parindent") {
         layout.body_first_line_indent_twips = Some(indent_twips);
@@ -437,6 +458,114 @@ fn extract_documentclass_fontsize_hp(source: &str) -> Option<usize> {
             && let Ok(pt) = num_str.parse::<usize>()
         {
             return Some(pt * 2); // half-points
+        }
+    }
+    None
+}
+
+/// Map a LaTeX font-size command name to half-points relative to body size.
+///
+/// Standard LaTeX size commands at 14pt base:
+/// `\tiny`=10pt, `\scriptsize`=14pt, `\footnotesize`=12pt,
+/// `\small`=13pt, `\normalsize`=14pt, `\large`=17pt.
+///
+/// We express sizes in absolute half-points using the body size as anchor.
+fn latex_fontsize_cmd_to_hp(cmd: &str, body_hp: usize) -> Option<usize> {
+    // Offsets in half-points relative to body size.
+    let hp = match cmd {
+        "tiny" => body_hp.saturating_sub(8).max(10), // body − 4pt
+        "scriptsize" => body_hp.saturating_sub(4).max(12), // body − 2pt
+        "footnotesize" => body_hp.saturating_sub(4).max(12), // body − 2pt (at 14pt base → 12pt)
+        "small" => body_hp.saturating_sub(2).max(14), // body − 1pt
+        "normalsize" => body_hp,
+        "large" => body_hp + 6,  // body + 3pt
+        "Large" => body_hp + 10, // body + 5pt
+        _ => return None,
+    };
+    Some(hp)
+}
+
+/// Extract table body font size from `\SetTblrInner{font=\footnotesize}`.
+/// Returns size in half-points.
+fn extract_tblr_inner_font_size_hp(
+    source: &str,
+    layout: &crate::model::DocumentLayout,
+) -> Option<usize> {
+    let body_hp = layout.font_size_body_hp.unwrap_or(28);
+    // Look for \SetTblrInner{font=\footnotesize} or similar.
+    let needle = "\\SetTblrInner";
+    let pos = source.find(needle)?;
+    let rest = &source[pos + needle.len()..];
+    let rest = rest.trim_start();
+    if !rest.starts_with('{') {
+        return None;
+    }
+    let close = rest.find('}')?;
+    let inner = &rest[1..close];
+    // Parse font=\cmd
+    for kv in inner.split(',') {
+        let kv = kv.trim();
+        if let Some(val) = kv.strip_prefix("font=") {
+            let val = val.trim().trim_start_matches('\\');
+            return latex_fontsize_cmd_to_hp(val, body_hp);
+        }
+    }
+    None
+}
+
+/// Extract caption font size from `\captionsetup[table]{font={normalsize,bf}}`.
+/// Looks at both `[table]` and `[figure]` variants; returns the first match.
+/// Returns size in half-points.
+fn extract_captionsetup_font_size_hp(
+    source: &str,
+    layout: &crate::model::DocumentLayout,
+) -> Option<usize> {
+    let body_hp = layout.font_size_body_hp.unwrap_or(28);
+    let needle = "\\captionsetup";
+    let mut pos = 0usize;
+    while let Some(rel) = source[pos..].find(needle) {
+        let start = pos + rel + needle.len();
+        let mut cur = start;
+        let rest = &source[cur..];
+        let rest = rest.trim_start();
+        cur = source.len() - rest.len();
+        // Skip optional [table] or [figure]
+        if rest.starts_with('[') {
+            if let Some(cb) = rest.find(']') {
+                cur += cb + 1;
+            } else {
+                pos = start;
+                continue;
+            }
+        }
+        let rest = source[cur..].trim_start();
+        cur = source.len() - rest.len();
+        if !rest.starts_with('{') {
+            pos = start;
+            continue;
+        }
+        // Find matching }
+        if let Some(body_len) = braced_len(&source[cur..]) {
+            let body = &source[cur + 1..cur + body_len - 1];
+            // Look for font={...} or font=size
+            for kv in body.split(',') {
+                let kv = kv.trim();
+                if let Some(val) = kv.strip_prefix("font=") {
+                    let val = val.trim();
+                    // font={normalsize,bf} or font=normalsize
+                    let val = val.trim_start_matches('{').trim_end_matches('}');
+                    // Extract the size command (ignore bf, it, etc.)
+                    for part in val.split(',') {
+                        let part = part.trim().trim_start_matches('\\');
+                        if let Some(hp) = latex_fontsize_cmd_to_hp(part, body_hp) {
+                            return Some(hp);
+                        }
+                    }
+                }
+            }
+            pos = cur + body_len;
+        } else {
+            pos = start;
         }
     }
     None
@@ -5525,6 +5654,61 @@ Body.";
         let src = "\\documentclass{article}\nBody.";
         let doc = parse_latex(src);
         assert_eq!(doc.layout.font_size_body_hp, None);
+    }
+
+    #[test]
+    fn test_extract_table_font_size_from_settblrinner() {
+        let src = "\\documentclass[14pt]{memoir}\n\\SetTblrInner{font=\\footnotesize}\nBody.";
+        let doc = parse_latex(src);
+        // footnotesize at 14pt base = 12pt = 24 hp
+        assert_eq!(doc.layout.font_size_table_hp, Some(24));
+    }
+
+    #[test]
+    fn test_extract_table_font_size_absent() {
+        let src = "\\documentclass[14pt]{memoir}\nBody.";
+        let doc = parse_latex(src);
+        assert_eq!(doc.layout.font_size_table_hp, None);
+    }
+
+    #[test]
+    fn test_extract_caption_font_size_from_captionsetup() {
+        let src =
+            "\\documentclass[14pt]{memoir}\n\\captionsetup[table]{font={normalsize,bf}}\nBody.";
+        let doc = parse_latex(src);
+        // normalsize at 14pt base = 14pt = 28 hp
+        assert_eq!(doc.layout.font_size_caption_hp, Some(28));
+    }
+
+    #[test]
+    fn test_extract_caption_font_size_small() {
+        let src = "\\documentclass[14pt]{memoir}\n\\captionsetup{font=small}\nBody.";
+        let doc = parse_latex(src);
+        // small at 14pt base = 13pt = 26 hp
+        assert_eq!(doc.layout.font_size_caption_hp, Some(26));
+    }
+
+    #[test]
+    fn test_extract_caption_font_size_absent() {
+        let src = "\\documentclass[14pt]{memoir}\nBody.";
+        let doc = parse_latex(src);
+        assert_eq!(doc.layout.font_size_caption_hp, None);
+    }
+
+    #[test]
+    fn test_extract_footnote_font_size_derived_from_body() {
+        let src = "\\documentclass[14pt]{memoir}\nBody.";
+        let doc = parse_latex(src);
+        // 14pt body → footnote = 14 − 4 = 10pt = 20 hp
+        assert_eq!(doc.layout.font_size_footnote_hp, Some(20));
+    }
+
+    #[test]
+    fn test_extract_footnote_font_size_derived_from_12pt_body() {
+        let src = "\\documentclass[12pt]{article}\nBody.";
+        let doc = parse_latex(src);
+        // 12pt body → footnote = 12 − 4 = 8pt = 16 hp
+        assert_eq!(doc.layout.font_size_footnote_hp, Some(16));
     }
 
     #[test]

@@ -242,6 +242,7 @@ pub fn render_docx_with_context(
                         &profile.caption_label_table,
                         Some(table_number.as_str()),
                         &t.caption,
+                        &profile,
                     ));
                 }
                 docx = docx.add_table(build_table(t, &profile));
@@ -475,7 +476,8 @@ fn build_list_item(inlines: &[Inline], num_id: usize, profile: &RenderProfile) -
         .align(AlignmentType::Both)
         .line_spacing(line_spacing(profile.body_line_spacing_twips))
         .numbering(NumberingId::new(num_id), IndentLevel::new(0));
-    for run in inline_runs(inlines, false, false) {
+    for run in inline_runs_with_footnote_size(inlines, false, false, profile.font_size_footnote_hp)
+    {
         para = para.add_run(run);
     }
     para
@@ -499,7 +501,12 @@ fn build_table(table: &Table, profile: &RenderProfile) -> DocxTable {
                         .align(AlignmentType::Both)
                         .line_spacing(single_spacing())
                         .indent(Some(0), Some(SpecialIndentType::FirstLine(0)), None, None);
-                    for run in inline_runs(&cell.content, false, false) {
+                    for run in inline_runs_with_footnote_size(
+                        &cell.content,
+                        false,
+                        false,
+                        profile.font_size_footnote_hp,
+                    ) {
                         para = para.add_run(run.size(profile.font_size_table_hp));
                     }
                     DocxCell::new().add_paragraph(para)
@@ -520,7 +527,12 @@ fn float_number(chapter_no: usize, local_no: usize) -> String {
 }
 
 /// A centred bold paragraph used for captions.
-fn caption_paragraph(kind: &str, number: Option<&str>, inlines: &[Inline]) -> Paragraph {
+fn caption_paragraph(
+    kind: &str,
+    number: Option<&str>,
+    inlines: &[Inline],
+    profile: &RenderProfile,
+) -> Paragraph {
     let mut para = Paragraph::new()
         .style("Caption")
         .align(AlignmentType::Center)
@@ -536,7 +548,7 @@ fn caption_paragraph(kind: &str, number: Option<&str>, inlines: &[Inline]) -> Pa
         }
     }
 
-    for run in inline_runs(inlines, true, false) {
+    for run in inline_runs_with_footnote_size(inlines, true, false, profile.font_size_footnote_hp) {
         para = para.add_run(run);
     }
     para
@@ -572,7 +584,8 @@ fn source_paragraph(inlines: &[Inline], profile: &RenderProfile) -> Paragraph {
         .align(AlignmentType::Both)
         .line_spacing(line_spacing(profile.body_line_spacing_twips))
         .indent(Some(0), None, None, None);
-    for run in inline_runs(inlines, false, false) {
+    for run in inline_runs_with_footnote_size(inlines, false, false, profile.font_size_footnote_hp)
+    {
         para = para.add_run(run);
     }
     para
@@ -692,6 +705,7 @@ fn render_figure_block(
             &profile.caption_label_figure,
             figure_number,
             &figure.caption,
+            profile,
         ));
     }
 
@@ -843,7 +857,12 @@ fn build_paragraph(block: &Block, profile: &RenderProfile) -> Paragraph {
                 }
                 para = para.add_run(Run::new().add_text(prefix).bold());
             }
-            for run in inline_runs(&section_title, true, false) {
+            for run in inline_runs_with_footnote_size(
+                &section_title,
+                true,
+                false,
+                profile.font_size_footnote_hp,
+            ) {
                 para = para.add_run(run);
             }
             para
@@ -861,7 +880,9 @@ fn build_paragraph(block: &Block, profile: &RenderProfile) -> Paragraph {
                     None,
                     None,
                 );
-            for run in inline_runs(inlines, false, false) {
+            for run in
+                inline_runs_with_footnote_size(inlines, false, false, profile.font_size_footnote_hp)
+            {
                 para = para.add_run(run);
             }
             para
@@ -886,10 +907,6 @@ fn heading_style(level: u8) -> &'static str {
 /// docx-rs [`Run`]s, inheriting bold/italic state from parent nodes.
 ///
 /// `footnote_hp` controls the font size applied inside footnote paragraphs.
-fn inline_runs(inlines: &[Inline], bold: bool, italic: bool) -> Vec<Run> {
-    inline_runs_with_footnote_size(inlines, bold, italic, FONT_SIZE_FOOTNOTE_HP)
-}
-
 fn inline_runs_with_footnote_size(
     inlines: &[Inline],
     bold: bool,

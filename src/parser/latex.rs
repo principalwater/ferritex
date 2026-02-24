@@ -442,6 +442,15 @@ fn extract_layout_settings(source: &str) -> DocumentLayout {
     // ── Document language ──────────────────────────────────────────────
     layout.document_language = extract_document_language(source);
 
+    // ── Chapter name fallback from chapter-style counters ───────────────
+    // Some memoir templates enable chapter-name rendering via counters
+    // (e.g. chapstyle=1 + \@chapapp) without explicit \renewcommand{\chaptername}{...}.
+    // Derive the visible chapter prefix from language defaults in that case.
+    if layout.chapter_name.is_none() {
+        layout.chapter_name =
+            extract_chapter_name_from_chapstyle(source, layout.document_language.as_deref());
+    }
+
     layout
 }
 
@@ -865,54 +874,17 @@ fn extract_setmainfont_conditional_for(
 fn extract_heading_alignment(source: &str) -> Option<String> {
     let mut last = None;
 
-    // titlesec: \titleformat{\chapter}[...]{\centering\bfseries}{...}{...}{...}
-    let needle = "\\titleformat";
-    let mut pos = 0usize;
-    while let Some(rel) = source[pos..].find(needle) {
-        let start = pos + rel + needle.len();
-        let mut cur = start;
-        if cur < source.len() && source.as_bytes()[cur] == b'*' {
-            cur += 1;
-        }
-        while cur < source.len() && source.as_bytes()[cur].is_ascii_whitespace() {
-            cur += 1;
-        }
-
-        let Some(target_len) = braced_len(&source[cur..]) else {
-            pos = start;
-            continue;
-        };
-        let target = source[cur + 1..cur + target_len - 1].trim();
-        cur += target_len;
-        if !target.contains("\\chapter") {
-            pos = cur;
-            continue;
-        }
-
-        while cur < source.len() && source.as_bytes()[cur].is_ascii_whitespace() {
-            cur += 1;
-        }
-        if cur < source.len() && source.as_bytes()[cur] == b'[' {
-            if let Some(shape_len) = bracketed_len(&source[cur..]) {
-                cur += shape_len;
-            } else {
-                pos = start;
-                continue;
+    // titlesec: \titleformat{\chapter}[...]{...}{...}{...}{...}
+    // Also supports selector form: \titleformat{name=\chapter}[...]{...}
+    for args in extract_titleformat_chapter_arguments(source) {
+        // Prefer explicit format/before/after code arguments where alignment macros appear.
+        for idx in [0usize, 3usize, 4usize] {
+            if let Some(arg) = args.get(idx)
+                && let Some(alignment) = detect_alignment_directive(arg)
+            {
+                last = Some(alignment.to_string());
             }
         }
-        while cur < source.len() && source.as_bytes()[cur].is_ascii_whitespace() {
-            cur += 1;
-        }
-
-        let Some(format_len) = braced_len(&source[cur..]) else {
-            pos = cur;
-            continue;
-        };
-        let format = &source[cur + 1..cur + format_len - 1];
-        if let Some(alignment) = detect_alignment_directive(format) {
-            last = Some(alignment.to_string());
-        }
-        pos = cur + format_len;
     }
 
     // memoir/custom chapter format definitions.
@@ -931,6 +903,16 @@ fn extract_heading_alignment(source: &str) -> Option<String> {
         }
     }
 
+    // dissertation/memoir template convention:
+    // \setcounter{headingalign}{0} => centered headings,
+    // other values => left-aligned headings.
+    if last.is_none()
+        && source.contains("headingalign")
+        && let Some(value) = extract_last_setcounter_value(source, "headingalign")
+    {
+        last = Some(if value == 0 { "center" } else { "left" }.to_string());
+    }
+
     last
 }
 
@@ -940,71 +922,43 @@ fn extract_heading_alignment(source: &str) -> Option<String> {
 /// - `\renewcommand{\thechapter}{\arabic{chapter}.}` → `"."`
 /// - `\renewcommand{\thechapter}{\arabic{chapter}}` → `""`
 fn extract_heading_number_delimiter(source: &str) -> Option<String> {
+    // dissertation/memoir template convention:
+    // headingdelim > 0 => dot delimiter, headingdelim == 0 => no delimiter.
+    if source.contains("headingdelim")
+        && let Some(value) = extract_last_setcounter_value(source, "headingdelim")
+    {
+        return Some(if value > 0 {
+            ".".to_string()
+        } else {
+            String::new()
+        });
+    }
+
     if let Some(chapter_fmt) = extract_renewcommand_value(source, "thechapter")
         && let Some(delim) = extract_heading_number_delimiter_from_expr(&chapter_fmt)
     {
         return Some(delim);
     }
 
+    if let Some(after_num) = extract_renewcommand_value(source, "afterchapternum") {
+        return Some(normalize_delimiter_suffix(&after_num));
+    }
+
+    if let Some(label_fmt) = extract_last_macro_braced_argument(source, "\\titlelabel") {
+        if let Some(delim) = extract_heading_number_delimiter_from_expr(&label_fmt) {
+            return Some(delim);
+        }
+        return Some(normalize_delimiter_suffix(&label_fmt));
+    }
+
     let mut last = None;
-    let needle = "\\titleformat";
-    let mut pos = 0usize;
-    while let Some(rel) = source[pos..].find(needle) {
-        let start = pos + rel + needle.len();
-        let mut cur = start;
-        if cur < source.len() && source.as_bytes()[cur] == b'*' {
-            cur += 1;
-        }
-        while cur < source.len() && source.as_bytes()[cur].is_ascii_whitespace() {
-            cur += 1;
-        }
-
-        let Some(target_len) = braced_len(&source[cur..]) else {
-            pos = start;
-            continue;
-        };
-        let target = source[cur + 1..cur + target_len - 1].trim();
-        cur += target_len;
-        if !target.contains("\\chapter") {
-            pos = cur;
-            continue;
-        }
-
-        while cur < source.len() && source.as_bytes()[cur].is_ascii_whitespace() {
-            cur += 1;
-        }
-        if cur < source.len() && source.as_bytes()[cur] == b'[' {
-            if let Some(shape_len) = bracketed_len(&source[cur..]) {
-                cur += shape_len;
-            } else {
-                pos = start;
-                continue;
-            }
-        }
-        while cur < source.len() && source.as_bytes()[cur].is_ascii_whitespace() {
-            cur += 1;
-        }
-
-        // Skip format argument.
-        let Some(format_len) = braced_len(&source[cur..]) else {
-            pos = cur;
-            continue;
-        };
-        cur += format_len;
-        while cur < source.len() && source.as_bytes()[cur].is_ascii_whitespace() {
-            cur += 1;
-        }
-
-        // Read label argument where number template usually lives.
-        let Some(label_len) = braced_len(&source[cur..]) else {
-            pos = cur;
-            continue;
-        };
-        let label = &source[cur + 1..cur + label_len - 1];
-        if let Some(delim) = extract_heading_number_delimiter_from_expr(label) {
+    for args in extract_titleformat_chapter_arguments(source) {
+        // titlesec label argument (2nd braced argument after format) carries number template.
+        if let Some(label) = args.get(1)
+            && let Some(delim) = extract_heading_number_delimiter_from_expr(label)
+        {
             last = Some(delim);
         }
-        pos = cur + label_len;
     }
 
     last
@@ -1136,6 +1090,7 @@ fn detect_alignment_directive(src: &str) -> Option<&'static str> {
 
 fn extract_heading_number_delimiter_from_expr(expr: &str) -> Option<String> {
     let tokens = [
+        "\\thetitle",
         "\\thechapter",
         "\\arabic{chapter}",
         "\\Roman{chapter}",
@@ -1181,13 +1136,138 @@ fn normalize_caption_justification(raw: &str) -> Option<&'static str> {
 
 fn normalize_graphics_path_entry(raw: &str) -> Option<String> {
     let mut path = raw.trim().replace('\\', "/");
-    while let Some(stripped) = path.strip_prefix("./") {
+    while let Some(stripped) = path
+        .strip_prefix(".//")
+        .or_else(|| path.strip_prefix("./"))
+        .or_else(|| path.strip_prefix(".\\"))
+    {
         path = stripped.to_string();
+    }
+    while path.contains("//") {
+        path = path.replace("//", "/");
     }
     if path.is_empty() || path == "." {
         return None;
     }
     Some(path)
+}
+
+fn extract_chapter_name_from_chapstyle(source: &str, language: Option<&str>) -> Option<String> {
+    let chapstyle = extract_last_setcounter_value(source, "chapstyle")?;
+    if chapstyle <= 0 {
+        return None;
+    }
+
+    let uses_chapter_name_macro = source.contains("\\@chapapp")
+        || source.contains("\\chaptername\\space")
+        || source.contains("\\printchaptername");
+    if !uses_chapter_name_macro {
+        return None;
+    }
+
+    default_chapter_name_for_language(language).map(|name| name.to_string())
+}
+
+fn default_chapter_name_for_language(language: Option<&str>) -> Option<&'static str> {
+    match language {
+        Some("ru-RU") => Some("Глава"),
+        Some("uk-UA") => Some("Розділ"),
+        Some("be-BY") => Some("Раздзел"),
+        Some("kk-KZ") => Some("Тарау"),
+        Some("en-US") | Some("en-GB") => Some("Chapter"),
+        Some("de-DE") => Some("Kapitel"),
+        Some("fr-FR") => Some("Chapitre"),
+        Some("es-ES") => Some("Capítulo"),
+        Some("it-IT") => Some("Capitolo"),
+        Some("pt-BR") => Some("Capítulo"),
+        Some("tr-TR") => Some("Bölüm"),
+        _ => None,
+    }
+}
+
+/// Extract braced argument lists for chapter-related `\titleformat` commands.
+///
+/// Supports:
+/// - `\titleformat{\chapter}[shape]{format}{label}{sep}{before}[after]`
+/// - `\titleformat*{\chapter}{format}`
+/// - `\titleformat{name=\chapter}[shape]{format}{label}{sep}{before}[after]`
+fn extract_titleformat_chapter_arguments(source: &str) -> Vec<Vec<String>> {
+    let mut all_args = Vec::new();
+    let needle = "\\titleformat";
+    let mut pos = 0usize;
+
+    while let Some(rel) = source[pos..].find(needle) {
+        let start = pos + rel + needle.len();
+        let mut cur = start;
+        if cur < source.len() && source.as_bytes()[cur] == b'*' {
+            cur += 1;
+        }
+        while cur < source.len() && source.as_bytes()[cur].is_ascii_whitespace() {
+            cur += 1;
+        }
+
+        let mut is_chapter = false;
+        if cur < source.len() && source.as_bytes()[cur] == b'{' {
+            let Some(target_len) = braced_len(&source[cur..]) else {
+                pos = start;
+                continue;
+            };
+            let target = source[cur + 1..cur + target_len - 1].trim();
+            is_chapter = titleformat_target_mentions_chapter(target);
+            cur += target_len;
+        } else if cur < source.len() && source.as_bytes()[cur] == b'[' {
+            let Some(selector_len) = bracketed_len(&source[cur..]) else {
+                pos = start;
+                continue;
+            };
+            let selector = source[cur + 1..cur + selector_len - 1].trim();
+            is_chapter = titleformat_target_mentions_chapter(selector);
+            cur += selector_len;
+        }
+
+        if !is_chapter {
+            pos = cur.max(start);
+            continue;
+        }
+
+        while cur < source.len() && source.as_bytes()[cur].is_ascii_whitespace() {
+            cur += 1;
+        }
+        if cur < source.len() && source.as_bytes()[cur] == b'[' {
+            if let Some(shape_len) = bracketed_len(&source[cur..]) {
+                cur += shape_len;
+            } else {
+                pos = start;
+                continue;
+            }
+        }
+
+        let mut args = Vec::new();
+        loop {
+            while cur < source.len() && source.as_bytes()[cur].is_ascii_whitespace() {
+                cur += 1;
+            }
+            if cur >= source.len() || source.as_bytes()[cur] != b'{' {
+                break;
+            }
+            let Some(arg_len) = braced_len(&source[cur..]) else {
+                break;
+            };
+            args.push(source[cur + 1..cur + arg_len - 1].to_string());
+            cur += arg_len;
+        }
+
+        if !args.is_empty() {
+            all_args.push(args);
+        }
+        pos = cur.max(start);
+    }
+
+    all_args
+}
+
+fn titleformat_target_mentions_chapter(target: &str) -> bool {
+    target.contains("\\chapter")
 }
 
 fn extract_last_macro_braced_argument(source: &str, macro_name: &str) -> Option<String> {
@@ -6225,6 +6305,28 @@ Body.";
     }
 
     #[test]
+    fn test_extract_chaptername_from_chapstyle_counter_and_language() {
+        let src = "\
+\\setmainlanguage{russian}
+\\setcounter{chapstyle}{1}
+\\renewcommand*{\\printchaptername}{\\MakeUppercase{\\@chapapp}}
+Body.";
+        let doc = parse_latex(src);
+        assert_eq!(doc.layout.chapter_name.as_deref(), Some("Глава"));
+    }
+
+    #[test]
+    fn test_extract_chaptername_from_chapstyle_disabled_returns_none() {
+        let src = "\
+\\setmainlanguage{russian}
+\\setcounter{chapstyle}{0}
+\\renewcommand*{\\printchaptername}{\\MakeUppercase{\\@chapapp}}
+Body.";
+        let doc = parse_latex(src);
+        assert_eq!(doc.layout.chapter_name, None);
+    }
+
+    #[test]
     fn test_extract_heading_uppercase_from_makeupper_in_chaptertitle() {
         let src = "\\renewcommand{\\printchaptertitle}[1]{\\MakeUppercase{#1}}\nBody.";
         let doc = parse_latex(src);
@@ -6338,6 +6440,24 @@ Body.";
     }
 
     #[test]
+    fn test_extract_heading_alignment_from_titleformat_name_selector_before_code() {
+        let src = "\\titleformat{name=\\chapter}[display]{\\bfseries}{\\thechapter}{1em}{\\filcenter}\nBody.";
+        assert_eq!(extract_heading_alignment(src), Some("center".to_string()));
+    }
+
+    #[test]
+    fn test_extract_heading_alignment_from_titleformat_starred() {
+        let src = "\\titleformat*{\\chapter}{\\filcenter\\bfseries}\nBody.";
+        assert_eq!(extract_heading_alignment(src), Some("center".to_string()));
+    }
+
+    #[test]
+    fn test_extract_heading_alignment_from_headingalign_counter() {
+        let src = "\\newcounter{headingalign}\n\\setcounter{headingalign}{0}\nBody.";
+        assert_eq!(extract_heading_alignment(src), Some("center".to_string()));
+    }
+
+    #[test]
     fn test_extract_heading_number_delimiter_from_thechapter_dot() {
         let src = "\\renewcommand{\\thechapter}{\\arabic{chapter}.}\nBody.";
         assert_eq!(extract_heading_number_delimiter(src), Some(".".to_string()));
@@ -6353,6 +6473,18 @@ Body.";
     fn test_extract_heading_number_delimiter_from_titleformat_label() {
         let src = "\\titleformat{\\chapter}[display]{\\bfseries}{\\thechapter:}{1em}{}\nBody.";
         assert_eq!(extract_heading_number_delimiter(src), Some(":".to_string()));
+    }
+
+    #[test]
+    fn test_extract_heading_number_delimiter_from_headingdelim_counter() {
+        let src = "\\newcounter{headingdelim}\n\\setcounter{headingdelim}{0}\nBody.";
+        assert_eq!(extract_heading_number_delimiter(src), Some(String::new()));
+    }
+
+    #[test]
+    fn test_extract_heading_number_delimiter_from_titlelabel() {
+        let src = "\\titlelabel{\\thetitle.\\quad}\nBody.";
+        assert_eq!(extract_heading_number_delimiter(src), Some(".".to_string()));
     }
 
     #[test]
@@ -6403,5 +6535,29 @@ Body.";
     #[test]
     fn test_extract_graphicspath_absent() {
         assert!(extract_graphicspath("Body.").is_empty());
+    }
+
+    #[test]
+    fn test_extract_graphicspath_normalizes_windows_style_and_deduplicates() {
+        let src = "\\graphicspath{{.\\\\figures\\\\}{./figures/}{./img//}}\nBody.";
+        assert_eq!(
+            extract_graphicspath(src),
+            vec!["figures/".to_string(), "img/".to_string()]
+        );
+    }
+
+    #[test]
+    fn test_extract_memoir_heading_controls_from_counters() {
+        let src = "\
+\\setmainlanguage{russian}
+\\setcounter{chapstyle}{1}
+\\setcounter{headingalign}{1}
+\\setcounter{headingdelim}{1}
+\\renewcommand*{\\printchaptername}{\\MakeUppercase{\\@chapapp}}
+Body.";
+        let doc = parse_latex(src);
+        assert_eq!(doc.layout.chapter_name.as_deref(), Some("Глава"));
+        assert_eq!(doc.layout.heading_alignment.as_deref(), Some("left"));
+        assert_eq!(doc.layout.heading_number_delimiter.as_deref(), Some("."));
     }
 }

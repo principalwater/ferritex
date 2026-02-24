@@ -180,8 +180,8 @@ Renderer tests added (~6):
 
 ### What is NOT done yet in v0.9 (to do next session)
 
-1. **CI/merge wait**: PR #24 is open with `bot-merge`; wait for green CI and repository gates.
-2. **Optional manual visual validation** on large external LaTeX corpus: check list wrapping, source lines, bibliography heading, first-page numbering.
+1. **Optional manual visual validation** on large external LaTeX corpus: check list wrapping, source lines, bibliography heading, first-page numbering.
+2. **Post-v0.9 cleanup**: keep test layout maintainable (shared fixture/integration helpers under `tests/`).
 
 ### Deferred (not in v0.9 scope)
 
@@ -208,3 +208,6 @@ Active plan: `agent_docs/plans/v0.9-visual-parity.md`
 | `tests/unit/parser_latex_tests.rs` | parser unit tests moved out of `src/parser/latex.rs` |
 | `tests/unit/renderer_docx_tests.rs` | renderer unit tests moved out of `src/renderer/docx.rs` |
 | `tests/unit/README.md` | documents new test layout and rationale |
+| `tests/common/mod.rs` | shared integration test helpers (fixture loading, DOCX rendering, ZIP/XML readers) |
+| `tests/integration.rs` + `tests/integration/*.rs` | integration tests split by feature area and wired through a single integration test crate |
+| `tests/fixtures/expected/*` | expected integration values extracted from test code into fixture files |

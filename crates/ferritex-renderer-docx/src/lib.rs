@@ -1,4 +1,5 @@
 use std::{
+    collections::HashMap,
     fs::File,
     io::{Cursor, Read, Write},
     panic::{AssertUnwindSafe, catch_unwind},
@@ -7,11 +8,11 @@ use std::{
 
 use anyhow::{Context, anyhow};
 use docx_rs::{
-    AbstractNumbering, AlignmentType, BreakType, Docx, Footnote, Header, IndentLevel, Level,
-    LevelJc, LevelText, LineSpacing, LineSpacingType, NumberFormat, Numbering, NumberingId,
-    PageMargin, PageNum, Paragraph, Pic, Run, RunChild, RunFonts, SpecialIndentType, Start, Style,
-    StyleType, Tab, TabLeaderType, TabValueType, Table as DocxTable, TableAlignmentType,
-    TableCell as DocxCell, TableRow as DocxRow, VertAlignType,
+    AbstractNumbering, AlignmentType, BreakType, Docx, Footnote, Header, Hyperlink, HyperlinkType,
+    IndentLevel, Level, LevelJc, LevelText, LineSpacing, LineSpacingType, NumberFormat, Numbering,
+    NumberingId, PageMargin, PageNum, Paragraph, Pic, Run, RunChild, RunFonts, SpecialIndentType,
+    Start, Style, StyleType, Tab, TabLeaderType, TabValueType, Table as DocxTable,
+    TableAlignmentType, TableCell as DocxCell, TableRow as DocxRow, VertAlignType,
 };
 use zip::{ZipArchive, ZipWriter, write::SimpleFileOptions};
 
@@ -62,6 +63,8 @@ const DEFAULT_TOC_RIGHT_MARGIN_TWIPS: i32 = 0;
 const DEFAULT_TOC_CHAPTER_ENTRY_BOLD: bool = true;
 /// Default: chapter page number in TOC is bold (memoir/tocloft default when no `\cftchapterpagefont` override).
 const DEFAULT_TOC_CHAPTER_PAGE_BOLD: bool = true;
+/// Approximate glyph width for TOC prefix-width estimation (in `em`).
+const TOC_PREFIX_ESTIMATED_CHAR_WIDTH_EM: f64 = 0.45;
 const FOOTNOTE_MARKER_RUN_XML: &str = "<w:r><w:rPr><w:vertAlign w:val=\"superscript\" /></w:rPr><w:footnoteRef/></w:r><w:r><w:t xml:space=\"preserve\"> </w:t></w:r>";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -136,6 +139,7 @@ struct RenderProfile {
     toc_chapter_name_prefix: String,
     toc_indent_chapter_twips: i32,
     toc_numwidth_chapter_twips: i32,
+    toc_chapter_space_before_twips: i32,
     toc_indent_section_twips: i32,
     toc_numwidth_section_twips: i32,
     toc_indent_subsection_twips: i32,
@@ -161,7 +165,7 @@ struct RenderProfile {
 
     // ── List formatting ──────────────────────────────────────────────
     list_left_indent_twips: i32,
-    list_hanging_indent_twips: i32,
+    list_item_indent_twips: i32,
     /// Bullet character for unordered list items. Driven by `\renewcommand{\labelitemi}{...}`.
     list_bullet_char: String,
 
@@ -191,6 +195,15 @@ struct RenderProfile {
 
 impl RenderProfile {
     fn from_layout(layout: &DocumentLayout) -> Self {
+        let list_hanging_indent_twips = layout.list_hanging_indent_twips.unwrap_or_else(|| {
+            if layout.list_label_sep_twips.is_none() && layout.list_label_width_twips.is_none() {
+                DEFAULT_LIST_HANGING_TWIPS
+            } else {
+                let sep = layout.list_label_sep_twips.unwrap_or(142); // 0.5em at 14pt
+                let width = layout.list_label_width_twips.unwrap_or(sep); // auto (!) = labelsep
+                sep + width
+            }
+        });
         Self {
             page_margin_top_twips: sanitize_twips(
                 layout.page_margin_top_twips,
@@ -317,6 +330,10 @@ impl RenderProfile {
                 layout.toc_numwidth_chapter_twips,
                 0,
             ),
+            toc_chapter_space_before_twips: sanitize_nonnegative_twips(
+                layout.toc_chapter_space_before_twips,
+                0,
+            ),
             toc_indent_section_twips: sanitize_nonnegative_twips(
                 layout.toc_indent_section_twips,
                 layout
@@ -375,16 +392,10 @@ impl RenderProfile {
                     .body_first_line_indent_twips
                     .unwrap_or(DEFAULT_LIST_LEFT_TWIPS)
             }),
-            list_hanging_indent_twips: layout.list_hanging_indent_twips.unwrap_or_else(|| {
-                if layout.list_label_sep_twips.is_none() && layout.list_label_width_twips.is_none()
-                {
-                    DEFAULT_LIST_HANGING_TWIPS
-                } else {
-                    let sep = layout.list_label_sep_twips.unwrap_or(142); // 0.5em at 14pt
-                    let width = layout.list_label_width_twips.unwrap_or(sep); // auto (!) = labelsep
-                    sep + width
-                }
-            }),
+            list_item_indent_twips: sanitize_nonnegative_twips(
+                layout.list_item_indent_twips,
+                list_hanging_indent_twips,
+            ),
             list_bullet_char: layout
                 .list_bullet_char
                 .clone()
@@ -466,6 +477,231 @@ impl RenderProfile {
             _ => self.toc_numwidth_subsubsection_twips,
         }
     }
+}
+
+#[derive(Debug, Clone, Default)]
+struct ReferenceRenderIndex {
+    label_values: HashMap<String, String>,
+    label_bookmarks: HashMap<String, String>,
+    section_bookmark_by_index: HashMap<usize, String>,
+    toc_anchor_by_key: HashMap<String, String>,
+}
+
+impl ReferenceRenderIndex {
+    fn resolve_reference(&self, label: &str) -> (String, Option<String>) {
+        if let Some(value) = self.label_values.get(label) {
+            return (value.clone(), self.label_bookmarks.get(label).cloned());
+        }
+        if let Some(value) = infer_appendix_label_value(label) {
+            return (value, self.label_bookmarks.get(label).cloned());
+        }
+        (format!("[ref:{label}]"), None)
+    }
+
+    fn toc_anchor_for_entry(&self, level: u8, number: Option<&str>, title: &str) -> Option<String> {
+        let key = toc_entry_lookup_key(level, number, title);
+        self.toc_anchor_by_key.get(&key).cloned()
+    }
+}
+
+fn build_reference_render_index(
+    document: &Document,
+    profile: &RenderProfile,
+) -> ReferenceRenderIndex {
+    let mut index = ReferenceRenderIndex::default();
+
+    let mut chapter_no = 0usize;
+    let mut figure_no = 0usize;
+    let mut table_no = 0usize;
+    let mut equation_no = 0usize;
+    let mut synthetic_section_seq = 0usize;
+
+    for (block_index, block) in document.blocks.iter().enumerate() {
+        match block {
+            Block::Section {
+                level,
+                number,
+                label,
+                title,
+            } => {
+                if *level == 1 && number.is_some() {
+                    chapter_no += 1;
+                    if profile.figure_counter_within_chapter {
+                        figure_no = 0;
+                    }
+                    if profile.table_counter_within_chapter {
+                        table_no = 0;
+                    }
+                    equation_no = 0;
+                }
+
+                let anchor = if let Some(label) = label {
+                    bookmark_name_for_label(label)
+                } else {
+                    synthetic_section_seq += 1;
+                    format!("fxt_sec_{synthetic_section_seq}")
+                };
+                index
+                    .section_bookmark_by_index
+                    .insert(block_index, anchor.clone());
+
+                let title_text = collect_inline_text(title);
+                let toc_key = toc_entry_lookup_key(*level, number.as_deref(), &title_text);
+                index
+                    .toc_anchor_by_key
+                    .entry(toc_key)
+                    .or_insert(anchor.clone());
+
+                if let Some(label) = label {
+                    index
+                        .label_bookmarks
+                        .entry(label.clone())
+                        .or_insert(anchor.clone());
+                    if let Some(number) = number.as_ref() {
+                        let value = if *level == 1 {
+                            number.trim_end_matches('.').to_string()
+                        } else {
+                            number.clone()
+                        };
+                        index.label_values.insert(label.clone(), value);
+                    } else if let Some(app_value) = infer_appendix_label_value(label) {
+                        index.label_values.insert(label.clone(), app_value);
+                    }
+                }
+            }
+            Block::Figure(figure) => {
+                if let Some(label) = figure.label.as_ref() {
+                    figure_no += 1;
+                    let value = if profile.figure_counter_within_chapter && chapter_no > 0 {
+                        format!("{chapter_no}.{figure_no}")
+                    } else {
+                        figure_no.to_string()
+                    };
+                    index.label_values.insert(label.clone(), value);
+                    index
+                        .label_bookmarks
+                        .insert(label.clone(), bookmark_name_for_label(label));
+                }
+            }
+            Block::Table(table) => {
+                if let Some(label) = table.label.as_ref() {
+                    table_no += 1;
+                    let value = if profile.table_counter_within_chapter && chapter_no > 0 {
+                        format!("{chapter_no}.{table_no}")
+                    } else {
+                        table_no.to_string()
+                    };
+                    index.label_values.insert(label.clone(), value);
+                    index
+                        .label_bookmarks
+                        .insert(label.clone(), bookmark_name_for_label(label));
+                }
+            }
+            Block::DisplayMath(body) => {
+                equation_no += 1;
+                let value = if chapter_no > 0 {
+                    format!("{chapter_no}.{equation_no}")
+                } else {
+                    equation_no.to_string()
+                };
+                for label in extract_labels_from_display_math(body) {
+                    index.label_values.insert(label.clone(), value.clone());
+                    index
+                        .label_bookmarks
+                        .insert(label.clone(), bookmark_name_for_label(&label));
+                }
+            }
+            Block::Paragraph(_)
+            | Block::StyledParagraph { .. }
+            | Block::List(_)
+            | Block::BibliographyHeading { .. } => {}
+        }
+    }
+
+    index
+}
+
+fn toc_entry_lookup_key(level: u8, number: Option<&str>, title: &str) -> String {
+    let number = number.unwrap_or("").trim().trim_end_matches('.');
+    let title = normalize_space_compact(title).to_lowercase();
+    format!("{level}|{number}|{title}")
+}
+
+fn normalize_space_compact(text: &str) -> String {
+    text.split_whitespace().collect::<Vec<_>>().join(" ")
+}
+
+fn infer_appendix_label_value(label: &str) -> Option<String> {
+    let suffix = label
+        .strip_prefix("app:")
+        .or_else(|| label.strip_prefix("appendix:"))?;
+    let token = suffix.trim();
+    if token.is_empty() {
+        return None;
+    }
+    let candidate = token
+        .chars()
+        .take_while(|c| c.is_alphanumeric())
+        .collect::<String>();
+    if candidate.is_empty() {
+        None
+    } else {
+        Some(candidate)
+    }
+}
+
+fn bookmark_name_for_label(label: &str) -> String {
+    let mut stem = String::new();
+    for ch in label.chars() {
+        if ch.is_ascii_alphanumeric() {
+            stem.push(ch.to_ascii_lowercase());
+        } else if matches!(ch, '_' | '-' | ':' | '.') && !stem.ends_with('_') {
+            stem.push('_');
+        }
+    }
+    if stem.is_empty() {
+        stem.push_str("label");
+    }
+    let hash = label.bytes().fold(0xcbf29ce484222325u64, |acc, b| {
+        (acc ^ b as u64).wrapping_mul(0x100000001b3)
+    });
+    let mut out = format!("fxt_{stem}_{:08x}", (hash & 0xffff_ffff) as u32);
+    if out.len() > 40 {
+        out.truncate(40);
+    }
+    if out.chars().next().is_some_and(|c| !c.is_ascii_alphabetic()) {
+        out.insert(0, 'b');
+    }
+    out
+}
+
+fn extract_labels_from_display_math(src: &str) -> Vec<String> {
+    let mut labels = Vec::new();
+    let mut pos = 0usize;
+    while pos < src.len() {
+        let Some(rel) = src[pos..].find("\\label") else {
+            break;
+        };
+        let start = pos + rel + "\\label".len();
+        let mut cur = start;
+        while cur < src.len() && src.as_bytes()[cur].is_ascii_whitespace() {
+            cur += 1;
+        }
+        if cur < src.len()
+            && src.as_bytes()[cur] == b'{'
+            && let Some(close_rel) = src[cur + 1..].find('}')
+        {
+            let end = cur + 1 + close_rel;
+            let value = src[cur + 1..end].trim();
+            if !value.is_empty() {
+                labels.push(value.to_string());
+            }
+            pos = end + 1;
+            continue;
+        }
+        pos = start;
+    }
+    labels
 }
 
 /// Convert a string alignment name to a docx-rs [`AlignmentType`].
@@ -552,11 +788,14 @@ pub fn render_docx_with_context(
     input_tex_path: Option<&Path>,
 ) -> anyhow::Result<()> {
     let profile = RenderProfile::from_layout(&document.layout);
+    let ref_index = build_reference_render_index(document, &profile);
     let mut docx = create_styled_docx(&profile);
     let figure_base_dir = input_tex_path.and_then(Path::parent);
     let mut chapter_no = 0usize;
     let mut table_no = 0usize;
     let mut figure_no = 0usize;
+    let mut bookmark_ids: HashMap<String, usize> = HashMap::new();
+    let mut next_bookmark_id: usize = 1;
 
     // Assign a stable numbering ID for each list block we encounter.
     // abstractNumId == numId for simplicity (one-to-one mapping).
@@ -590,22 +829,30 @@ pub fn render_docx_with_context(
                         Paragraph::new().add_run(Run::new().add_break(BreakType::Page)),
                     );
                 }
-                let para = build_paragraph(block, &profile);
+                let section_bookmark = ref_index.section_bookmark_by_index.get(&index).cloned();
+                let para = attach_bookmark_to_paragraph(
+                    build_paragraph(block, &profile, &ref_index),
+                    section_bookmark.as_deref(),
+                    &mut bookmark_ids,
+                    &mut next_bookmark_id,
+                );
                 docx = docx.add_paragraph(para);
                 if *level == 1 && number.is_none() && is_toc_heading(title) {
-                    for toc_para in generated_toc_paragraphs(document, index + 1, &profile) {
+                    for toc_para in
+                        generated_toc_paragraphs(document, index + 1, &profile, &ref_index)
+                    {
                         docx = docx.add_paragraph(toc_para);
                     }
                 }
                 rendered_any_block = true;
             }
             Block::Paragraph(_) => {
-                let para = build_paragraph(block, &profile);
+                let para = build_paragraph(block, &profile, &ref_index);
                 docx = docx.add_paragraph(para);
                 rendered_any_block = true;
             }
             Block::StyledParagraph { .. } => {
-                let para = build_paragraph(block, &profile);
+                let para = build_paragraph(block, &profile, &ref_index);
                 docx = docx.add_paragraph(para);
                 rendered_any_block = true;
             }
@@ -618,30 +865,64 @@ pub fn render_docx_with_context(
                 };
                 let table_number = float_number(eff_chapter_tab, table_no);
                 let caption_settings = table_caption_settings(&profile);
+                let table_bookmark = t
+                    .label
+                    .as_ref()
+                    .and_then(|label| ref_index.label_bookmarks.get(label))
+                    .cloned();
+                let mut bookmark_consumed = false;
                 if !t.caption.is_empty() && caption_settings.position == CaptionPosition::Top {
-                    docx = docx.add_paragraph(caption_paragraph(
-                        &profile.caption_label_table,
-                        Some(table_number.as_str()),
-                        &profile.caption_label_separator_table,
-                        &t.caption,
-                        caption_settings,
+                    let para = attach_bookmark_to_paragraph(
+                        caption_paragraph(
+                            &profile.caption_label_table,
+                            Some(table_number.as_str()),
+                            &profile.caption_label_separator_table,
+                            &t.caption,
+                            caption_settings,
+                            &ref_index,
+                        ),
+                        table_bookmark.as_deref(),
+                        &mut bookmark_ids,
+                        &mut next_bookmark_id,
+                    );
+                    docx = docx.add_paragraph(para);
+                    bookmark_consumed = table_bookmark.is_some();
+                }
+                if table_bookmark.is_some() && !bookmark_consumed {
+                    docx = docx.add_paragraph(attach_bookmark_to_paragraph(
+                        Paragraph::new().style("BodyText"),
+                        table_bookmark.as_deref(),
+                        &mut bookmark_ids,
+                        &mut next_bookmark_id,
                     ));
                 }
-                docx = docx.add_table(build_table(t, &profile));
+                docx = docx.add_table(build_table(t, &profile, &ref_index));
                 if !t.caption.is_empty() && caption_settings.position == CaptionPosition::Bottom {
-                    docx = docx.add_paragraph(caption_paragraph(
-                        &profile.caption_label_table,
-                        Some(table_number.as_str()),
-                        &profile.caption_label_separator_table,
-                        &t.caption,
-                        caption_settings,
-                    ));
+                    let para = attach_bookmark_to_paragraph(
+                        caption_paragraph(
+                            &profile.caption_label_table,
+                            Some(table_number.as_str()),
+                            &profile.caption_label_separator_table,
+                            &t.caption,
+                            caption_settings,
+                            &ref_index,
+                        ),
+                        if bookmark_consumed {
+                            None
+                        } else {
+                            table_bookmark.as_deref()
+                        },
+                        &mut bookmark_ids,
+                        &mut next_bookmark_id,
+                    );
+                    docx = docx.add_paragraph(para);
                 }
                 if !t.source.is_empty() {
                     docx = docx.add_paragraph(source_paragraph(
                         &t.source,
                         &profile,
                         profile.source_vspace_table_twips,
+                        &ref_index,
                     ));
                 }
                 rendered_any_block = true;
@@ -657,9 +938,14 @@ pub fn render_docx_with_context(
                 docx = render_figure_block(
                     docx,
                     f,
-                    figure_base_dir,
-                    Some(figure_number.as_str()),
+                    FigureRenderMeta {
+                        base_dir: figure_base_dir,
+                        figure_number: Some(figure_number.as_str()),
+                    },
                     &profile,
+                    &ref_index,
+                    &mut bookmark_ids,
+                    &mut next_bookmark_id,
                 );
                 rendered_any_block = true;
             }
@@ -668,13 +954,22 @@ pub fn render_docx_with_context(
                 next_num_id += 1;
                 docx = register_numbering(docx, num_id, list.ordered, &profile);
                 for item_inlines in &list.items {
-                    let para = build_list_item(item_inlines, num_id, &profile);
+                    let para = build_list_item(item_inlines, num_id, &profile, &ref_index);
                     docx = docx.add_paragraph(para);
                 }
                 rendered_any_block = true;
             }
             Block::DisplayMath(src) => {
-                docx = docx.add_paragraph(build_display_math_paragraph(src));
+                let equation_bookmark = extract_labels_from_display_math(src)
+                    .into_iter()
+                    .find_map(|label| ref_index.label_bookmarks.get(&label).cloned());
+                let para = attach_bookmark_to_paragraph(
+                    build_display_math_paragraph(src),
+                    equation_bookmark.as_deref(),
+                    &mut bookmark_ids,
+                    &mut next_bookmark_id,
+                );
+                docx = docx.add_paragraph(para);
                 rendered_any_block = true;
             }
             Block::BibliographyHeading { title } => {
@@ -855,8 +1150,10 @@ fn heading_style_definition(
         .align(profile.heading_alignment)
         .line_spacing(line_spacing(profile.body_line_spacing_twips))
         .indent(
-            Some(heading_left_indent_twips(level, profile)),
-            Some(SpecialIndentType::FirstLine(0)),
+            Some(0),
+            Some(SpecialIndentType::FirstLine(heading_left_indent_twips(
+                level, profile,
+            ))),
             None,
             None,
         )
@@ -877,7 +1174,7 @@ fn toc_style_definition(
         .fonts(fonts)
         .size(profile.font_size_body_hp)
         .align(AlignmentType::Left)
-        .line_spacing(single_spacing())
+        .line_spacing(line_spacing(profile.body_line_spacing_twips))
         .indent(
             Some(left_indent_twips.max(0)),
             Some(SpecialIndentType::FirstLine(0)),
@@ -924,6 +1221,27 @@ fn line_spacing(twips: i32) -> LineSpacing {
         .line(twips.max(1))
 }
 
+fn attach_bookmark_to_paragraph(
+    mut para: Paragraph,
+    bookmark_name: Option<&str>,
+    bookmark_ids: &mut HashMap<String, usize>,
+    next_bookmark_id: &mut usize,
+) -> Paragraph {
+    let Some(name) = bookmark_name else {
+        return para;
+    };
+    let bookmark_id = if let Some(existing) = bookmark_ids.get(name) {
+        *existing
+    } else {
+        let id = *next_bookmark_id;
+        *next_bookmark_id = next_bookmark_id.saturating_add(1);
+        bookmark_ids.insert(name.to_string(), id);
+        id
+    };
+    para = para.add_bookmark_start(bookmark_id, name);
+    para.add_bookmark_end(bookmark_id)
+}
+
 // ---------------------------------------------------------------------------
 // List rendering
 // ---------------------------------------------------------------------------
@@ -947,9 +1265,7 @@ fn register_numbering(docx: Docx, num_id: usize, ordered: bool, profile: &Render
     )
     .indent(
         Some(profile.list_left_indent_twips),
-        Some(SpecialIndentType::Hanging(
-            profile.list_hanging_indent_twips,
-        )),
+        Some(SpecialIndentType::FirstLine(0)),
         None,
         None,
     );
@@ -961,24 +1277,41 @@ fn register_numbering(docx: Docx, num_id: usize, ordered: bool, profile: &Render
 }
 
 /// Build a single list-item paragraph with numbering applied.
-fn build_list_item(inlines: &[Inline], num_id: usize, profile: &RenderProfile) -> Paragraph {
-    let mut para = Paragraph::new()
+fn build_list_item(
+    inlines: &[Inline],
+    num_id: usize,
+    profile: &RenderProfile,
+    refs: &ReferenceRenderIndex,
+) -> Paragraph {
+    let para = Paragraph::new()
         .style("ListParagraph")
         .align(AlignmentType::Both)
         .line_spacing(line_spacing(profile.body_line_spacing_twips))
+        .indent(
+            Some(profile.list_left_indent_twips),
+            Some(SpecialIndentType::FirstLine(profile.list_item_indent_twips)),
+            None,
+            None,
+        )
         .numbering(NumberingId::new(num_id), IndentLevel::new(0));
-    for run in inline_runs_with_footnote_size(inlines, false, false, profile.font_size_footnote_hp)
-    {
-        para = para.add_run(run);
-    }
-    para
+    append_inlines_to_paragraph(
+        para,
+        inlines,
+        InlineRenderState {
+            bold: false,
+            italic: false,
+            force_italic: false,
+            footnote_hp: profile.font_size_footnote_hp,
+        },
+        refs,
+    )
 }
 
 // ---------------------------------------------------------------------------
 // Table rendering
 // ---------------------------------------------------------------------------
 
-fn build_table(table: &Table, profile: &RenderProfile) -> DocxTable {
+fn build_table(table: &Table, profile: &RenderProfile, refs: &ReferenceRenderIndex) -> DocxTable {
     let rows: Vec<DocxRow> = table
         .rows
         .iter()
@@ -987,26 +1320,32 @@ fn build_table(table: &Table, profile: &RenderProfile) -> DocxTable {
                 .cells
                 .iter()
                 .map(|cell| {
-                    let mut para = Paragraph::new()
+                    let para = Paragraph::new()
                         .style("TableParagraph")
                         .align(AlignmentType::Both)
                         .line_spacing(single_spacing())
                         .indent(Some(0), Some(SpecialIndentType::FirstLine(0)), None, None);
-                    for run in inline_runs_with_footnote_size(
+                    let para = append_inlines_to_paragraph(
+                        para,
                         &cell.content,
-                        false,
-                        false,
-                        profile.font_size_footnote_hp,
-                    ) {
-                        para = para.add_run(run.size(profile.font_size_table_hp));
-                    }
-                    DocxCell::new().add_paragraph(para)
+                        InlineRenderState {
+                            bold: false,
+                            italic: false,
+                            force_italic: false,
+                            footnote_hp: profile.font_size_footnote_hp,
+                        },
+                        refs,
+                    );
+                    DocxCell::new()
+                        .add_paragraph(resize_paragraph_runs(para, profile.font_size_table_hp))
                 })
                 .collect();
             DocxRow::new(cells)
         })
         .collect();
-    DocxTable::new(rows).align(parse_table_alignment(table.alignment.as_deref()))
+    DocxTable::new(rows)
+        .style("TableGrid")
+        .align(parse_table_alignment(table.alignment.as_deref()))
 }
 
 fn float_number(chapter_no: usize, local_no: usize) -> String {
@@ -1024,6 +1363,7 @@ fn caption_paragraph(
     separator: &str,
     inlines: &[Inline],
     settings: CaptionRenderSettings,
+    refs: &ReferenceRenderIndex,
 ) -> Paragraph {
     let alignment = effective_caption_alignment(
         settings.default_alignment,
@@ -1041,11 +1381,17 @@ fn caption_paragraph(
         para = para.add_run(Run::new().add_text(prefix).bold());
     }
 
-    for run in inline_runs_with_footnote_size(inlines, true, false, settings.footnote_font_size_hp)
-    {
-        para = para.add_run(run);
-    }
-    para
+    append_inlines_to_paragraph(
+        para,
+        inlines,
+        InlineRenderState {
+            bold: true,
+            italic: false,
+            force_italic: false,
+            footnote_hp: settings.footnote_font_size_hp,
+        },
+        refs,
+    )
 }
 
 fn caption_line_spacing(skip_twips: i32, position: CaptionPosition) -> LineSpacing {
@@ -1154,23 +1500,36 @@ fn caption_is_prefixed(kind: &str, inlines: &[Inline]) -> bool {
 ///
 /// Matches the LaTeX definition `{\noindent\raggedright\small\textit{#1}}`.
 /// `vspace_twips` is added as `space_before` to replicate `\vspace{...}` before the line.
-fn source_paragraph(inlines: &[Inline], profile: &RenderProfile, vspace_twips: i32) -> Paragraph {
+fn source_paragraph(
+    inlines: &[Inline],
+    profile: &RenderProfile,
+    vspace_twips: i32,
+    refs: &ReferenceRenderIndex,
+) -> Paragraph {
     let spacing = {
-        let mut s = line_spacing(profile.body_line_spacing_twips);
+        let mut s = single_spacing();
         if vspace_twips > 0 {
             s = s.before(vspace_twips as u32);
         }
         s
     };
-    let mut para = Paragraph::new()
+    let para = Paragraph::new()
         .style("BodyText")
         .align(AlignmentType::Left)
         .line_spacing(spacing)
         .indent(Some(0), Some(SpecialIndentType::FirstLine(0)), None, None);
-    for run in inline_runs_with_footnote_size(inlines, false, true, profile.font_size_footnote_hp) {
-        para = para.add_run(run);
-    }
-    para
+    let para = append_inlines_to_paragraph(
+        para,
+        inlines,
+        InlineRenderState {
+            bold: false,
+            italic: false,
+            force_italic: true,
+            footnote_hp: profile.font_size_footnote_hp,
+        },
+        refs,
+    );
+    resize_paragraph_runs(para, profile.font_size_footnote_hp)
 }
 
 /// A chapter-level heading for a bibliography section.
@@ -1262,32 +1621,62 @@ fn normalize_math_text(src: &str) -> String {
 // Figure rendering
 // ---------------------------------------------------------------------------
 
+struct FigureRenderMeta<'a> {
+    base_dir: Option<&'a Path>,
+    figure_number: Option<&'a str>,
+}
+
 fn render_figure_block(
     mut docx: Docx,
     figure: &Figure,
-    base_dir: Option<&Path>,
-    figure_number: Option<&str>,
+    meta: FigureRenderMeta<'_>,
     profile: &RenderProfile,
+    refs: &ReferenceRenderIndex,
+    bookmark_ids: &mut HashMap<String, usize>,
+    next_bookmark_id: &mut usize,
 ) -> Docx {
     let mut embedded = false;
     let max_image_width_emu = profile.max_image_width_emu();
     let caption_settings = figure_caption_settings(profile);
     let render_caption_before_figure = caption_settings.position == CaptionPosition::Top;
     let figure_alignment = parse_alignment(figure.alignment.as_deref().unwrap_or("center"));
+    let figure_bookmark = figure
+        .label
+        .as_ref()
+        .and_then(|label| refs.label_bookmarks.get(label))
+        .cloned();
+    let mut bookmark_consumed = false;
 
     if render_caption_before_figure && !figure.caption.is_empty() {
-        docx = docx.add_paragraph(caption_paragraph(
-            &profile.caption_label_figure,
-            figure_number,
-            &profile.caption_label_separator_figure,
-            &figure.caption,
-            caption_settings,
+        let para = attach_bookmark_to_paragraph(
+            caption_paragraph(
+                &profile.caption_label_figure,
+                meta.figure_number,
+                &profile.caption_label_separator_figure,
+                &figure.caption,
+                caption_settings,
+                refs,
+            ),
+            figure_bookmark.as_deref(),
+            bookmark_ids,
+            next_bookmark_id,
+        );
+        docx = docx.add_paragraph(para);
+        bookmark_consumed = figure_bookmark.is_some();
+    }
+
+    if figure_bookmark.is_some() && !bookmark_consumed {
+        docx = docx.add_paragraph(attach_bookmark_to_paragraph(
+            Paragraph::new().style("BodyText"),
+            figure_bookmark.as_deref(),
+            bookmark_ids,
+            next_bookmark_id,
         ));
     }
 
     if let Some(raw_path) = figure.image_path.as_deref() {
         if let Some(resolved) =
-            resolve_figure_path(raw_path, base_dir, &profile.graphics_search_paths)
+            resolve_figure_path(raw_path, meta.base_dir, &profile.graphics_search_paths)
         {
             match read_figure_pic(&resolved, figure.width_permille, max_image_width_emu) {
                 Ok(pic) => {
@@ -1317,13 +1706,24 @@ fn render_figure_block(
     }
 
     if !render_caption_before_figure && !figure.caption.is_empty() {
-        docx = docx.add_paragraph(caption_paragraph(
-            &profile.caption_label_figure,
-            figure_number,
-            &profile.caption_label_separator_figure,
-            &figure.caption,
-            caption_settings,
-        ));
+        let para = attach_bookmark_to_paragraph(
+            caption_paragraph(
+                &profile.caption_label_figure,
+                meta.figure_number,
+                &profile.caption_label_separator_figure,
+                &figure.caption,
+                caption_settings,
+                refs,
+            ),
+            if bookmark_consumed {
+                None
+            } else {
+                figure_bookmark.as_deref()
+            },
+            bookmark_ids,
+            next_bookmark_id,
+        );
+        docx = docx.add_paragraph(para);
     }
 
     if !figure.source.is_empty() {
@@ -1331,6 +1731,7 @@ fn render_figure_block(
             &figure.source,
             profile,
             profile.source_vspace_figure_twips,
+            refs,
         ));
     }
 
@@ -1447,7 +1848,11 @@ fn resolve_figure_path(
 // ---------------------------------------------------------------------------
 
 /// Convert a [`Block::Section`] or body paragraph into a docx-rs [`Paragraph`].
-fn build_paragraph(block: &Block, profile: &RenderProfile) -> Paragraph {
+fn build_paragraph(
+    block: &Block,
+    profile: &RenderProfile,
+    refs: &ReferenceRenderIndex,
+) -> Paragraph {
     match block {
         Block::Section {
             level,
@@ -1462,8 +1867,8 @@ fn build_paragraph(block: &Block, profile: &RenderProfile) -> Paragraph {
                 .align(profile.heading_alignment)
                 .line_spacing(line_spacing(profile.body_line_spacing_twips))
                 .indent(
-                    Some(heading_indent),
-                    Some(SpecialIndentType::FirstLine(0)),
+                    Some(0),
+                    Some(SpecialIndentType::FirstLine(heading_indent)),
                     None,
                     None,
                 );
@@ -1491,19 +1896,21 @@ fn build_paragraph(block: &Block, profile: &RenderProfile) -> Paragraph {
                 }
                 para = para.add_run(Run::new().add_text(prefix).bold());
             }
-            for run in inline_runs_with_footnote_size(
+            append_inlines_to_paragraph(
+                para,
                 &section_title,
-                true,
-                false,
-                profile.font_size_footnote_hp,
-            ) {
-                para = para.add_run(run);
-            }
-            para
+                InlineRenderState {
+                    bold: true,
+                    italic: false,
+                    force_italic: false,
+                    footnote_hp: profile.font_size_footnote_hp,
+                },
+                refs,
+            )
         }
-        Block::Paragraph(inlines) => build_default_body_paragraph(inlines, profile),
+        Block::Paragraph(inlines) => build_default_body_paragraph(inlines, profile, refs),
         Block::StyledParagraph { inlines, style } => {
-            build_styled_body_paragraph(inlines, style, profile)
+            build_styled_body_paragraph(inlines, style, profile, refs)
         }
         // Table, Figure, List, DisplayMath, BibliographyHeading are handled separately — unreachable here.
         Block::Table(_)
@@ -1516,8 +1923,12 @@ fn build_paragraph(block: &Block, profile: &RenderProfile) -> Paragraph {
     }
 }
 
-fn build_default_body_paragraph(inlines: &[Inline], profile: &RenderProfile) -> Paragraph {
-    let mut para = Paragraph::new()
+fn build_default_body_paragraph(
+    inlines: &[Inline],
+    profile: &RenderProfile,
+    refs: &ReferenceRenderIndex,
+) -> Paragraph {
+    let para = Paragraph::new()
         .style("BodyText")
         .align(AlignmentType::Both)
         .line_spacing(line_spacing(profile.body_line_spacing_twips))
@@ -1529,30 +1940,38 @@ fn build_default_body_paragraph(inlines: &[Inline], profile: &RenderProfile) -> 
             None,
             None,
         );
-    for run in inline_runs_with_footnote_size(inlines, false, false, profile.font_size_footnote_hp)
-    {
-        para = para.add_run(run);
-    }
-    para
+    append_inlines_to_paragraph(
+        para,
+        inlines,
+        InlineRenderState {
+            bold: false,
+            italic: false,
+            force_italic: false,
+            footnote_hp: profile.font_size_footnote_hp,
+        },
+        refs,
+    )
 }
 
 fn build_styled_body_paragraph(
     inlines: &[Inline],
     style: &ParagraphStyle,
     profile: &RenderProfile,
+    refs: &ReferenceRenderIndex,
 ) -> Paragraph {
     let alignment = style
         .alignment
         .as_deref()
         .map(parse_alignment)
         .unwrap_or(AlignmentType::Both);
+    let left_indent = style.left_indent_twips.unwrap_or(0).max(0);
     let line_twips = style
         .line_spacing_twips
         .unwrap_or(profile.body_line_spacing_twips);
     let first_line_indent = style
         .first_line_indent_twips
         .unwrap_or(profile.body_first_line_indent_twips);
-    let mut para = Paragraph::new()
+    let para = Paragraph::new()
         .style("BodyText")
         .align(alignment)
         .line_spacing(line_spacing_with_spacing(
@@ -1561,22 +1980,27 @@ fn build_styled_body_paragraph(
             style.space_after_twips,
         ))
         .indent(
-            Some(0),
+            Some(left_indent),
             Some(SpecialIndentType::FirstLine(first_line_indent)),
             None,
             None,
         );
-
-    for run in inline_runs_with_footnote_size(inlines, false, false, profile.font_size_footnote_hp)
-    {
-        let run = if let Some(size_hp) = style.font_size_hp {
-            run.size(size_hp)
-        } else {
-            run
-        };
-        para = para.add_run(run);
+    let para = append_inlines_to_paragraph(
+        para,
+        inlines,
+        InlineRenderState {
+            bold: false,
+            italic: false,
+            force_italic: false,
+            footnote_hp: profile.font_size_footnote_hp,
+        },
+        refs,
+    );
+    if let Some(size_hp) = style.font_size_hp {
+        resize_paragraph_runs(para, size_hp)
+    } else {
+        para
     }
-    para
 }
 
 fn line_spacing_with_spacing(
@@ -1598,6 +2022,17 @@ fn line_spacing_with_spacing(
     spacing
 }
 
+fn estimate_toc_prefix_width_twips(prefix: &str, font_size_hp: usize) -> i32 {
+    let chars = prefix.chars().count() as f64;
+    let em_twips = (font_size_hp as f64 / 2.0) * 20.0;
+    let width = (chars * TOC_PREFIX_ESTIMATED_CHAR_WIDTH_EM * em_twips).round();
+    if width.is_finite() && width > 0.0 {
+        width as i32
+    } else {
+        0
+    }
+}
+
 /// Map a heading level (1-based) to a docx-rs style id string.
 fn heading_style(level: u8) -> &'static str {
     match level {
@@ -1616,14 +2051,15 @@ fn generated_toc_paragraphs(
     document: &Document,
     start_index: usize,
     profile: &RenderProfile,
+    refs: &ReferenceRenderIndex,
 ) -> Vec<Paragraph> {
     if !document.toc_entries.is_empty() {
-        return generated_toc_paragraphs_from_entries(document, profile);
+        return generated_toc_paragraphs_from_entries(document, profile, refs);
     }
 
     let mut paragraphs = Vec::new();
 
-    for block in document.blocks.iter().skip(start_index) {
+    for (index, block) in document.blocks.iter().enumerate().skip(start_index) {
         let Block::Section {
             level,
             number,
@@ -1646,7 +2082,11 @@ fn generated_toc_paragraphs(
             number.as_deref(),
             title,
             None,
+            refs.section_bookmark_by_index
+                .get(&index)
+                .map(String::as_str),
             profile,
+            refs,
         ));
     }
 
@@ -1656,6 +2096,7 @@ fn generated_toc_paragraphs(
 fn generated_toc_paragraphs_from_entries(
     document: &Document,
     profile: &RenderProfile,
+    refs: &ReferenceRenderIndex,
 ) -> Vec<Paragraph> {
     let mut paragraphs = Vec::new();
     for entry in &document.toc_entries {
@@ -1672,12 +2113,16 @@ fn generated_toc_paragraphs_from_entries(
         if entry.level == 1 && entry.number.is_none() && is_toc_heading(&title_inlines) {
             continue;
         }
+        let target_anchor =
+            refs.toc_anchor_for_entry(entry.level, entry.number.as_deref(), &entry.title);
         paragraphs.push(build_toc_entry_paragraph(
             entry.level,
             entry.number.as_deref(),
             &title_inlines,
             entry.page.as_deref(),
+            target_anchor.as_deref(),
             profile,
+            refs,
         ));
     }
     paragraphs
@@ -1687,10 +2132,9 @@ fn build_toc_page_header_paragraph(text: &str, profile: &RenderProfile) -> Parag
     let mut para = Paragraph::new()
         .style("TOC1")
         .align(AlignmentType::Right)
-        .line_spacing(single_spacing());
+        .line_spacing(line_spacing(profile.body_line_spacing_twips));
     let inlines = vec![Inline::Text(text.to_string())];
-    for run in inline_runs_with_footnote_size(&inlines, false, false, profile.font_size_footnote_hp)
-    {
+    for run in inline_runs_with_footnote_size(&inlines, false, false, profile.font_size_body_hp) {
         para = para.add_run(run);
     }
     para
@@ -1701,7 +2145,9 @@ fn build_toc_entry_paragraph(
     number: Option<&str>,
     title: &[Inline],
     page: Option<&str>,
+    target_anchor: Option<&str>,
     profile: &RenderProfile,
+    _refs: &ReferenceRenderIndex,
 ) -> Paragraph {
     let style = match level {
         1 => "TOC1",
@@ -1714,9 +2160,26 @@ fn build_toc_entry_paragraph(
     let mut para = Paragraph::new()
         .style(style)
         .align(AlignmentType::Left)
-        .line_spacing(single_spacing());
+        .line_spacing(line_spacing(profile.body_line_spacing_twips));
+    if level == 1 && profile.toc_chapter_space_before_twips > 0 {
+        para = para.line_spacing(line_spacing_with_spacing(
+            profile.body_line_spacing_twips,
+            Some(profile.toc_chapter_space_before_twips),
+            None,
+        ));
+    }
     let toc_indent = profile.toc_level_indent_twips(level);
-    let toc_numwidth = profile.toc_level_numwidth_twips(level);
+    let mut toc_numwidth = profile.toc_level_numwidth_twips(level);
+    if level == 1 {
+        let chapter_prefix = profile.toc_chapter_name_prefix.trim();
+        if !chapter_prefix.is_empty() {
+            let prefix = format!("{} ", chapter_prefix.to_uppercase());
+            toc_numwidth = toc_numwidth.saturating_add(estimate_toc_prefix_width_twips(
+                &prefix,
+                profile.font_size_body_hp,
+            ));
+        }
+    }
 
     if let Some(number) = number {
         if toc_numwidth > 0 {
@@ -1768,8 +2231,20 @@ fn build_toc_entry_paragraph(
     };
     // Apply bold/non-bold per toc_chapter_entry_bold (level-1 only).
     let title_runs =
-        inline_runs_with_footnote_size(&title, false, false, profile.font_size_footnote_hp);
-    if level == 1 && !profile.toc_chapter_entry_bold {
+        inline_runs_with_footnote_size(&title, false, false, profile.font_size_body_hp);
+    if let Some(anchor) = target_anchor {
+        let mut link = Hyperlink::new(anchor, HyperlinkType::Anchor);
+        if level == 1 && !profile.toc_chapter_entry_bold {
+            for run in title_runs {
+                link = link.add_run(run.disable_bold().underline("none").color("000000"));
+            }
+        } else {
+            for run in title_runs {
+                link = link.add_run(run.underline("none").color("000000"));
+            }
+        }
+        para = para.add_hyperlink(link);
+    } else if level == 1 && !profile.toc_chapter_entry_bold {
         for run in title_runs {
             para = para.add_run(run.disable_bold());
         }
@@ -1814,6 +2289,145 @@ fn collect_inline_text(inlines: &[Inline]) -> String {
         }
     }
     out
+}
+
+#[derive(Clone, Copy)]
+struct InlineRenderState {
+    bold: bool,
+    italic: bool,
+    force_italic: bool,
+    footnote_hp: usize,
+}
+
+fn append_inlines_to_paragraph(
+    mut para: Paragraph,
+    inlines: &[Inline],
+    state: InlineRenderState,
+    refs: &ReferenceRenderIndex,
+) -> Paragraph {
+    for inline in inlines {
+        match inline {
+            Inline::Text(text) => {
+                let mut run = Run::new().add_text(text.as_str());
+                if state.bold {
+                    run = run.bold();
+                }
+                if state.italic || state.force_italic {
+                    run = run.italic();
+                }
+                para = para.add_run(run);
+            }
+            Inline::LineBreak => {
+                para = para.add_run(Run::new().add_break(BreakType::TextWrapping));
+            }
+            Inline::Bold(children) => {
+                para = append_inlines_to_paragraph(
+                    para,
+                    children,
+                    InlineRenderState {
+                        bold: true,
+                        ..state
+                    },
+                    refs,
+                );
+            }
+            Inline::Italic(children) => {
+                para = append_inlines_to_paragraph(
+                    para,
+                    children,
+                    InlineRenderState {
+                        italic: true,
+                        ..state
+                    },
+                    refs,
+                );
+            }
+            Inline::InlineMath(src) => {
+                let visible = normalize_math_text(src);
+                let mut run = Run::new().add_text(visible);
+                if state.bold {
+                    run = run.bold();
+                }
+                if state.italic || state.force_italic {
+                    run = run.italic();
+                }
+                para = para.add_run(run);
+            }
+            Inline::Reference(label) => {
+                let (resolved_text, anchor) = refs.resolve_reference(label);
+                let mut run = Run::new().add_text(resolved_text);
+                if state.bold {
+                    run = run.bold();
+                }
+                if state.italic || state.force_italic {
+                    run = run.italic();
+                }
+                if let Some(anchor) = anchor {
+                    let link = Hyperlink::new(anchor, HyperlinkType::Anchor)
+                        .add_run(run.underline("none").color("000000"));
+                    para = para.add_hyperlink(link);
+                } else {
+                    para = para.add_run(run);
+                }
+            }
+            Inline::Footnote(content) => {
+                let mut footnote_para = Paragraph::new()
+                    .style("FootnoteText")
+                    .align(AlignmentType::Both)
+                    .line_spacing(single_spacing())
+                    .indent(Some(0), None, None, None)
+                    .keep_lines(true);
+                footnote_para = append_inlines_to_paragraph(
+                    footnote_para,
+                    content,
+                    InlineRenderState {
+                        bold: false,
+                        italic: false,
+                        force_italic: false,
+                        footnote_hp: state.footnote_hp,
+                    },
+                    refs,
+                );
+                // Apply footnote-sized runs recursively.
+                footnote_para = resize_paragraph_runs(footnote_para, state.footnote_hp);
+
+                let mut footnote = Footnote::new();
+                footnote.add_content(footnote_para);
+                let mut footnote_ref_run = Run::new().add_footnote_reference(footnote);
+                footnote_ref_run.run_property = footnote_ref_run
+                    .run_property
+                    .vert_align(VertAlignType::SuperScript);
+                para = para.add_run(footnote_ref_run);
+            }
+        }
+    }
+    para
+}
+
+fn resize_paragraph_runs(mut para: Paragraph, size_hp: usize) -> Paragraph {
+    for child in &mut para.children {
+        match child {
+            docx_rs::ParagraphChild::Run(run) => {
+                **run = (**run).clone().size(size_hp);
+            }
+            docx_rs::ParagraphChild::Hyperlink(link) => {
+                let mut updated = link.clone();
+                updated.children = updated
+                    .children
+                    .iter()
+                    .map(|c| match c {
+                        docx_rs::ParagraphChild::Run(run) => {
+                            docx_rs::ParagraphChild::Run(Box::new((**run).clone().size(size_hp)))
+                        }
+                        other => other.clone(),
+                    })
+                    .collect();
+                *link = updated;
+            }
+            _ => {}
+        }
+    }
+    para
 }
 
 /// Recursively convert a slice of [`Inline`] nodes into a flat list of

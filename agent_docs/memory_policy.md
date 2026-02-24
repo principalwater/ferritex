@@ -8,14 +8,16 @@ memory inside this repository.
 
 ## Source of truth hierarchy
 
-Agents must treat these files as authoritative project memory, in order:
+These repository Markdown files are the **single source of truth** for project memory.
+Agents must treat them as authoritative, in order:
 
 1. `AGENTS.md`
 2. `agent_docs/*.md` (including `plans/`)
 3. `docs/*.md`
 
-Global AI memory outside the repository is advisory at best and must not override
-local project docs.
+Global AI memory outside the repository (`~/.codex/`, `~/.claude/`) is advisory at best and
+must not override local project docs. External logs/history may be used only for recovery, and
+any stable recovered decision must be written back into repository docs immediately.
 
 ## Plans storage
 
@@ -30,11 +32,13 @@ local project docs.
 
 Before making changes, read and follow:
 - `AGENTS.md`
+- `agent_docs/README.md`
 - `agent_docs/latex_driven_policy.md`
 - `agent_docs/coding_conventions.md`
 - `agent_docs/git_workflow.md`
 - `agent_docs/session_summary.md`
 - `agent_docs/memory_policy.md` (this file)
+- `agent_docs/future_session_prompt.md`
 - all files in `agent_docs/plans/`
 - `docs/ARCHITECTURE.md`
 - `docs/ROADMAP.md`
@@ -48,6 +52,7 @@ When a session produces stable decisions, update repository docs **before** the 
 - Progress and near-term plan → `agent_docs/session_summary.md` and `agent_docs/plans/`
 
 Do not leave critical context only in chat transcripts.
+Do not leave stable context only in global AI memory.
 
 ## What belongs in session_summary.md
 

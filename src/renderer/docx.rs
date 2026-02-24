@@ -33,6 +33,7 @@ const LINE_SPACING_SINGLE_TWIPS: i32 = 240;
 const LINE_SPACING_DEFAULT_BODY_TWIPS: i32 = 360;
 
 const FIRST_LINE_INDENT_TWIPS: i32 = 709;
+const DEFAULT_CAPTION_LABEL_SEPARATOR: &str = ". ";
 const IMAGE_EXTENSIONS: &[&str] = &["png", "jpg", "jpeg", "bmp", "tif", "tiff", "gif", "webp"];
 const EMU_PER_TWIP: u32 = 635;
 const IMAGE_SAFE_SCALE_NUM: u32 = 96;
@@ -74,6 +75,8 @@ struct RenderProfile {
     // ── Caption / float labels ─────────────────────────────────────────
     caption_label_figure: String,
     caption_label_table: String,
+    caption_label_separator_figure: String,
+    caption_label_separator_table: String,
 
     // ── Heading formatting ─────────────────────────────────────────────
     chapter_name: String,
@@ -157,6 +160,14 @@ impl RenderProfile {
                 .caption_label_table
                 .clone()
                 .unwrap_or_else(|| "Table".to_string()),
+            caption_label_separator_figure: layout
+                .caption_label_separator_figure
+                .clone()
+                .unwrap_or_else(|| DEFAULT_CAPTION_LABEL_SEPARATOR.to_string()),
+            caption_label_separator_table: layout
+                .caption_label_separator_table
+                .clone()
+                .unwrap_or_else(|| DEFAULT_CAPTION_LABEL_SEPARATOR.to_string()),
             // Heading: no chapter prefix by default, no uppercase, left-aligned.
             chapter_name: layout.chapter_name.clone().unwrap_or_default(),
             heading_uppercase: layout.heading_uppercase.unwrap_or(false),
@@ -297,6 +308,7 @@ pub fn render_docx_with_context(
                     docx = docx.add_paragraph(caption_paragraph(
                         &profile.caption_label_table,
                         Some(table_number.as_str()),
+                        &profile.caption_label_separator_table,
                         &t.caption,
                         &profile,
                     ));
@@ -588,6 +600,7 @@ fn float_number(chapter_no: usize, local_no: usize) -> String {
 fn caption_paragraph(
     kind: &str,
     number: Option<&str>,
+    separator: &str,
     inlines: &[Inline],
     profile: &RenderProfile,
 ) -> Paragraph {
@@ -598,18 +611,32 @@ fn caption_paragraph(
         .indent(Some(0), None, None, None);
 
     let prefixed = caption_is_prefixed(kind, inlines);
-    if !prefixed {
-        if let Some(number) = number {
-            para = para.add_run(Run::new().add_text(format!("{kind} {number}. ")).bold());
-        } else if !kind.is_empty() {
-            para = para.add_run(Run::new().add_text(format!("{kind}. ")).bold());
-        }
+    if !prefixed && let Some(prefix) = caption_prefix_text(kind, number, separator) {
+        para = para.add_run(Run::new().add_text(prefix).bold());
     }
 
     for run in inline_runs_with_footnote_size(inlines, true, false, profile.font_size_footnote_hp) {
         para = para.add_run(run);
     }
     para
+}
+
+fn caption_prefix_text(kind: &str, number: Option<&str>, separator: &str) -> Option<String> {
+    if kind.is_empty() {
+        return None;
+    }
+
+    let sep = if separator.is_empty() {
+        " ".to_string()
+    } else {
+        separator.to_string()
+    };
+
+    if let Some(number) = number {
+        Some(format!("{kind} {number}{sep}"))
+    } else {
+        Some(format!("{kind}{sep}"))
+    }
 }
 
 fn caption_is_prefixed(kind: &str, inlines: &[Inline]) -> bool {
@@ -764,6 +791,7 @@ fn render_figure_block(
         docx = docx.add_paragraph(caption_paragraph(
             &profile.caption_label_figure,
             figure_number,
+            &profile.caption_label_separator_figure,
             &figure.caption,
             profile,
         ));
@@ -1218,6 +1246,18 @@ mod tests {
         let plain = vec![Inline::Text("Пример".to_string())];
         assert!(caption_is_prefixed("ТАБЛИЦА", &prefixed));
         assert!(!caption_is_prefixed("Таблица", &plain));
+    }
+
+    #[test]
+    fn caption_prefix_uses_configured_separator() {
+        assert_eq!(
+            caption_prefix_text("Table", Some("2"), " --- "),
+            Some("Table 2 --- ".to_string())
+        );
+        assert_eq!(
+            caption_prefix_text("Figure", Some("3"), ": "),
+            Some("Figure 3: ".to_string())
+        );
     }
 
     #[test]

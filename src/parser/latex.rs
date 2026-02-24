@@ -368,6 +368,14 @@ fn extract_layout_settings(source: &str) -> DocumentLayout {
     }
     layout.caption_label_separator_figure = extract_captionsetup_label_separator(source, "figure");
     layout.caption_label_separator_table = extract_captionsetup_label_separator(source, "table");
+    layout.caption_skip_twips_figure = extract_captionsetup_skip_twips(source, "figure");
+    layout.caption_skip_twips_table = extract_captionsetup_skip_twips(source, "table");
+    layout.caption_position_figure = extract_captionsetup_position(source, "figure");
+    layout.caption_position_table = extract_captionsetup_position(source, "table");
+    layout.caption_singlelinecheck_figure = extract_captionsetup_singlelinecheck(source, "figure");
+    layout.caption_singlelinecheck_table = extract_captionsetup_singlelinecheck(source, "table");
+    layout.caption_indent_twips_figure = extract_captionsetup_indent_twips(source, "figure");
+    layout.caption_indent_twips_table = extract_captionsetup_indent_twips(source, "table");
 
     // ── Chapter name prefix ────────────────────────────────────────────
     // \renewcommand{\chaptername}{Глава}
@@ -982,6 +990,99 @@ fn extract_captionsetup_label_separator(source: &str, target: &str) -> Option<St
     let declarations = extract_caption_label_separator_declarations(source);
     let raw = extract_captionsetup_option(source, Some(target), "labelsep")?;
     resolve_caption_label_separator(&raw, &declarations, source)
+}
+
+/// Extract caption skip for `target` (`"figure"` or `"table"`) in twips.
+fn extract_captionsetup_skip_twips(source: &str, target: &str) -> Option<i32> {
+    let raw = extract_captionsetup_option(source, Some(target), "skip")?;
+    let resolved = resolve_captionsetup_option_value(&raw, source)?;
+    parse_latex_length_to_twips_or_zero(&resolved)
+}
+
+/// Extract caption position for `target` (`"figure"` or `"table"`).
+///
+/// Canonical return values: `"top"` or `"bottom"`.
+fn extract_captionsetup_position(source: &str, target: &str) -> Option<String> {
+    let raw = extract_captionsetup_option(source, Some(target), "position")?;
+    let resolved = resolve_captionsetup_option_value(&raw, source)?;
+    normalize_caption_position(&resolved).map(|value| value.to_string())
+}
+
+/// Extract caption `singlelinecheck` for `target` (`"figure"` or `"table"`).
+fn extract_captionsetup_singlelinecheck(source: &str, target: &str) -> Option<bool> {
+    let raw = extract_captionsetup_option(source, Some(target), "singlelinecheck")?;
+    let resolved = resolve_captionsetup_option_value(&raw, source)?;
+    parse_caption_bool(&resolved)
+}
+
+/// Extract caption indent for `target` (`"figure"` or `"table"`) in twips.
+fn extract_captionsetup_indent_twips(source: &str, target: &str) -> Option<i32> {
+    let raw = extract_captionsetup_option(source, Some(target), "indent")?;
+    let resolved = resolve_captionsetup_option_value(&raw, source)?;
+    parse_latex_length_to_twips_or_zero(&resolved)
+}
+
+/// Resolve `\captionsetup{...}` option value if it references a macro.
+///
+/// Example:
+/// - `singlelinecheck=\tabsinglecenter` with
+///   `\newcommand{\tabsinglecenter}{false}` resolves to `"false"`.
+fn resolve_captionsetup_option_value(raw: &str, source: &str) -> Option<String> {
+    resolve_captionsetup_option_value_inner(raw, source, 0)
+}
+
+fn resolve_captionsetup_option_value_inner(
+    raw: &str,
+    source: &str,
+    depth: usize,
+) -> Option<String> {
+    if depth > 8 {
+        return None;
+    }
+
+    let trimmed = raw.trim().trim_matches(['{', '}']).trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+
+    if let Some(cmd_name) = trimmed.strip_prefix('\\') {
+        if let Some(value) = extract_renewcommand_value(source, cmd_name) {
+            return resolve_captionsetup_option_value_inner(&value, source, depth + 1);
+        }
+        return Some(cmd_name.to_string());
+    }
+
+    Some(trimmed.to_string())
+}
+
+fn parse_caption_bool(raw: &str) -> Option<bool> {
+    match raw
+        .trim()
+        .trim_matches(['{', '}'])
+        .to_ascii_lowercase()
+        .as_str()
+    {
+        "true" | "on" | "yes" | "1" => Some(true),
+        "false" | "off" | "no" | "0" => Some(false),
+        _ => None,
+    }
+}
+
+fn normalize_caption_position(raw: &str) -> Option<&'static str> {
+    let normalized = raw.trim().trim_matches(['{', '}']).to_ascii_lowercase();
+    match normalized.as_str() {
+        "top" | "above" => Some("top"),
+        "bottom" | "below" => Some("bottom"),
+        _ => None,
+    }
+}
+
+fn parse_latex_length_to_twips_or_zero(raw: &str) -> Option<i32> {
+    let trimmed = raw.trim().trim_matches(['{', '}']).trim();
+    if trimmed == "0" {
+        return Some(0);
+    }
+    parse_latex_length_to_twips(trimmed)
 }
 
 fn extract_caption_label_separator_declarations(source: &str) -> HashMap<String, String> {
@@ -6863,6 +6964,84 @@ Body.";
     #[test]
     fn test_extract_captionsetup_justification_absent() {
         assert_eq!(extract_captionsetup_justification("Body."), None);
+    }
+
+    #[test]
+    fn test_extract_captionsetup_skip_twips_target_and_global_fallback() {
+        let src = "\\captionsetup{skip=4pt}\n\\captionsetup[table]{skip=3pt}\nBody.";
+        let doc = parse_latex(src);
+        assert_eq!(doc.layout.caption_skip_twips_table, Some(60));
+        assert_eq!(doc.layout.caption_skip_twips_figure, Some(80));
+    }
+
+    #[test]
+    fn test_extract_captionsetup_skip_twips_absent() {
+        let doc = parse_latex("Body.");
+        assert_eq!(doc.layout.caption_skip_twips_table, None);
+        assert_eq!(doc.layout.caption_skip_twips_figure, None);
+    }
+
+    #[test]
+    fn test_extract_captionsetup_position_target_and_global_fallback() {
+        let src = "\\captionsetup{position=below}\n\\captionsetup[table]{position=above}\nBody.";
+        let doc = parse_latex(src);
+        assert_eq!(doc.layout.caption_position_table.as_deref(), Some("top"));
+        assert_eq!(
+            doc.layout.caption_position_figure.as_deref(),
+            Some("bottom")
+        );
+    }
+
+    #[test]
+    fn test_extract_captionsetup_position_absent() {
+        let doc = parse_latex("Body.");
+        assert_eq!(doc.layout.caption_position_table, None);
+        assert_eq!(doc.layout.caption_position_figure, None);
+    }
+
+    #[test]
+    fn test_extract_captionsetup_singlelinecheck_from_macro() {
+        let src = "\
+\\newcommand{\\tabsinglecenter}{false}
+\\captionsetup[table]{singlelinecheck=\\tabsinglecenter}
+\\captionsetup[figure]{singlelinecheck=true}
+Body.";
+        let doc = parse_latex(src);
+        assert_eq!(doc.layout.caption_singlelinecheck_table, Some(false));
+        assert_eq!(doc.layout.caption_singlelinecheck_figure, Some(true));
+    }
+
+    #[test]
+    fn test_extract_captionsetup_singlelinecheck_absent() {
+        let doc = parse_latex("Body.");
+        assert_eq!(doc.layout.caption_singlelinecheck_table, None);
+        assert_eq!(doc.layout.caption_singlelinecheck_figure, None);
+    }
+
+    #[test]
+    fn test_extract_captionsetup_indent_twips_from_macro() {
+        let src = "\
+\\newcommand{\\tabindent}{1.25cm}
+\\captionsetup[table]{indent=\\tabindent}
+Body.";
+        let doc = parse_latex(src);
+        assert_eq!(doc.layout.caption_indent_twips_table, Some(709));
+        assert_eq!(doc.layout.caption_indent_twips_figure, None);
+    }
+
+    #[test]
+    fn test_extract_captionsetup_indent_twips_target_and_global_fallback() {
+        let src = "\\captionsetup{indent=0pt}\n\\captionsetup[figure]{indent=6pt}\nBody.";
+        let doc = parse_latex(src);
+        assert_eq!(doc.layout.caption_indent_twips_figure, Some(120));
+        assert_eq!(doc.layout.caption_indent_twips_table, Some(0));
+    }
+
+    #[test]
+    fn test_extract_captionsetup_indent_twips_absent() {
+        let doc = parse_latex("Body.");
+        assert_eq!(doc.layout.caption_indent_twips_table, None);
+        assert_eq!(doc.layout.caption_indent_twips_figure, None);
     }
 
     #[test]

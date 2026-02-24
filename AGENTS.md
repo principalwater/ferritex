@@ -4,6 +4,9 @@
 - This project is 100% Rust. No Python, no shell scripts, no Pandoc
   subprocess calls, no FFI to non-Rust libraries unless absolutely
   unavoidable (document why in this file if so).
+- ferritex is a generic LaTeX→DOCX tool for arbitrary LaTeX projects
+  (articles, journal papers, dissertations, books, theses). Do not tune
+  implementation to a single corpus.
 - All crate versions must be stable releases from crates.io. Do not
   use git dependencies or pre-release versions.
 - CLI is the primary interface. Use clap with derive macros.
@@ -49,6 +52,7 @@ pattern — no exceptions:
 | Paragraph indent | `\setlength{\parindent}{…}` | `body_first_line_indent_twips` | 709 (1.25 cm) | ✅ parsed + rendered |
 | Heading format | `\chaptername`, `\MakeUppercase`, numbering delimiter, alignment | `chapter_name`, `heading_uppercase`, `heading_alignment`, `heading_number_delimiter` | "", false, Left, "." | ✅ parsed + rendered |
 | Caption labels | `\renewcommand{\figurename}{…}`, `\renewcommand{\tablename}{…}`, `\captionsetup{labelsep=…}`, `\DeclareCaptionLabelSeparator` | `caption_label_figure`, `caption_label_table`, `caption_label_separator_figure`, `caption_label_separator_table` | "Figure", "Table", ". " | ✅ parsed + rendered |
+| Caption layout | `\captionsetup{skip=…, position=…, singlelinecheck=…, indent=…}` (global and `[figure]/[table]`) | `caption_skip_twips_figure/table`, `caption_position_figure/table`, `caption_singlelinecheck_figure/table`, `caption_indent_twips_figure/table` | skip=0 twips, figure position=bottom, table position=top, singlelinecheck=true, indent=0 | ✅ parsed + rendered |
 | Language | babel/polyglossia main language | `document_language` | None (no language tag) | ✅ parsed + rendered |
 
 **Test requirement**: every `DocumentLayout` field must have a

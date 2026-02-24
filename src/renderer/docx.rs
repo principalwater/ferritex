@@ -44,8 +44,16 @@ const IMAGE_EXTENSIONS: &[&str] = &["png", "jpg", "jpeg", "bmp", "tif", "tiff", 
 const EMU_PER_TWIP: u32 = 635;
 const IMAGE_SAFE_SCALE_NUM: u32 = 100;
 const IMAGE_SAFE_SCALE_DEN: u32 = 100;
-const LIST_LEVEL_LEFT_INDENT_TWIPS: i32 = 600;
-const LIST_LEVEL_HANGING_TWIPS: i32 = 240;
+/// Default list left indent = body first-line indent (1.25 cm = 709 twips).
+const DEFAULT_LIST_LEFT_TWIPS: i32 = 709;
+/// Default list hanging indent = labelsep + labelwidth ≈ 2 × 0.5em at 14pt ≈ 284 twips.
+const DEFAULT_LIST_HANGING_TWIPS: i32 = 284;
+/// Default bullet character for unordered lists.
+const DEFAULT_LIST_BULLET: &str = "•";
+/// Default vertical space above `\tablesource` line in twips (4pt).
+const DEFAULT_SOURCE_VSPACE_TABLE_TWIPS: i32 = 80;
+/// Default vertical space above `\figuresource` line in twips (2pt).
+const DEFAULT_SOURCE_VSPACE_FIGURE_TWIPS: i32 = 40;
 const LIST_NUM_ID_BASE: usize = 100;
 const DEFAULT_TOC_RIGHT_MARGIN_TWIPS: i32 = 0;
 /// Default: chapter TOC entry text is bold (memoir/tocloft default when no `\cftchapterfont` override).
@@ -152,6 +160,18 @@ struct RenderProfile {
     // ── List formatting ──────────────────────────────────────────────
     list_left_indent_twips: i32,
     list_hanging_indent_twips: i32,
+    /// Bullet character for unordered list items. Driven by `\renewcommand{\labelitemi}{...}`.
+    list_bullet_char: String,
+
+    // ── Source attribution lines ─────────────────────────────────────
+    /// Vertical space above table source line in twips. Driven by `\tablesource` vspace.
+    source_vspace_table_twips: i32,
+    /// Vertical space above figure source line in twips. Driven by `\figuresource` vspace.
+    source_vspace_figure_twips: i32,
+
+    // ── Title page ──────────────────────────────────────────────────
+    /// Whether to suppress page number on the first page. Driven by `\thispagestyle{empty}`.
+    title_page_suppress_number: bool,
 
     // ── Caption alignment ────────────────────────────────────────────
     caption_alignment: AlignmentType,
@@ -347,13 +367,35 @@ impl RenderProfile {
                 .unwrap_or_default(),
             // TOC appendix prefix: empty = no appendix prefix.
             toc_appendix_name: layout.toc_appendix_name.clone().unwrap_or_default(),
-            // List indentation: fallback matches body first-line indent.
-            list_left_indent_twips: layout
-                .list_left_indent_twips
-                .unwrap_or(LIST_LEVEL_LEFT_INDENT_TWIPS),
-            list_hanging_indent_twips: layout
-                .list_hanging_indent_twips
-                .unwrap_or(LIST_LEVEL_HANGING_TWIPS),
+            // List indentation: left = parindent, hanging = labelsep + labelwidth.
+            list_left_indent_twips: layout.list_left_indent_twips.unwrap_or_else(|| {
+                layout
+                    .body_first_line_indent_twips
+                    .unwrap_or(DEFAULT_LIST_LEFT_TWIPS)
+            }),
+            list_hanging_indent_twips: layout.list_hanging_indent_twips.unwrap_or_else(|| {
+                if layout.list_label_sep_twips.is_none() && layout.list_label_width_twips.is_none()
+                {
+                    DEFAULT_LIST_HANGING_TWIPS
+                } else {
+                    let sep = layout.list_label_sep_twips.unwrap_or(142); // 0.5em at 14pt
+                    let width = layout.list_label_width_twips.unwrap_or(sep); // auto (!) = labelsep
+                    sep + width
+                }
+            }),
+            list_bullet_char: layout
+                .list_bullet_char
+                .clone()
+                .unwrap_or_else(|| DEFAULT_LIST_BULLET.to_string()),
+            // Source attribution spacing: driven by \tablesource / \figuresource vspace.
+            source_vspace_table_twips: layout
+                .source_vspace_table_twips
+                .unwrap_or(DEFAULT_SOURCE_VSPACE_TABLE_TWIPS),
+            source_vspace_figure_twips: layout
+                .source_vspace_figure_twips
+                .unwrap_or(DEFAULT_SOURCE_VSPACE_FIGURE_TWIPS),
+            // Title page: suppress page number when \thispagestyle{empty} detected.
+            title_page_suppress_number: layout.title_page_suppress_number.unwrap_or(false),
             // Caption alignment: default centred.
             caption_alignment: parse_alignment(
                 layout.caption_alignment.as_deref().unwrap_or("center"),
@@ -594,7 +636,11 @@ pub fn render_docx_with_context(
                     ));
                 }
                 if !t.source.is_empty() {
-                    docx = docx.add_paragraph(source_paragraph(&t.source, &profile));
+                    docx = docx.add_paragraph(source_paragraph(
+                        &t.source,
+                        &profile,
+                        profile.source_vspace_table_twips,
+                    ));
                 }
                 rendered_any_block = true;
             }
@@ -629,6 +675,10 @@ pub fn render_docx_with_context(
                 docx = docx.add_paragraph(build_display_math_paragraph(src));
                 rendered_any_block = true;
             }
+            Block::BibliographyHeading { title } => {
+                docx = docx.add_paragraph(build_bibliography_heading(title, &profile));
+                rendered_any_block = true;
+            }
         }
     }
 
@@ -660,7 +710,16 @@ fn create_styled_docx(profile: &RenderProfile) -> Docx {
         docx = docx.add_style(style);
     }
 
-    docx.header(page_number_header())
+    // Default (non-first-page) header carries the page number.
+    docx = docx.header(page_number_header());
+
+    // When the title page has \thispagestyle{empty}, enable different-first-page mode.
+    // The first-page header is left empty (Word default), so no number appears on page 1.
+    if profile.title_page_suppress_number {
+        docx = docx.title_pg();
+    }
+
+    docx
 }
 
 fn gost_styles(fonts: RunFonts, profile: &RenderProfile) -> Vec<Style> {
@@ -871,10 +930,10 @@ fn line_spacing(twips: i32) -> LineSpacing {
 fn register_numbering(docx: Docx, num_id: usize, ordered: bool, profile: &RenderProfile) -> Docx {
     let abs_id = num_id - 1; // abstract IDs are 0-based by convention
 
-    let (format, text) = if ordered {
+    let (format, text): (&str, &str) = if ordered {
         ("decimal", "%1.")
     } else {
-        ("bullet", "•")
+        ("bullet", &profile.list_bullet_char)
     };
 
     let level = Level::new(
@@ -1089,18 +1148,43 @@ fn caption_is_prefixed(kind: &str, inlines: &[Inline]) -> bool {
         .starts_with(&kind.to_lowercase())
 }
 
-/// A justified plain paragraph used for source attributions.
-fn source_paragraph(inlines: &[Inline], profile: &RenderProfile) -> Paragraph {
+/// A left-aligned small italic paragraph used for source attributions (`\figuresource`/`\tablesource`).
+///
+/// Matches the LaTeX definition `{\noindent\raggedright\small\textit{#1}}`.
+/// `vspace_twips` is added as `space_before` to replicate `\vspace{...}` before the line.
+fn source_paragraph(inlines: &[Inline], profile: &RenderProfile, vspace_twips: i32) -> Paragraph {
+    let spacing = {
+        let mut s = line_spacing(profile.body_line_spacing_twips);
+        if vspace_twips > 0 {
+            s = s.before(vspace_twips as u32);
+        }
+        s
+    };
     let mut para = Paragraph::new()
         .style("BodyText")
-        .align(AlignmentType::Both)
-        .line_spacing(line_spacing(profile.body_line_spacing_twips))
-        .indent(Some(0), None, None, None);
-    for run in inline_runs_with_footnote_size(inlines, false, false, profile.font_size_footnote_hp)
-    {
+        .align(AlignmentType::Left)
+        .line_spacing(spacing)
+        .indent(Some(0), Some(SpecialIndentType::FirstLine(0)), None, None);
+    for run in inline_runs_with_footnote_size(inlines, false, true, profile.font_size_footnote_hp) {
         para = para.add_run(run);
     }
     para
+}
+
+/// A chapter-level heading for a bibliography section.
+///
+/// Renders `\printbibliography` / `\insertbibliofullsorted` as an unnumbered chapter heading.
+fn build_bibliography_heading(title: &str, profile: &RenderProfile) -> Paragraph {
+    let text = if profile.heading_uppercase {
+        title.to_uppercase()
+    } else {
+        title.to_string()
+    };
+    Paragraph::new()
+        .style("Heading1")
+        .align(profile.heading_alignment)
+        .indent(Some(0), Some(SpecialIndentType::FirstLine(0)), None, None)
+        .add_run(Run::new().add_text(text))
 }
 
 /// A centred italic paragraph for display-math blocks.
@@ -1241,7 +1325,11 @@ fn render_figure_block(
     }
 
     if !figure.source.is_empty() {
-        docx = docx.add_paragraph(source_paragraph(&figure.source, profile));
+        docx = docx.add_paragraph(source_paragraph(
+            &figure.source,
+            profile,
+            profile.source_vspace_figure_twips,
+        ));
     }
 
     docx
@@ -1415,8 +1503,12 @@ fn build_paragraph(block: &Block, profile: &RenderProfile) -> Paragraph {
         Block::StyledParagraph { inlines, style } => {
             build_styled_body_paragraph(inlines, style, profile)
         }
-        // Table, Figure, List, DisplayMath are handled separately — unreachable here.
-        Block::Table(_) | Block::Figure(_) | Block::List(_) | Block::DisplayMath(_) => {
+        // Table, Figure, List, DisplayMath, BibliographyHeading are handled separately — unreachable here.
+        Block::Table(_)
+        | Block::Figure(_)
+        | Block::List(_)
+        | Block::DisplayMath(_)
+        | Block::BibliographyHeading { .. } => {
             unreachable!()
         }
     }
@@ -2415,5 +2507,86 @@ mod tests {
             xml.contains("1. "),
             "expected '1. ' with aftersnum separator, xml: {xml}"
         );
+    }
+
+    // ── List indent geometry tests ────────────────────────────────────────────
+
+    #[test]
+    fn list_indent_defaults_use_body_first_line_indent() {
+        let mut layout = DocumentLayout::default();
+        layout.body_first_line_indent_twips = Some(709);
+        let profile = RenderProfile::from_layout(&layout);
+        // list_left should equal body first-line indent (parindent).
+        assert_eq!(profile.list_left_indent_twips, 709);
+        // list_hanging = labelsep + labelwidth (both default to ~142 twips).
+        assert!(
+            profile.list_hanging_indent_twips > 0,
+            "hanging indent should be positive"
+        );
+    }
+
+    #[test]
+    fn list_bullet_char_fallback_is_bullet() {
+        let layout = DocumentLayout::default();
+        let profile = RenderProfile::from_layout(&layout);
+        assert_eq!(profile.list_bullet_char, "•");
+    }
+
+    #[test]
+    fn list_bullet_char_from_layout() {
+        let mut layout = DocumentLayout::default();
+        layout.list_bullet_char = Some("–".to_string());
+        let profile = RenderProfile::from_layout(&layout);
+        assert_eq!(profile.list_bullet_char, "–");
+    }
+
+    // ── Source vspace tests ───────────────────────────────────────────────────
+
+    #[test]
+    fn source_vspace_defaults() {
+        let layout = DocumentLayout::default();
+        let profile = RenderProfile::from_layout(&layout);
+        assert_eq!(
+            profile.source_vspace_table_twips,
+            DEFAULT_SOURCE_VSPACE_TABLE_TWIPS
+        );
+        assert_eq!(
+            profile.source_vspace_figure_twips,
+            DEFAULT_SOURCE_VSPACE_FIGURE_TWIPS
+        );
+    }
+
+    #[test]
+    fn source_vspace_from_layout() {
+        let mut layout = DocumentLayout::default();
+        layout.source_vspace_table_twips = Some(100);
+        layout.source_vspace_figure_twips = Some(50);
+        let profile = RenderProfile::from_layout(&layout);
+        assert_eq!(profile.source_vspace_table_twips, 100);
+        assert_eq!(profile.source_vspace_figure_twips, 50);
+    }
+
+    #[test]
+    fn caption_indent_defaults_to_zero_for_figure_and_table() {
+        let profile = RenderProfile::from_layout(&DocumentLayout::default());
+        assert_eq!(profile.caption_indent_twips_figure, 0);
+        assert_eq!(profile.caption_indent_twips_table, 0);
+    }
+
+    // ── Title page suppression tests ──────────────────────────────────────────
+
+    #[test]
+    fn title_page_suppress_defaults_false() {
+        let layout = DocumentLayout::default();
+        let profile = RenderProfile::from_layout(&layout);
+        assert!(!profile.title_page_suppress_number);
+    }
+
+    #[test]
+    fn title_page_suppress_from_layout() {
+        let mut layout = DocumentLayout::default();
+        layout.title_page_suppress_number = Some(true);
+        let profile = RenderProfile::from_layout(&layout);
+        assert!(profile.title_page_suppress_number);
     }
 }

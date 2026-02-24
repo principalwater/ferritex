@@ -303,6 +303,10 @@ fn parse_latex_with_mode(
                         preserve_dynamic_markers,
                     ) {
                         blocks.push(block);
+                    } else if let Some(block) =
+                        try_parse_bibliography_command(prepared.text.as_str())
+                    {
+                        blocks.push(block);
                     } else {
                         let inlines = parse_inlines(
                             prepared.text.as_str(),
@@ -651,11 +655,22 @@ fn extract_layout_settings(source: &str) -> DocumentLayout {
     layout.toc_right_margin_twips = extract_toc_right_margin_twips(source);
     layout.toc_use_dot_leader = extract_toc_dot_leader(source);
 
-    // ── List indentation ─────────────────────────────────────────────
-    // Derive from \parindent if available — lists typically match body indent.
-    if layout.body_first_line_indent_twips.is_some() {
+    // ── List formatting ──────────────────────────────────────────────
+    let (list_label_sep, list_label_width, list_bullet) = extract_list_settings(source);
+    layout.list_label_sep_twips = list_label_sep;
+    layout.list_label_width_twips = list_label_width;
+    layout.list_bullet_char = list_bullet;
+    // Left indent for list items = \parindent (body first-line indent).
+    if layout.list_left_indent_twips.is_none() {
         layout.list_left_indent_twips = layout.body_first_line_indent_twips;
     }
+
+    // ── Source attribution spacing ────────────────────────────────────
+    layout.source_vspace_table_twips = extract_source_vspace_twips(source, "tablesource");
+    layout.source_vspace_figure_twips = extract_source_vspace_twips(source, "figuresource");
+
+    // ── Title page page number suppression ────────────────────────────
+    layout.title_page_suppress_number = extract_title_page_suppress_number(source);
 
     // ── Caption alignment ────────────────────────────────────────────
     // \captionsetup{justification=centering}
@@ -1549,6 +1564,224 @@ fn extract_toc_appendix_name(source: &str) -> Option<String> {
     let substituted = raw.replace("\\appendixname", &appendix_name);
     let plain = strip_latex_controls(&substituted);
     Some(normalize_whitespace(&plain).trim().to_string())
+}
+
+// ── List settings extraction ─────────────────────────────────────────────────
+
+/// Extract enumitem list settings from `\setlist{...}` and `\renewcommand{\labelitemi}{...}`.
+///
+/// Returns `(label_sep_twips, label_width_twips, bullet_char)`.
+/// - `label_sep_twips`: from `labelsep=<dim>` in `\setlist{...}`.
+/// - `label_width_twips`: `None` when `labelwidth=!` (auto), otherwise from `labelwidth=<dim>`.
+/// - `bullet_char`: from `\renewcommand{\labelitemi}{...}`, stripped of formatting commands.
+fn extract_list_settings(source: &str) -> (Option<i32>, Option<i32>, Option<String>) {
+    let sep = extract_setlist_param_twips(source, "labelsep");
+    let width = extract_setlist_labelwidth_twips(source);
+    let bullet = extract_labelitemi_char(source);
+    (sep, width, bullet)
+}
+
+/// Extract a dimension parameter from the first `\setlist{..., name=<dim>, ...}` block.
+fn extract_setlist_param_twips(source: &str, param: &str) -> Option<i32> {
+    let needle = "\\setlist";
+    let mut pos = 0usize;
+    while let Some(rel) = source[pos..].find(needle) {
+        let start = pos + rel + needle.len();
+        // Skip optional [list-type] argument.
+        let after_cmd = source[start..].trim_start_matches([' ', '\t', '\n', '\r']);
+        let after_cmd_pos = start + (source[start..].len() - after_cmd.len());
+        let content_start = if after_cmd.starts_with('[') {
+            // Skip past the optional argument.
+            if let Some(close) = source[after_cmd_pos..].find(']') {
+                after_cmd_pos + close + 1
+            } else {
+                pos = start;
+                continue;
+            }
+        } else {
+            after_cmd_pos
+        };
+        // Now find the mandatory {…} argument.
+        let trimmed = source[content_start..].trim_start_matches([' ', '\t', '\n', '\r']);
+        let trimmed_pos = content_start + (source[content_start..].len() - trimmed.len());
+        if !trimmed.starts_with('{') {
+            pos = start;
+            continue;
+        }
+        if let Some(body) = extract_braced(&source[trimmed_pos..]) {
+            // Look for `param=<dim>` inside the body.
+            let search = format!("{param}=");
+            if let Some(rel_p) = body.find(&search) {
+                let after_eq = &body[rel_p + search.len()..];
+                // Collect the dimension token (up to , or }).
+                let dim: String = after_eq
+                    .chars()
+                    .take_while(|c| *c != ',' && *c != '}' && *c != '\n')
+                    .collect();
+                let dim = dim.trim();
+                if !dim.is_empty()
+                    && let Some(tw) = parse_latex_length_to_twips(dim)
+                {
+                    return Some(tw);
+                }
+            }
+        }
+        pos = start;
+    }
+    None
+}
+
+/// Extract `labelwidth` from `\setlist{..., labelwidth=<dim-or-!>, ...}`.
+///
+/// Returns `None` for `labelwidth=!` (auto-width).
+fn extract_setlist_labelwidth_twips(source: &str) -> Option<i32> {
+    let needle = "\\setlist";
+    let mut pos = 0usize;
+    while let Some(rel) = source[pos..].find(needle) {
+        let start = pos + rel + needle.len();
+        let after_cmd = source[start..].trim_start_matches([' ', '\t', '\n', '\r']);
+        let after_cmd_pos = start + (source[start..].len() - after_cmd.len());
+        let content_start = if after_cmd.starts_with('[') {
+            if let Some(close) = source[after_cmd_pos..].find(']') {
+                after_cmd_pos + close + 1
+            } else {
+                pos = start;
+                continue;
+            }
+        } else {
+            after_cmd_pos
+        };
+        let trimmed = source[content_start..].trim_start_matches([' ', '\t', '\n', '\r']);
+        let trimmed_pos = content_start + (source[content_start..].len() - trimmed.len());
+        if !trimmed.starts_with('{') {
+            pos = start;
+            continue;
+        }
+        if let Some(body) = extract_braced(&source[trimmed_pos..])
+            && let Some(rel_p) = body.find("labelwidth=")
+        {
+            let after_eq = body[rel_p + "labelwidth=".len()..].trim_start();
+            if after_eq.starts_with('!') {
+                // Auto-width — return None.
+                return None;
+            }
+            let dim: String = after_eq
+                .chars()
+                .take_while(|c| *c != ',' && *c != '}' && *c != '\n')
+                .collect();
+            let dim = dim.trim();
+            if !dim.is_empty() {
+                return parse_latex_length_to_twips(dim);
+            }
+        }
+        pos = start;
+    }
+    None
+}
+
+/// Extract the bullet character from `\renewcommand{\labelitemi}{...}`.
+///
+/// Strips formatting control sequences (`\normalfont`, `\bfseries`, etc.) and returns
+/// the visible character(s). Common mappings: `{--}` → `"–"`, `{\textendash}` → `"–"`.
+fn extract_labelitemi_char(source: &str) -> Option<String> {
+    let raw = extract_renewcommand_value(source, "labelitemi")?;
+    if raw.trim().is_empty() {
+        return None;
+    }
+    // Map known LaTeX commands to Unicode.
+    let substituted = raw
+        .replace("\\textendash", "–")
+        .replace("\\textemdash", "—")
+        .replace("\\textbullet", "•")
+        .replace("\\textasteriskcentered", "*")
+        .replace("---", "—")
+        .replace("--", "–");
+    // Strip remaining control sequences and formatting.
+    let plain = strip_latex_controls(&substituted);
+    let result = plain.trim().to_string();
+    if result.is_empty() {
+        None
+    } else {
+        Some(result)
+    }
+}
+
+// ── Source vspace extraction ─────────────────────────────────────────────────
+
+/// Extract the vertical space (in twips) specified before the content in a
+/// `\newcommand{\<macro_name>}[1]{\par\vspace{<dim>}...}` definition.
+///
+/// Strategy: find the definition marker, then look for the first `\vspace{<dim>}`
+/// within 200 characters — reliable for the common `\par\vspace{4pt}{...}` pattern.
+fn extract_source_vspace_twips(source: &str, macro_name: &str) -> Option<i32> {
+    let def_marker_new = format!("\\newcommand{{\\{macro_name}}}");
+    let def_marker_renew = format!("\\renewcommand{{\\{macro_name}}}");
+    let def_pos = source
+        .find(&def_marker_new)
+        .or_else(|| source.find(&def_marker_renew))?;
+    // Scan a window after the definition marker for the first \vspace{dim}.
+    let window = &source[def_pos..source.len().min(def_pos + 400)];
+    let vspace_rel = window.find("\\vspace{")?;
+    let after_v = &window[vspace_rel + "\\vspace{".len()..];
+    let close = after_v.find('}')?;
+    let dim = after_v[..close].trim();
+    parse_latex_length_to_twips(dim)
+}
+
+// ── Title page page number suppression ──────────────────────────────────────
+
+/// Detect `\thispagestyle{empty}` inside `\begin{titlingpage}` / `\begin{titlepage}`.
+///
+/// Returns `Some(true)` when the title page suppresses the page number.
+fn extract_title_page_suppress_number(source: &str) -> Option<bool> {
+    // Look for titlingpage or titlepage environment containing \thispagestyle{empty}.
+    for env in ["titlingpage", "titlepage"] {
+        let begin = format!("\\begin{{{env}}}");
+        let end = format!("\\end{{{env}}}");
+        let mut pos = 0usize;
+        while let Some(rel) = source[pos..].find(&begin) {
+            let start = pos + rel + begin.len();
+            let body = if let Some(end_rel) = source[start..].find(&end) {
+                &source[start..start + end_rel]
+            } else {
+                &source[start..]
+            };
+            if body.contains("\\thispagestyle{empty}") {
+                return Some(true);
+            }
+            pos = start;
+        }
+    }
+    // Also check for a standalone \thispagestyle{empty} very early in the document
+    // (within the first 3000 bytes), which is a common pattern for title pages.
+    let early = &source[..source.len().min(3000)];
+    if early.contains("\\thispagestyle{empty}") {
+        return Some(true);
+    }
+    None
+}
+
+// ── Bibliography block parsing ───────────────────────────────────────────────
+
+/// Extract the title from a `\printbibliography[title=...]` optional argument.
+///
+/// Returns `None` if no `title=` key is found.
+fn extract_printbibliography_title(args: &str) -> Option<String> {
+    // args is the content inside [...] of \printbibliography[...]
+    let key = "title=";
+    let pos = args.find(key)?;
+    let after = &args[pos + key.len()..];
+    // Title value may be bare (title=WORD) or braced (title={text}).
+    if after.starts_with('{') {
+        extract_braced(after).map(str::to_string)
+    } else {
+        let val: String = after
+            .chars()
+            .take_while(|c| *c != ',' && *c != ']')
+            .collect();
+        let val = val.trim().to_string();
+        if val.is_empty() { None } else { Some(val) }
+    }
 }
 
 /// Extract TOC entry indent and number-width settings for a given entry kind
@@ -3031,7 +3264,7 @@ fn resolve_dynamic_placeholders(blocks: &mut [Block], metadata: &ParseMetadata) 
                     resolve_inline_placeholders(item, metadata);
                 }
             }
-            Block::DisplayMath(_) => {}
+            Block::DisplayMath(_) | Block::BibliographyHeading { .. } => {}
         }
 
         if let Block::Figure(figure) = block {
@@ -3082,7 +3315,7 @@ fn resolve_citation_placeholders(blocks: &mut [Block], bibliography: &HashMap<St
                     resolve_inline_citations(item, bibliography);
                 }
             }
-            Block::DisplayMath(_) => {}
+            Block::DisplayMath(_) | Block::BibliographyHeading { .. } => {}
         }
         if let Block::Figure(figure) = block {
             resolve_inline_citations(&mut figure.source, bibliography);
@@ -4868,7 +5101,7 @@ fn resolve_references(
                     resolve_inline_references(item, &labels);
                 }
             }
-            Block::DisplayMath(_) => {}
+            Block::DisplayMath(_) | Block::BibliographyHeading { .. } => {}
         }
     }
 }
@@ -4955,7 +5188,10 @@ fn build_label_registry(
                     labels.insert(label, value.clone());
                 }
             }
-            Block::Paragraph(_) | Block::StyledParagraph { .. } | Block::List(_) => {}
+            Block::Paragraph(_)
+            | Block::StyledParagraph { .. }
+            | Block::List(_)
+            | Block::BibliographyHeading { .. } => {}
         }
     }
 
@@ -5137,6 +5373,52 @@ fn try_parse_structural_heading_command(
         label: None,
         title,
     })
+}
+
+/// Detect bibliography-rendering commands and emit a `Block::BibliographyHeading`.
+///
+/// Recognised commands:
+/// - `\printbibliography[title=...]` — title from optional arg or default "СПИСОК ЛИТЕРАТУРЫ"
+/// - `\insertbibliofullsorted` — default title "СПИСОК ЛИТЕРАТУРЫ"
+/// - `\insertbiblioauthor` — same default
+///
+/// Only the heading is rendered; no `.bib` file entries are parsed.
+fn try_parse_bibliography_command(chunk: &str) -> Option<Block> {
+    let s = chunk.trim_start();
+    let default_title = "СПИСОК ЛИТЕРАТУРЫ".to_string();
+
+    if let Some(rest) = s.strip_prefix("\\printbibliography") {
+        // Try to extract title from optional [title=...] argument.
+        let after = rest.trim_start();
+        let (title, has_nobibheading) = if after.starts_with('[') {
+            if let Some(close) = after.find(']') {
+                let args = &after[1..close];
+                let no_heading = args.contains("nobibheading");
+                let t = extract_printbibliography_title(args).unwrap_or(default_title);
+                (t, no_heading)
+            } else {
+                (default_title, false)
+            }
+        } else {
+            (default_title, false)
+        };
+        // Skip `heading=nobibheading` — those have no visible heading.
+        if has_nobibheading || title.trim().is_empty() {
+            return None;
+        }
+        return Some(Block::BibliographyHeading { title });
+    }
+
+    if s.starts_with("\\insertbibliofullsorted")
+        || s.starts_with("\\insertbiblioauthor")
+        || s.starts_with("\\insertbibliofull")
+    {
+        return Some(Block::BibliographyHeading {
+            title: default_title,
+        });
+    }
+
+    None
 }
 
 fn is_plain_front_matter_heading(lower: &str) -> bool {
@@ -8723,5 +9005,128 @@ Body.";
             text.contains(" denote"),
             "space after math missing: {text:?}"
         );
+    }
+
+    // ── List settings extraction tests ───────────────────────────────────────
+
+    #[test]
+    fn test_extract_list_settings_labelsep_em() {
+        let source = r"\setlist{nosep, labelsep=.5em, labelwidth=!, leftmargin=\dimexpr\parindent-\labelwidth-\labelsep\relax}";
+        let (sep, width, _bullet) = extract_list_settings(source);
+        // 0.5em at 14pt (280 twips/em) = 140 twips
+        let sep = sep.expect("labelsep should be extracted");
+        assert!((130..=150).contains(&sep), "expected ~140 twips, got {sep}");
+        assert!(width.is_none(), "labelwidth=! should produce None");
+    }
+
+    #[test]
+    fn test_extract_list_settings_absent() {
+        let source = r"\usepackage{enumitem}";
+        let (sep, width, bullet) = extract_list_settings(source);
+        assert!(sep.is_none());
+        assert!(width.is_none());
+        assert!(bullet.is_none());
+    }
+
+    #[test]
+    fn test_extract_labelitemi_char_endash() {
+        let source = r"\renewcommand{\labelitemi}{\normalfont\bfseries{--}}";
+        let (_sep, _width, bullet) = extract_list_settings(source);
+        let bullet = bullet.expect("bullet should be extracted");
+        assert_eq!(bullet, "–", "expected en-dash, got {bullet:?}");
+    }
+
+    #[test]
+    fn test_extract_labelitemi_char_absent() {
+        let source = r"\usepackage{enumitem}";
+        let (_sep, _width, bullet) = extract_list_settings(source);
+        assert!(bullet.is_none());
+    }
+
+    // ── Source vspace extraction tests ───────────────────────────────────────
+
+    #[test]
+    fn test_extract_source_vspace_tablesource() {
+        let source = r"\newcommand{\tablesource}[1]{\par\vspace{4pt}{\noindent\raggedright\small\textit{#1}\par}}";
+        let tw = extract_source_vspace_twips(source, "tablesource");
+        // 4pt = 80 twips
+        let tw = tw.expect("vspace should be extracted");
+        assert_eq!(tw, 80, "expected 80 twips (4pt), got {tw}");
+    }
+
+    #[test]
+    fn test_extract_source_vspace_figuresource() {
+        let source = r"\newcommand{\figuresource}[1]{\par\vspace{2pt}{\noindent\raggedright\small\textit{#1}\par}}";
+        let tw = extract_source_vspace_twips(source, "figuresource");
+        let tw = tw.expect("vspace should be extracted");
+        assert_eq!(tw, 40, "expected 40 twips (2pt), got {tw}");
+    }
+
+    #[test]
+    fn test_extract_source_vspace_absent() {
+        let source = r"\usepackage{caption}";
+        assert!(extract_source_vspace_twips(source, "tablesource").is_none());
+    }
+
+    // ── Title page page number suppression tests ─────────────────────────────
+
+    #[test]
+    fn test_extract_title_page_suppress_inside_titlingpage() {
+        let source = "\\begin{titlingpage}\n\\thispagestyle{empty}\n\\end{titlingpage}";
+        assert_eq!(extract_title_page_suppress_number(source), Some(true));
+    }
+
+    #[test]
+    fn test_extract_title_page_suppress_absent() {
+        let source = "\\begin{document}\nSome text.\n\\end{document}";
+        assert!(extract_title_page_suppress_number(source).is_none());
+    }
+
+    // ── Bibliography command parsing tests ────────────────────────────────────
+
+    #[test]
+    fn test_try_parse_bibliography_printbibliography_no_title() {
+        let block = try_parse_bibliography_command("\\printbibliography");
+        match block {
+            Some(Block::BibliographyHeading { title }) => {
+                assert_eq!(title, "СПИСОК ЛИТЕРАТУРЫ");
+            }
+            other => panic!("expected BibliographyHeading, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_try_parse_bibliography_printbibliography_with_title() {
+        let block = try_parse_bibliography_command("\\printbibliography[title={References}]");
+        match block {
+            Some(Block::BibliographyHeading { title }) => {
+                assert_eq!(title, "References");
+            }
+            other => panic!("expected BibliographyHeading, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_try_parse_bibliography_nobibheading_skipped() {
+        let block =
+            try_parse_bibliography_command("\\printbibliography[heading=nobibheading, section=1]");
+        assert!(block.is_none(), "nobibheading should produce None");
+    }
+
+    #[test]
+    fn test_try_parse_bibliography_insertbibliofullsorted() {
+        let block = try_parse_bibliography_command("\\insertbibliofullsorted");
+        match block {
+            Some(Block::BibliographyHeading { title }) => {
+                assert_eq!(title, "СПИСОК ЛИТЕРАТУРЫ");
+            }
+            other => panic!("expected BibliographyHeading, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_try_parse_bibliography_not_a_bib_command() {
+        assert!(try_parse_bibliography_command("\\chapter{Introduction}").is_none());
+        assert!(try_parse_bibliography_command("Some paragraph text.").is_none());
     }
 }

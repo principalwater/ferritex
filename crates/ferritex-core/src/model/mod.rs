@@ -309,6 +309,13 @@ pub enum Block {
     /// Emitted for `\printbibliography`, `\insertbibliofullsorted`, and similar commands.
     /// No bibliography entries are parsed — only the section heading is produced.
     BibliographyHeading { title: String },
+    /// Marks the position where `\tableofcontents` was declared in the LaTeX source.
+    ///
+    /// The renderer expands this into generated TOC paragraphs at render time.
+    /// No language-specific text is stored — the AST node type is the signal.
+    /// The section heading (e.g. "ОГЛАВЛЕНИЕ") is emitted separately by the
+    /// preceding `\chapter*{...}` command and appears as a `Block::Section`.
+    TableOfContents,
 }
 
 /// A table block.

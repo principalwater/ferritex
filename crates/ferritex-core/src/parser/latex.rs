@@ -25,6 +25,9 @@ struct ParseMetadata {
     counters: HashMap<String, i64>,
     text_counters: HashMap<String, String>,
     bibliography: HashMap<String, BibEntry>,
+    /// LaTeX document class name (e.g. `"memoir"`, `"disser"`, `"article"`).
+    /// `None` when no `\documentclass` is found (e.g. in test snippets).
+    document_class: Option<String>,
 }
 
 const DEFAULT_PAGE_WIDTH_TWIPS: i32 = 11_906;
@@ -319,16 +322,14 @@ fn parse_latex_with_mode(
                         preserve_dynamic_markers,
                     ) {
                         blocks.push(block);
-                    } else if let Some(block) = try_parse_structural_heading_command(
-                        prepared.text.as_str(),
-                        autocite_mode,
-                        metadata,
-                        preserve_dynamic_markers,
-                    ) {
-                        blocks.push(block);
                     } else if let Some(block) =
-                        try_parse_bibliography_command(prepared.text.as_str())
+                        try_parse_structural_heading_command(prepared.text.as_str())
                     {
+                        blocks.push(block);
+                    } else if let Some(block) = try_parse_bibliography_command(
+                        prepared.text.as_str(),
+                        layout.document_language.as_deref(),
+                    ) {
                         blocks.push(block);
                     } else {
                         let cleaned_chunk =
@@ -2627,6 +2628,30 @@ fn default_chapter_name_for_language(language: Option<&str>) -> Option<&'static 
     }
 }
 
+/// Returns the default bibliography section title for the given BCP-47 language tag.
+///
+/// Used as fallback when `\printbibliography` has no `title=` argument and when
+/// `\insertbibliofullsorted` or similar commands appear without an explicit title.
+///
+/// Follows the same pattern as [`default_chapter_name_for_language`].
+/// Falls back to `"REFERENCES"` for unknown or absent language tags.
+fn default_bibliography_title_for_language(language: Option<&str>) -> &'static str {
+    match language {
+        Some("ru-RU") => "СПИСОК ЛИТЕРАТУРЫ",
+        Some("uk-UA") => "СПИСОК ЛІТЕРАТУРИ",
+        Some("be-BY") => "СПІС ЛІТАРАТУРЫ",
+        Some("kk-KZ") => "ӘДЕБИЕТТЕР ТІЗІМІ",
+        Some("en-US") | Some("en-GB") => "REFERENCES",
+        Some("de-DE") => "LITERATURVERZEICHNIS",
+        Some("fr-FR") => "BIBLIOGRAPHIE",
+        Some("es-ES") => "BIBLIOGRAFÍA",
+        Some("it-IT") => "BIBLIOGRAFIA",
+        Some("pt-BR") => "REFERÊNCIAS",
+        Some("tr-TR") => "KAYNAKLAR",
+        _ => "REFERENCES",
+    }
+}
+
 /// Extract braced argument lists for chapter-related `\titleformat` commands.
 ///
 /// Supports:
@@ -3027,6 +3052,7 @@ fn parse_latex_length_prefix_to_twips(raw: &str) -> Option<i32> {
 fn collect_parse_metadata(source: &str, input_path: &Path, root_dir: &Path) -> ParseMetadata {
     let mut metadata = ParseMetadata {
         counters: collect_setcounter_values(source),
+        document_class: extract_documentclass_name(source),
         ..ParseMetadata::default()
     };
 
@@ -3604,7 +3630,7 @@ fn resolve_dynamic_placeholders(blocks: &mut [Block], metadata: &ParseMetadata) 
                     resolve_inline_placeholders(item, metadata);
                 }
             }
-            Block::DisplayMath(_) | Block::BibliographyHeading { .. } => {}
+            Block::DisplayMath(_) | Block::BibliographyHeading { .. } | Block::TableOfContents => {}
         }
 
         if let Block::Figure(figure) = block {
@@ -3680,7 +3706,7 @@ fn resolve_footnote_citation_placeholders(
                     resolve_footnote_citations_inlines(item, bibliography, &mut tracker, false);
                 }
             }
-            Block::DisplayMath(_) | Block::BibliographyHeading { .. } => {}
+            Block::DisplayMath(_) | Block::BibliographyHeading { .. } | Block::TableOfContents => {}
         }
 
         if let Block::Figure(figure) = block {
@@ -3799,7 +3825,7 @@ fn resolve_citation_placeholders(blocks: &mut [Block], bibliography: &HashMap<St
                     resolve_inline_citations(item, bibliography);
                 }
             }
-            Block::DisplayMath(_) | Block::BibliographyHeading { .. } => {}
+            Block::DisplayMath(_) | Block::BibliographyHeading { .. } | Block::TableOfContents => {}
         }
         if let Block::Figure(figure) = block {
             resolve_inline_citations(&mut figure.source, bibliography);
@@ -4006,6 +4032,19 @@ fn replace_counter_markers(text: &str, metadata: &ParseMetadata) -> String {
 }
 
 fn apply_known_counter_fallbacks(text: &str, metadata: &ParseMetadata) -> String {
+    // DISSERTATION-SPECIFIC: The patterns below match placeholder strings from
+    // Russian dissertation style templates (e.g. the `disser` document class).
+    // Gated on document class to avoid false positives for unrelated documents.
+    // When document_class is None (e.g. test snippets without \documentclass),
+    // we skip all replacements — safe because the template strings are not
+    // realistic content for non-dissertation documents.
+    let is_dissertation_class = metadata.document_class.as_deref().is_some_and(|c| {
+        c.eq_ignore_ascii_case("disser") || c.to_ascii_lowercase().contains("dissert")
+    });
+    if !is_dissertation_class {
+        return text.to_string();
+    }
+
     let mut out = text.to_string();
 
     if out.contains("XX печатных изданиях") {
@@ -4747,7 +4786,8 @@ fn attach_standalone_label(blocks: &mut [Block], label: String) {
             Block::Paragraph(_)
             | Block::StyledParagraph { .. }
             | Block::List(_)
-            | Block::BibliographyHeading { .. } => {}
+            | Block::BibliographyHeading { .. }
+            | Block::TableOfContents => {}
         }
     }
 }
@@ -5989,7 +6029,7 @@ fn resolve_references(
                     resolve_inline_references(item, &labels, preserve_reference_nodes);
                 }
             }
-            Block::DisplayMath(_) | Block::BibliographyHeading { .. } => {}
+            Block::DisplayMath(_) | Block::BibliographyHeading { .. } | Block::TableOfContents => {}
         }
     }
 }
@@ -6079,7 +6119,8 @@ fn build_label_registry(
             Block::Paragraph(_)
             | Block::StyledParagraph { .. }
             | Block::List(_)
-            | Block::BibliographyHeading { .. } => {}
+            | Block::BibliographyHeading { .. }
+            | Block::TableOfContents => {}
         }
     }
 
@@ -6247,30 +6288,18 @@ fn try_parse_plain_heading(
     })
 }
 
-fn try_parse_structural_heading_command(
-    chunk: &str,
-    autocite_mode: AutociteMode,
-    metadata: &ParseMetadata,
-    preserve_dynamic_markers: bool,
-) -> Option<Block> {
+/// Detect `\tableofcontents` and emit a language-neutral [`Block::TableOfContents`].
+///
+/// The renderer expands this node into generated TOC paragraphs at render time.
+/// The heading text (e.g. "ОГЛАВЛЕНИЕ", "Table of Contents") is NOT stored here —
+/// it must come from a preceding `\chapter*{...}` or similar command in the LaTeX source.
+fn try_parse_structural_heading_command(chunk: &str) -> Option<Block> {
     let command = chunk.trim_start();
-    let heading = if command.starts_with("\\tableofcontents") {
-        "ОГЛАВЛЕНИЕ"
+    if command.starts_with("\\tableofcontents") {
+        Some(Block::TableOfContents)
     } else {
-        return None;
-    };
-
-    let title = parse_inlines(heading, autocite_mode, metadata, preserve_dynamic_markers);
-    if title.is_empty() {
-        return None;
+        None
     }
-
-    Some(Block::Section {
-        level: 1,
-        number: None,
-        label: None,
-        title,
-    })
 }
 
 /// Detect bibliography-rendering commands and emit a `Block::BibliographyHeading`.
@@ -6281,9 +6310,21 @@ fn try_parse_structural_heading_command(
 /// - `\insertbiblioauthor` — same default
 ///
 /// Only the heading is rendered; no `.bib` file entries are parsed.
-fn try_parse_bibliography_command(chunk: &str) -> Option<Block> {
+/// Detect bibliography-rendering commands and emit a `Block::BibliographyHeading`.
+///
+/// Recognised commands:
+/// - `\printbibliography[title=...]` — title from optional arg or language default
+/// - `\insertbibliofullsorted` — language-derived default title
+/// - `\insertbiblioauthor` — same default
+///
+/// The `language` parameter is a BCP-47 tag (e.g. `"ru-RU"`, `"en-US"`) derived from
+/// `\usepackage[...]{babel}` or `\setmainlanguage{...}`. When `None`, defaults to
+/// `"REFERENCES"`. Explicit `title=` arguments always take precedence over the default.
+///
+/// Only the heading is rendered; no `.bib` file entries are parsed.
+fn try_parse_bibliography_command(chunk: &str, language: Option<&str>) -> Option<Block> {
     let s = chunk.trim_start();
-    let default_title = "СПИСОК ЛИТЕРАТУРЫ".to_string();
+    let default_title = || default_bibliography_title_for_language(language).to_string();
 
     if let Some(rest) = s.strip_prefix("\\printbibliography") {
         // Try to extract title from optional [title=...] argument.
@@ -6292,13 +6333,13 @@ fn try_parse_bibliography_command(chunk: &str) -> Option<Block> {
             if let Some(close) = after.find(']') {
                 let args = &after[1..close];
                 let no_heading = args.contains("nobibheading");
-                let t = extract_printbibliography_title(args).unwrap_or(default_title);
+                let t = extract_printbibliography_title(args).unwrap_or_else(default_title);
                 (t, no_heading)
             } else {
-                (default_title, false)
+                (default_title(), false)
             }
         } else {
-            (default_title, false)
+            (default_title(), false)
         };
         // Skip `heading=nobibheading` — those have no visible heading.
         if has_nobibheading || title.trim().is_empty() {
@@ -6312,13 +6353,23 @@ fn try_parse_bibliography_command(chunk: &str) -> Option<Block> {
         || s.starts_with("\\insertbibliofull")
     {
         return Some(Block::BibliographyHeading {
-            title: default_title,
+            title: default_title(),
         });
     }
 
     None
 }
 
+/// Detects plain-text (non-LaTeX-command) headings in unnumbered paragraph text.
+///
+/// These strings are Russian-specific because they match a known corpus where
+/// front-matter sections are sometimes written as plain text without LaTeX commands.
+///
+/// **Known limitation**: non-Russian plain-text documents that use this path will
+/// need their own patterns. This function is NOT called for `\tableofcontents` —
+/// that command always emits [`Block::TableOfContents`] via
+/// [`try_parse_structural_heading_command`]. The `"оглавление"` entry here only
+/// matches a literal plain-text heading with no preceding LaTeX command.
 fn is_plain_front_matter_heading(lower: &str) -> bool {
     let trimmed = lower.trim();
     matches!(

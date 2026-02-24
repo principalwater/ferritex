@@ -577,31 +577,27 @@ fn test_makeuppercase_command_keeps_argument_text() {
 
 #[test]
 fn test_tableofcontents_command_becomes_heading_block() {
+    // \tableofcontents must emit a language-neutral Block::TableOfContents,
+    // not a Block::Section with Russian "ОГЛАВЛЕНИЕ" text.
+    let doc = parse_latex("\\tableofcontents");
+    assert_eq!(doc.blocks.len(), 1, "unexpected blocks: {:?}", doc.blocks);
+    assert!(
+        matches!(&doc.blocks[0], Block::TableOfContents),
+        "expected Block::TableOfContents, got {:?}",
+        doc.blocks[0]
+    );
+}
+
+#[test]
+fn test_tableofcontents_with_asterisk_becomes_toc_node() {
+    // \tableofcontents* (starred variant) also emits Block::TableOfContents.
     let doc = parse_latex("\\tableofcontents*");
     assert_eq!(doc.blocks.len(), 1, "unexpected blocks: {:?}", doc.blocks);
-    match &doc.blocks[0] {
-        Block::Section {
-            level,
-            number,
-            title,
-            ..
-        } => {
-            assert_eq!(*level, 1);
-            assert!(
-                number.is_none(),
-                "table of contents heading must be unnumbered"
-            );
-            let text = title
-                .iter()
-                .filter_map(|inline| match inline {
-                    Inline::Text(value) => Some(value.as_str()),
-                    _ => None,
-                })
-                .collect::<String>();
-            assert!(text.contains("ОГЛАВЛЕНИЕ"), "unexpected title: {text}");
-        }
-        other => panic!("expected Section, got {other:?}"),
-    }
+    assert!(
+        matches!(&doc.blocks[0], Block::TableOfContents),
+        "expected Block::TableOfContents, got {:?}",
+        doc.blocks[0]
+    );
 }
 
 #[test]
@@ -2731,7 +2727,8 @@ fn test_titlepage_flushright_tabular_preserves_vspace_plus_box_padding() {
 
 #[test]
 fn test_try_parse_bibliography_printbibliography_no_title() {
-    let block = try_parse_bibliography_command("\\printbibliography");
+    // With Russian language, default title is "СПИСОК ЛИТЕРАТУРЫ".
+    let block = try_parse_bibliography_command("\\printbibliography", Some("ru-RU"));
     match block {
         Some(Block::BibliographyHeading { title }) => {
             assert_eq!(title, "СПИСОК ЛИТЕРАТУРЫ");
@@ -2742,7 +2739,9 @@ fn test_try_parse_bibliography_printbibliography_no_title() {
 
 #[test]
 fn test_try_parse_bibliography_printbibliography_with_title() {
-    let block = try_parse_bibliography_command("\\printbibliography[title={References}]");
+    // Explicit title= always overrides language default.
+    let block =
+        try_parse_bibliography_command("\\printbibliography[title={References}]", Some("ru-RU"));
     match block {
         Some(Block::BibliographyHeading { title }) => {
             assert_eq!(title, "References");
@@ -2753,14 +2752,17 @@ fn test_try_parse_bibliography_printbibliography_with_title() {
 
 #[test]
 fn test_try_parse_bibliography_nobibheading_skipped() {
-    let block =
-        try_parse_bibliography_command("\\printbibliography[heading=nobibheading, section=1]");
+    let block = try_parse_bibliography_command(
+        "\\printbibliography[heading=nobibheading, section=1]",
+        None,
+    );
     assert!(block.is_none(), "nobibheading should produce None");
 }
 
 #[test]
 fn test_try_parse_bibliography_insertbibliofullsorted() {
-    let block = try_parse_bibliography_command("\\insertbibliofullsorted");
+    // With Russian language, default title is "СПИСОК ЛИТЕРАТУРЫ".
+    let block = try_parse_bibliography_command("\\insertbibliofullsorted", Some("ru-RU"));
     match block {
         Some(Block::BibliographyHeading { title }) => {
             assert_eq!(title, "СПИСОК ЛИТЕРАТУРЫ");
@@ -2771,6 +2773,68 @@ fn test_try_parse_bibliography_insertbibliofullsorted() {
 
 #[test]
 fn test_try_parse_bibliography_not_a_bib_command() {
-    assert!(try_parse_bibliography_command("\\chapter{Introduction}").is_none());
-    assert!(try_parse_bibliography_command("Some paragraph text.").is_none());
+    assert!(try_parse_bibliography_command("\\chapter{Introduction}", None).is_none());
+    assert!(try_parse_bibliography_command("Some paragraph text.", None).is_none());
+}
+
+#[test]
+fn test_bibliography_default_title_english() {
+    // With English language, default title is "REFERENCES".
+    let block = try_parse_bibliography_command("\\insertbibliofullsorted", Some("en-US"));
+    match block {
+        Some(Block::BibliographyHeading { title }) => {
+            assert_eq!(title, "REFERENCES");
+        }
+        other => panic!("expected BibliographyHeading, got {other:?}"),
+    }
+}
+
+#[test]
+fn test_bibliography_default_title_unknown_language_falls_back_to_references() {
+    // Unknown language tag falls back to "REFERENCES".
+    let block = try_parse_bibliography_command("\\printbibliography", None);
+    match block {
+        Some(Block::BibliographyHeading { title }) => {
+            assert_eq!(title, "REFERENCES");
+        }
+        other => panic!("expected BibliographyHeading, got {other:?}"),
+    }
+}
+
+#[test]
+fn test_bibliography_explicit_title_overrides_language() {
+    // Explicit title= wins regardless of language.
+    let block = try_parse_bibliography_command(
+        "\\printbibliography[title=Works Cited]",
+        Some("ru-RU"),
+    );
+    match block {
+        Some(Block::BibliographyHeading { title }) => {
+            assert_eq!(title, "Works Cited");
+        }
+        other => panic!("expected BibliographyHeading, got {other:?}"),
+    }
+}
+
+// ── Dissertation counter fallback gate tests ───────────────────────────────
+
+#[test]
+fn test_counter_fallbacks_skipped_for_non_dissertation_class() {
+    // When document class is NOT a dissertation class, the placeholder
+    // "Диссертация состоит из..." must be left untouched by the parser.
+    // parse_latex() has no \documentclass, so document_class = None → gate fires.
+    let placeholder = "Диссертация состоит из введения, главы, заключения и приложений.";
+    let doc = parse_latex(placeholder);
+    // The text should survive unchanged in the parsed paragraph.
+    let found = doc.blocks.iter().any(|b| match b {
+        Block::Paragraph(inlines) => inlines.iter().any(|inline| match inline {
+            Inline::Text(t) => t.contains("главы"),
+            _ => false,
+        }),
+        _ => false,
+    });
+    assert!(
+        found,
+        "dissertation placeholder should be preserved unchanged for non-dissertation class"
+    );
 }

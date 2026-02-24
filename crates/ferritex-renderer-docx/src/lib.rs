@@ -2408,7 +2408,7 @@ fn resize_paragraph_runs(mut para: Paragraph, size_hp: usize) -> Paragraph {
     for child in &mut para.children {
         match child {
             docx_rs::ParagraphChild::Run(run) => {
-                *run = Box::new((**run).clone().size(size_hp));
+                **run = (**run).clone().size(size_hp);
             }
             docx_rs::ParagraphChild::Hyperlink(link) => {
                 let mut updated = link.clone();

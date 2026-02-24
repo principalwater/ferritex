@@ -211,25 +211,23 @@ fn normalize_math_text_supports_sim_and_double_dash_ranges() {
 
 #[test]
 fn generated_toc_paragraphs_include_chapters_and_sections() {
+    // Block::TableOfContents is the AST signal for TOC position.
+    // generated_toc_paragraphs is called with start_index=1 (past the TOC node)
+    // and should emit entries for the following Section blocks.
     let document = Document {
         blocks: vec![
-            Block::Section {
-                level: 1,
-                number: None,
-                label: None,
-                title: vec![Inline::Text("ОГЛАВЛЕНИЕ".to_string())],
-            },
+            Block::TableOfContents,
             Block::Section {
                 level: 1,
                 number: Some("1.".to_string()),
                 label: None,
-                title: vec![Inline::Text("Глава".to_string())],
+                title: vec![Inline::Text("Chapter".to_string())],
             },
             Block::Section {
                 level: 2,
                 number: Some("1.1".to_string()),
                 label: None,
-                title: vec![Inline::Text("Раздел".to_string())],
+                title: vec![Inline::Text("Section".to_string())],
             },
         ],
         layout: DocumentLayout::default(),

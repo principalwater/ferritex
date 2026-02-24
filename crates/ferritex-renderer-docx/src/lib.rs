@@ -614,7 +614,8 @@ fn build_reference_render_index(
             Block::Paragraph(_)
             | Block::StyledParagraph { .. }
             | Block::List(_)
-            | Block::BibliographyHeading { .. } => {}
+            | Block::BibliographyHeading { .. }
+            | Block::TableOfContents => {}
         }
     }
 
@@ -804,12 +805,7 @@ pub fn render_docx_with_context(
 
     for (index, block) in document.blocks.iter().enumerate() {
         match block {
-            Block::Section {
-                level,
-                number,
-                title,
-                ..
-            } => {
+            Block::Section { level, number, .. } => {
                 if *level == 1
                     && let Some(number) = number
                 {
@@ -837,12 +833,12 @@ pub fn render_docx_with_context(
                     &mut next_bookmark_id,
                 );
                 docx = docx.add_paragraph(para);
-                if *level == 1 && number.is_none() && is_toc_heading(title) {
-                    for toc_para in
-                        generated_toc_paragraphs(document, index + 1, &profile, &ref_index)
-                    {
-                        docx = docx.add_paragraph(toc_para);
-                    }
+                rendered_any_block = true;
+            }
+            Block::TableOfContents => {
+                for toc_para in generated_toc_paragraphs(document, index + 1, &profile, &ref_index)
+                {
+                    docx = docx.add_paragraph(toc_para);
                 }
                 rendered_any_block = true;
             }
@@ -1912,12 +1908,14 @@ fn build_paragraph(
         Block::StyledParagraph { inlines, style } => {
             build_styled_body_paragraph(inlines, style, profile, refs)
         }
-        // Table, Figure, List, DisplayMath, BibliographyHeading are handled separately — unreachable here.
+        // Table, Figure, List, DisplayMath, BibliographyHeading, TableOfContents
+        // are handled separately in the render loop — unreachable here.
         Block::Table(_)
         | Block::Figure(_)
         | Block::List(_)
         | Block::DisplayMath(_)
-        | Block::BibliographyHeading { .. } => {
+        | Block::BibliographyHeading { .. }
+        | Block::TableOfContents => {
             unreachable!()
         }
     }
@@ -2042,11 +2040,6 @@ fn heading_style(level: u8) -> &'static str {
     }
 }
 
-fn is_toc_heading(title: &[Inline]) -> bool {
-    let text = collect_inline_text(title).to_uppercase();
-    text.contains("ОГЛАВЛЕНИЕ")
-}
-
 fn generated_toc_paragraphs(
     document: &Document,
     start_index: usize,
@@ -2071,9 +2064,6 @@ fn generated_toc_paragraphs(
         };
 
         if *level == 0 || *level > 2 {
-            continue;
-        }
-        if *level == 1 && number.is_none() && is_toc_heading(title) {
             continue;
         }
 
@@ -2110,9 +2100,6 @@ fn generated_toc_paragraphs_from_entries(
             continue;
         }
         let title_inlines = vec![Inline::Text(entry.title.clone())];
-        if entry.level == 1 && entry.number.is_none() && is_toc_heading(&title_inlines) {
-            continue;
-        }
         let target_anchor =
             refs.toc_anchor_for_entry(entry.level, entry.number.as_deref(), &entry.title);
         paragraphs.push(build_toc_entry_paragraph(

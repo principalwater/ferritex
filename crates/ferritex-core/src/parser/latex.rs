@@ -319,12 +319,9 @@ fn parse_latex_with_mode(
                         preserve_dynamic_markers,
                     ) {
                         blocks.push(block);
-                    } else if let Some(block) = try_parse_structural_heading_command(
-                        prepared.text.as_str(),
-                        autocite_mode,
-                        metadata,
-                        preserve_dynamic_markers,
-                    ) {
+                    } else if let Some(block) =
+                        try_parse_structural_heading_command(prepared.text.as_str())
+                    {
                         blocks.push(block);
                     } else if let Some(block) =
                         try_parse_bibliography_command(prepared.text.as_str())
@@ -3604,7 +3601,7 @@ fn resolve_dynamic_placeholders(blocks: &mut [Block], metadata: &ParseMetadata) 
                     resolve_inline_placeholders(item, metadata);
                 }
             }
-            Block::DisplayMath(_) | Block::BibliographyHeading { .. } => {}
+            Block::DisplayMath(_) | Block::BibliographyHeading { .. } | Block::TableOfContents => {}
         }
 
         if let Block::Figure(figure) = block {
@@ -3680,7 +3677,7 @@ fn resolve_footnote_citation_placeholders(
                     resolve_footnote_citations_inlines(item, bibliography, &mut tracker, false);
                 }
             }
-            Block::DisplayMath(_) | Block::BibliographyHeading { .. } => {}
+            Block::DisplayMath(_) | Block::BibliographyHeading { .. } | Block::TableOfContents => {}
         }
 
         if let Block::Figure(figure) = block {
@@ -3799,7 +3796,7 @@ fn resolve_citation_placeholders(blocks: &mut [Block], bibliography: &HashMap<St
                     resolve_inline_citations(item, bibliography);
                 }
             }
-            Block::DisplayMath(_) | Block::BibliographyHeading { .. } => {}
+            Block::DisplayMath(_) | Block::BibliographyHeading { .. } | Block::TableOfContents => {}
         }
         if let Block::Figure(figure) = block {
             resolve_inline_citations(&mut figure.source, bibliography);
@@ -4747,7 +4744,8 @@ fn attach_standalone_label(blocks: &mut [Block], label: String) {
             Block::Paragraph(_)
             | Block::StyledParagraph { .. }
             | Block::List(_)
-            | Block::BibliographyHeading { .. } => {}
+            | Block::BibliographyHeading { .. }
+            | Block::TableOfContents => {}
         }
     }
 }
@@ -5989,7 +5987,7 @@ fn resolve_references(
                     resolve_inline_references(item, &labels, preserve_reference_nodes);
                 }
             }
-            Block::DisplayMath(_) | Block::BibliographyHeading { .. } => {}
+            Block::DisplayMath(_) | Block::BibliographyHeading { .. } | Block::TableOfContents => {}
         }
     }
 }
@@ -6079,7 +6077,8 @@ fn build_label_registry(
             Block::Paragraph(_)
             | Block::StyledParagraph { .. }
             | Block::List(_)
-            | Block::BibliographyHeading { .. } => {}
+            | Block::BibliographyHeading { .. }
+            | Block::TableOfContents => {}
         }
     }
 
@@ -6247,30 +6246,18 @@ fn try_parse_plain_heading(
     })
 }
 
-fn try_parse_structural_heading_command(
-    chunk: &str,
-    autocite_mode: AutociteMode,
-    metadata: &ParseMetadata,
-    preserve_dynamic_markers: bool,
-) -> Option<Block> {
+/// Detect `\tableofcontents` and emit a language-neutral [`Block::TableOfContents`].
+///
+/// The renderer expands this node into generated TOC paragraphs at render time.
+/// The heading text (e.g. "ОГЛАВЛЕНИЕ", "Table of Contents") is NOT stored here —
+/// it must come from a preceding `\chapter*{...}` or similar command in the LaTeX source.
+fn try_parse_structural_heading_command(chunk: &str) -> Option<Block> {
     let command = chunk.trim_start();
-    let heading = if command.starts_with("\\tableofcontents") {
-        "ОГЛАВЛЕНИЕ"
+    if command.starts_with("\\tableofcontents") {
+        Some(Block::TableOfContents)
     } else {
-        return None;
-    };
-
-    let title = parse_inlines(heading, autocite_mode, metadata, preserve_dynamic_markers);
-    if title.is_empty() {
-        return None;
+        None
     }
-
-    Some(Block::Section {
-        level: 1,
-        number: None,
-        label: None,
-        title,
-    })
 }
 
 /// Detect bibliography-rendering commands and emit a `Block::BibliographyHeading`.
@@ -6319,6 +6306,16 @@ fn try_parse_bibliography_command(chunk: &str) -> Option<Block> {
     None
 }
 
+/// Detects plain-text (non-LaTeX-command) headings in unnumbered paragraph text.
+///
+/// These strings are Russian-specific because they match a known corpus where
+/// front-matter sections are sometimes written as plain text without LaTeX commands.
+///
+/// **Known limitation**: non-Russian plain-text documents that use this path will
+/// need their own patterns. This function is NOT called for `\tableofcontents` —
+/// that command always emits [`Block::TableOfContents`] via
+/// [`try_parse_structural_heading_command`]. The `"оглавление"` entry here only
+/// matches a literal plain-text heading with no preceding LaTeX command.
 fn is_plain_front_matter_heading(lower: &str) -> bool {
     let trimmed = lower.trim();
     matches!(

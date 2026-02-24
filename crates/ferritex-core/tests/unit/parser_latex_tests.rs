@@ -577,31 +577,27 @@ fn test_makeuppercase_command_keeps_argument_text() {
 
 #[test]
 fn test_tableofcontents_command_becomes_heading_block() {
+    // \tableofcontents must emit a language-neutral Block::TableOfContents,
+    // not a Block::Section with Russian "ОГЛАВЛЕНИЕ" text.
+    let doc = parse_latex("\\tableofcontents");
+    assert_eq!(doc.blocks.len(), 1, "unexpected blocks: {:?}", doc.blocks);
+    assert!(
+        matches!(&doc.blocks[0], Block::TableOfContents),
+        "expected Block::TableOfContents, got {:?}",
+        doc.blocks[0]
+    );
+}
+
+#[test]
+fn test_tableofcontents_with_asterisk_becomes_toc_node() {
+    // \tableofcontents* (starred variant) also emits Block::TableOfContents.
     let doc = parse_latex("\\tableofcontents*");
     assert_eq!(doc.blocks.len(), 1, "unexpected blocks: {:?}", doc.blocks);
-    match &doc.blocks[0] {
-        Block::Section {
-            level,
-            number,
-            title,
-            ..
-        } => {
-            assert_eq!(*level, 1);
-            assert!(
-                number.is_none(),
-                "table of contents heading must be unnumbered"
-            );
-            let text = title
-                .iter()
-                .filter_map(|inline| match inline {
-                    Inline::Text(value) => Some(value.as_str()),
-                    _ => None,
-                })
-                .collect::<String>();
-            assert!(text.contains("ОГЛАВЛЕНИЕ"), "unexpected title: {text}");
-        }
-        other => panic!("expected Section, got {other:?}"),
-    }
+    assert!(
+        matches!(&doc.blocks[0], Block::TableOfContents),
+        "expected Block::TableOfContents, got {:?}",
+        doc.blocks[0]
+    );
 }
 
 #[test]

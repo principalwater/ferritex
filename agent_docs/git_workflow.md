@@ -21,8 +21,8 @@ Run and pass:
 
 ```bash
 cargo fmt --all
-cargo clippy -- -D warnings
-cargo test
+cargo clippy --workspace --all-targets -- -D warnings
+cargo test --workspace
 ```
 
 ## Review Expectations

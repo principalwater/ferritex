@@ -17,9 +17,9 @@ These rules apply to all ferritex Rust code (`src/`, tests, and internal tooling
 - Renderer formatting must come from `DocumentLayout` fields.
 - Do not add hardcoded renderer formatting that bypasses parser extraction.
 - Any new formatting parameter must be implemented end-to-end:
-  - parser extraction in `src/parser/latex.rs`,
-  - model field in `src/model/mod.rs`,
-  - renderer consumption in `src/renderer/docx.rs`.
+  - parser extraction in `crates/ferritex-core/src/parser/latex.rs`,
+  - model field in `crates/ferritex-core/src/model/mod.rs`,
+  - renderer consumption in `crates/ferritex-renderer-docx/src/lib.rs`.
 
 ## 3) Fallback Defaults Location
 
@@ -47,4 +47,4 @@ These rules apply to all ferritex Rust code (`src/`, tests, and internal tooling
 
 ## 7) Generic Product Mindset
 
-ferritex is a generic LaTeX→DOCX tool for many document classes (articles, journals, dissertations, books, theses). Code must not assume any single corpus-specific formatting profile.
+ferritex is a generic LaTeX-driven converter for many document classes (articles, journals, dissertations, books, theses). Code must not assume any single corpus-specific formatting profile.

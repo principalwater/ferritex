@@ -21,9 +21,9 @@ Current state:
 ## Stage responsibilities
 
 1. **Build core** (`src/build/`): resolves paths, selects output format(s), orchestrates pipeline execution.
-2. **Parse** (`src/parser/`): reads LaTeX (including recursive includes), extracts document semantics and style parameters.
-3. **Model** (`src/model/`): defines AST + StyleMap as the only parser↔renderer contract.
-4. **Render** (`src/renderer/`): maps AST + StyleMap to backend primitives.
+2. **Parse** (`crates/ferritex-core/src/parser/`): reads LaTeX (including recursive includes), extracts document semantics and style parameters.
+3. **Model** (`crates/ferritex-core/src/model/`): defines AST + StyleMap as the only parser↔renderer contract.
+4. **Render** (`crates/ferritex-renderer-*/src/`): maps AST + StyleMap to backend primitives (`docx`, `pdf`, `md` backends are crate-isolated).
 
 ## Build core
 
@@ -31,7 +31,8 @@ The build core provides a single entry point (`build::run_build`) used by
 `build`, `convert`, and `tui`, ensuring one implementation for path resolution,
 artifact naming, and sequencing.
 
-Output formats are selected via `OutputFormat` (`docx` / `pdf` / `both`).
+Output formats are selected via `OutputFormat`
+(`docx` / `pdf` / `md` / `both` / `all`).
 
 ## Design goals
 

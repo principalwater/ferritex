@@ -1,0 +1,9 @@
+[package]
+name = "ferritex-core"
+version = "0.1.0"
+edition = "2024"
+description = "Core parser/model contracts for ferritex backends"
+license = "MIT"
+
+[dependencies]
+anyhow = { workspace = true }

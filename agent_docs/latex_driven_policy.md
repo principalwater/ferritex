@@ -2,7 +2,7 @@
 
 ## Core Principle
 
-ferritex is a generic LaTeX→DOCX converter.  
+ferritex is a generic LaTeX-driven converter (DOCX implemented; PDF/Markdown scaffolded).
 All formatting parameters must be derived from the LaTeX project, not hardcoded in the renderer.
 
 ## Required Data Flow
@@ -10,10 +10,10 @@ All formatting parameters must be derived from the LaTeX project, not hardcoded 
 Every formatting rule must follow this pipeline:
 
 1. LaTeX source (main file + included style/config files)
-2. Parser extraction (`src/parser/latex.rs`)
-3. `DocumentLayout` field (`src/model/mod.rs`)
-4. Renderer mapping (`RenderProfile::from_layout()` in `src/renderer/docx.rs`)
-5. DOCX emission logic consumes mapped values
+2. Parser extraction (`crates/ferritex-core/src/parser/latex.rs`)
+3. `DocumentLayout` field (`crates/ferritex-core/src/model/mod.rs`)
+4. Renderer mapping (`RenderProfile::from_layout()` in `crates/ferritex-renderer-docx/src/lib.rs`)
+5. Backend emission logic consumes mapped values
 
 ## Product Coverage
 
@@ -43,8 +43,8 @@ When users report formatting mismatches:
 
 For each new LaTeX formatting feature, update all three layers:
 
-1. Parser extraction (`src/parser/latex.rs`)
-2. Model field (`src/model/mod.rs`)
-3. Renderer consumption + fallback mapping (`src/renderer/docx.rs`)
+1. Parser extraction (`crates/ferritex-core/src/parser/latex.rs`)
+2. Model field (`crates/ferritex-core/src/model/mod.rs`)
+3. Renderer consumption + fallback mapping (`crates/ferritex-renderer-docx/src/lib.rs`)
 
 Plus tests for extraction behavior and fallback behavior.

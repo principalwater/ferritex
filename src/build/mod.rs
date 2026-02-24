@@ -1,7 +1,7 @@
 //! Unified build-core orchestrator for ferritex.
 //!
 //! This module provides a single entry point for converting LaTeX projects
-//! into one or more output formats (DOCX, PDF, or both). The `convert` and
+//! into one or more output formats (DOCX, PDF, Markdown). The `convert` and
 //! `tui` CLI modes delegate to this core so that path resolution, artifact
 //! naming, and pipeline sequencing are defined in one place.
 
@@ -19,19 +19,28 @@ pub enum OutputFormat {
     Docx,
     /// Generate PDF only (not yet implemented).
     Pdf,
+    /// Generate Markdown only (not yet implemented).
+    Md,
     /// Generate both DOCX and PDF.
     Both,
+    /// Generate all supported formats (DOCX + PDF + Markdown).
+    All,
 }
 
 impl OutputFormat {
     /// Returns `true` if the DOCX pipeline should run.
     pub fn needs_docx(self) -> bool {
-        matches!(self, Self::Docx | Self::Both)
+        matches!(self, Self::Docx | Self::Both | Self::All)
     }
 
     /// Returns `true` if the PDF pipeline should run.
     pub fn needs_pdf(self) -> bool {
-        matches!(self, Self::Pdf | Self::Both)
+        matches!(self, Self::Pdf | Self::Both | Self::All)
+    }
+
+    /// Returns `true` if the Markdown pipeline should run.
+    pub fn needs_md(self) -> bool {
+        matches!(self, Self::Md | Self::All)
     }
 }
 
@@ -59,6 +68,8 @@ pub struct BuildResult {
     pub docx: Option<PathBuf>,
     /// Path to the generated PDF file, if any.
     pub pdf: Option<PathBuf>,
+    /// Path to the generated Markdown file, if any.
+    pub md: Option<PathBuf>,
 }
 
 impl BuildConfig {
@@ -114,39 +125,65 @@ impl BuildConfig {
     pub fn pdf_path(&self) -> PathBuf {
         self.output_dir.join(format!("{}.pdf", self.output_stem))
     }
+
+    /// Resolve the expected Markdown artifact path.
+    #[allow(dead_code)] // Used in tests; will be used by the Markdown backend.
+    pub fn md_path(&self) -> PathBuf {
+        self.output_dir.join(format!("{}.md", self.output_stem))
+    }
 }
 
 /// Run the full build pipeline according to the given configuration.
 pub fn run_build(config: &BuildConfig) -> Result<BuildResult> {
+    log::info!("Reading {}", config.input.display());
+    let document = parser::latex::parse_latex_file(&config.input)
+        .with_context(|| format!("failed to parse {}", config.input.display()))?;
+    log::debug!("Parsed {} block(s)", document.blocks.len());
+
     let mut result = BuildResult::default();
 
     if config.format.needs_docx() {
         let docx_path = config.docx_path();
-        run_docx_pipeline(&config.input, &docx_path)?;
+        run_docx_pipeline(&document, &config.input, &docx_path)?;
         result.docx = Some(docx_path);
     }
 
     if config.format.needs_pdf() {
-        anyhow::bail!(
-            "PDF output is not yet implemented. \
-             Use --format docx for now."
-        );
+        let pdf_path = config.pdf_path();
+        run_pdf_pipeline(&document, &config.input, &pdf_path)?;
+        result.pdf = Some(pdf_path);
+    }
+
+    if config.format.needs_md() {
+        let md_path = config.md_path();
+        run_md_pipeline(&document, &config.input, &md_path)?;
+        result.md = Some(md_path);
     }
 
     Ok(result)
 }
 
-/// Execute the DOCX conversion pipeline: parse → render → write.
-fn run_docx_pipeline(input: &Path, output: &Path) -> Result<()> {
-    log::info!("Reading {}", input.display());
-    let document = parser::latex::parse_latex_file(input)
-        .with_context(|| format!("failed to parse {}", input.display()))?;
-    log::debug!("Parsed {} block(s)", document.blocks.len());
-
+/// Execute the DOCX conversion pipeline: render → write.
+fn run_docx_pipeline(document: &crate::model::Document, input: &Path, output: &Path) -> Result<()> {
     log::info!("Writing {}", output.display());
-    renderer::docx::render_docx_with_context(&document, output, Some(input))
+    renderer::docx::render_docx_with_context(document, output, Some(input))
         .with_context(|| format!("failed to write {}", output.display()))?;
+    Ok(())
+}
 
+/// Execute the PDF conversion pipeline: render → write.
+fn run_pdf_pipeline(document: &crate::model::Document, input: &Path, output: &Path) -> Result<()> {
+    log::info!("Writing {}", output.display());
+    renderer::pdf::render_pdf_with_context(document, output, Some(input))
+        .with_context(|| format!("failed to write {}", output.display()))?;
+    Ok(())
+}
+
+/// Execute the Markdown conversion pipeline: render → write.
+fn run_md_pipeline(document: &crate::model::Document, input: &Path, output: &Path) -> Result<()> {
+    log::info!("Writing {}", output.display());
+    renderer::md::render_md_with_context(document, output, Some(input))
+        .with_context(|| format!("failed to write {}", output.display()))?;
     log::info!("Done.");
     Ok(())
 }
@@ -167,12 +204,28 @@ mod tests {
     fn output_format_pdf_needs() {
         assert!(!OutputFormat::Pdf.needs_docx());
         assert!(OutputFormat::Pdf.needs_pdf());
+        assert!(!OutputFormat::Pdf.needs_md());
+    }
+
+    #[test]
+    fn output_format_md_needs() {
+        assert!(!OutputFormat::Md.needs_docx());
+        assert!(!OutputFormat::Md.needs_pdf());
+        assert!(OutputFormat::Md.needs_md());
     }
 
     #[test]
     fn output_format_both_needs() {
         assert!(OutputFormat::Both.needs_docx());
         assert!(OutputFormat::Both.needs_pdf());
+        assert!(!OutputFormat::Both.needs_md());
+    }
+
+    #[test]
+    fn output_format_all_needs() {
+        assert!(OutputFormat::All.needs_docx());
+        assert!(OutputFormat::All.needs_pdf());
+        assert!(OutputFormat::All.needs_md());
     }
 
     // -- BuildConfig path resolution -----------------------------------------
@@ -235,5 +288,15 @@ mod tests {
             OutputFormat::Pdf,
         );
         assert_eq!(cfg.pdf_path(), PathBuf::from("/out/thesis.pdf"));
+    }
+
+    #[test]
+    fn md_path_combines_dir_and_stem() {
+        let cfg = BuildConfig::from_build_args(
+            Path::new("thesis.tex"),
+            Some(Path::new("/out")),
+            OutputFormat::Md,
+        );
+        assert_eq!(cfg.md_path(), PathBuf::from("/out/thesis.md"));
     }
 }

@@ -9,8 +9,8 @@ use crate::build::OutputFormat;
 #[command(
     name = "ferritex",
     version,
-    about = "Build LaTeX (.tex) projects into DOCX, PDF, or both",
-    after_help = "Examples:\n  ferritex build --input main.tex --format docx\n  ferritex build --input main.tex --format both --output-dir out/\n  ferritex convert --input main.tex --output main.docx\n  ferritex tui --input main.tex"
+    about = "Build LaTeX (.tex) projects into DOCX, PDF, Markdown, or combined sets",
+    after_help = "Examples:\n  ferritex build --input main.tex --format docx\n  ferritex build --input main.tex --format both --output-dir out/\n  ferritex build --input main.tex --format md --output-dir out/\n  ferritex convert --input main.tex --output main.docx\n  ferritex tui --input main.tex"
 )]
 pub struct Cli {
     /// Enable verbose logging.
@@ -71,7 +71,9 @@ pub enum Command {
 pub enum CliOutputFormat {
     Docx,
     Pdf,
+    Md,
     Both,
+    All,
 }
 
 impl From<CliOutputFormat> for OutputFormat {
@@ -79,7 +81,9 @@ impl From<CliOutputFormat> for OutputFormat {
         match f {
             CliOutputFormat::Docx => OutputFormat::Docx,
             CliOutputFormat::Pdf => OutputFormat::Pdf,
+            CliOutputFormat::Md => OutputFormat::Md,
             CliOutputFormat::Both => OutputFormat::Both,
+            CliOutputFormat::All => OutputFormat::All,
         }
     }
 }
@@ -220,6 +224,18 @@ mod tests {
             } => {
                 assert_eq!(format, OutputFormat::Both);
                 assert_eq!(output_dir, Some(PathBuf::from("/tmp/out")));
+            }
+            other => panic!("expected build mode, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_resolve_mode_build_md_format() {
+        let cli = Cli::parse_from(["ferritex", "build", "--input", "main.tex", "--format", "md"]);
+        let (_, mode) = cli.resolve_mode().expect("mode should resolve");
+        match mode {
+            Mode::Build { format, .. } => {
+                assert_eq!(format, OutputFormat::Md);
             }
             other => panic!("expected build mode, got {other:?}"),
         }

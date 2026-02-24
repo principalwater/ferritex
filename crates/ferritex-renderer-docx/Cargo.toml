@@ -1,0 +1,13 @@
+[package]
+name = "ferritex-renderer-docx"
+version = "0.1.0"
+edition = "2024"
+description = "DOCX renderer backend for ferritex"
+license = "MIT"
+
+[dependencies]
+anyhow = { workspace = true }
+docx-rs = { workspace = true }
+log = { workspace = true }
+zip = { workspace = true }
+ferritex-core = { path = "../ferritex-core" }

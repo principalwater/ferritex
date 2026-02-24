@@ -1,15 +1,10 @@
-mod build;
-mod cli;
-mod error;
-mod model;
-mod parser;
-mod renderer;
-mod tui;
-
 use anyhow::Result;
-use build::BuildConfig;
 use clap::Parser;
-use cli::{Cli, Mode};
+use ferritex::{
+    build::{self, BuildConfig},
+    cli::{Cli, Mode},
+    tui,
+};
 use std::path::Path;
 
 fn main() -> Result<()> {

@@ -9,10 +9,10 @@ Copy and use this at the beginning of a new session to restore full project cont
 
 You are an AI coding agent (Claude Code / OpenAI Codex) working on `ferritex`.
 
-Project goal: LaTeX-driven converter (currently LaTeX → DOCX) that contains **no
-project-specific hardcodes** and reads all formatting parameters from LaTeX source or
-project config files, remaining reusable for any LaTeX project (academic paper, journal
-article, dissertation, technical report).
+Project goal: LaTeX-driven converter (DOCX implemented; PDF/Markdown backends scaffolded)
+that contains **no project-specific hardcodes** and reads all formatting parameters from
+LaTeX source or project config files, remaining reusable for any LaTeX project (academic
+paper, journal article, dissertation, technical report).
 
 ## Mandatory files to read before doing any work
 
@@ -56,7 +56,7 @@ a minimal version following existing conventions.
   - explicit project configuration files (YAML/TOML).
 - The pipeline is: LaTeX source → Parser extracts → `DocumentLayout` stores → `RenderProfile::from_layout()` resolves → renderer consumes.
 - `DocumentLayout` fields are all `Option<T>`; `None` means "LaTeX did not express this preference, use fallback default."
-- Constants in `renderer/docx.rs` are fallback defaults only — not visual tweaks.
+- Constants in `crates/ferritex-renderer-docx/src/lib.rs` are fallback defaults only — not visual tweaks.
 - `ferritex` must work for any LaTeX project without code changes.
 
 When you think a "one-off hardcode" is needed:
@@ -69,9 +69,9 @@ When you think a "one-off hardcode" is needed:
 ## Technical context
 
 Key source files:
-- `src/parser/latex.rs` — LaTeX parser
-- `src/model/mod.rs` — `DocumentLayout`, `Block`, `Inline`, etc.
-- `src/renderer/docx.rs` — DOCX renderer + `RenderProfile`
+- `crates/ferritex-core/src/parser/latex.rs` — LaTeX parser
+- `crates/ferritex-core/src/model/mod.rs` — `DocumentLayout`, `Block`, `Inline`, etc.
+- `crates/ferritex-renderer-docx/src/lib.rs` — DOCX renderer + `RenderProfile`
 - `src/build/`, `src/cli.rs`, `src/tui.rs`, `src/lib.rs`, `src/main.rs`
 - `tests/fixtures/*.tex` — minimal test fixtures
 - `tests/` — unit and integration tests
@@ -83,7 +83,7 @@ Key source files:
 3. Confirm exact user task for this session (feature, bugfix, refactoring, tests, docs).
 4. Implement changes: parser-first → model → renderer.
 5. Add paired tests for every new `DocumentLayout` field.
-6. Run quality gate: `cargo fmt --all && cargo clippy -- -D warnings && cargo test`
+6. Run quality gate: `cargo fmt --all && cargo clippy --workspace --all-targets -- -D warnings && cargo test --workspace`
 7. Commit to a feature branch and open a PR with `bot-merge` label.
 8. Update `agent_docs/session_summary.md` and `agent_docs/plans/` with what was done and next steps.
 

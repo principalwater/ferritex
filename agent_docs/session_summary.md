@@ -180,9 +180,8 @@ Renderer tests added (~6):
 
 ### What is NOT done yet in v0.9 (to do next session)
 
-1. **Commit** current branch changes (code + docs + plan files).
-2. **Push + PR** with `bot-merge` label: `feat/v0.9-visual-parity`.
-3. **Optional manual visual validation** on large external LaTeX corpus: check list wrapping, source lines, bibliography heading, first-page numbering.
+1. **CI/merge wait**: PR #24 is open with `bot-merge`; wait for green CI and repository gates.
+2. **Optional manual visual validation** on large external LaTeX corpus: check list wrapping, source lines, bibliography heading, first-page numbering.
 
 ### Deferred (not in v0.9 scope)
 
@@ -197,7 +196,7 @@ Renderer tests added (~6):
 
 Active plan: `agent_docs/plans/v0.9-visual-parity.md`
 
-## Key files changed in v0.9 (uncommitted)
+## Key files changed in v0.9 / follow-up
 
 | File | Changes |
 |------|---------|
@@ -206,3 +205,6 @@ Active plan: `agent_docs/plans/v0.9-visual-parity.md`
 | `src/renderer/docx.rs` | +6 new constants; updated `RenderProfile` + `from_layout()`; `source_paragraph()` fixed; `build_bibliography_heading()`; `create_styled_docx()` title_pg; +8 tests |
 | `docs/SUPPORTED_ELEMENTS.md` | v0.9 support rows added (list geometry, source vspace, bibliography heading commands, title-page number suppression) |
 | `AGENTS.md` | LaTeX-driven policy table extended with v0.9 parameter categories |
+| `tests/unit/parser_latex_tests.rs` | parser unit tests moved out of `src/parser/latex.rs` |
+| `tests/unit/renderer_docx_tests.rs` | renderer unit tests moved out of `src/renderer/docx.rs` |
+| `tests/unit/README.md` | documents new test layout and rationale |

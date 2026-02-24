@@ -153,6 +153,9 @@ pub struct DocumentLayout {
     /// TOC chapter entry number width in twips.
     /// Parsed from `\setlength{\cftchapternumwidth}{...}` or `\cftsetindents{chapter}{...}{...}`.
     pub toc_numwidth_chapter_twips: Option<i32>,
+    /// Vertical space before numbered chapter entries in TOC.
+    /// Parsed from `\setlength{\cftbeforechapterskip}{...}` (memoir default when absent).
+    pub toc_chapter_space_before_twips: Option<i32>,
     /// TOC section entry left indent in twips.
     /// Parsed from `\setlength{\cftsectionindent}{...}` or `\cftsetindents{section}{...}{...}`.
     pub toc_indent_section_twips: Option<i32>,
@@ -198,6 +201,8 @@ pub struct DocumentLayout {
     pub list_left_indent_twips: Option<i32>,
     /// Hanging indent for list items in twips.
     pub list_hanging_indent_twips: Option<i32>,
+    /// First-line indent for list items in twips (`itemindent` from enumitem).
+    pub list_item_indent_twips: Option<i32>,
     /// Label separator in twips (from `\setlist{labelsep=...}`).
     pub list_label_sep_twips: Option<i32>,
     /// Label width in twips (from `\setlist{labelwidth=...}`; `None` if `!`/auto).
@@ -253,6 +258,8 @@ pub struct TocEntry {
 pub struct ParagraphStyle {
     /// Paragraph alignment (`"left"`, `"center"`, `"right"`, `"both"`).
     pub alignment: Option<String>,
+    /// Left paragraph indent override in twips.
+    pub left_indent_twips: Option<i32>,
     /// First-line indent override in twips.
     pub first_line_indent_twips: Option<i32>,
     /// Line spacing override in twips.

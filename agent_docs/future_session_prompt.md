@@ -41,6 +41,7 @@ a minimal version following existing conventions.
   1. `AGENTS.md`
   2. `agent_docs/*.md` (including `plans/`)
   3. `docs/*.md`
+- Treat these files as the single source of truth. Global logs are advisory only.
 - After any session that produces stable decisions, update the relevant files:
   - Policy/process → `agent_docs/*.md`
   - Architecture/format contracts → `docs/*.md`
@@ -86,6 +87,18 @@ Key source files:
 6. Run quality gate: `cargo fmt --all && cargo clippy --workspace --all-targets -- -D warnings && cargo test --workspace`
 7. Commit to a feature branch and open a PR with `bot-merge` label.
 8. Update `agent_docs/session_summary.md` and `agent_docs/plans/` with what was done and next steps.
+
+## Active plans pointer
+
+- Keep `agent_docs/plans/v0.9-visual-parity.md` as archival context.
+- Use `agent_docs/plans/v0.9.1-docx-manual-qa-followup.md` for current DOCX parity stabilization.
+- Use `agent_docs/plans/v1.0-multi-backend-foundation.md` for PDF/MD expansion sequencing.
+
+## Manual QA artifact convention
+
+- When the user asks to build DOCX/PDF/MD for parity checks, use:
+  - input: `/Users/principalwater/Documents/git/phd-eaeu-electricity-market/thesis/dissertation.tex`
+  - output files: `/tmp/dissertation.docx`, `/tmp/dissertation.pdf`, `/tmp/dissertation.md` (by selected format).
 
 ## Git workflow summary
 

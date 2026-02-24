@@ -243,7 +243,14 @@ fn test_layout_settings_extracted_from_geometry_and_setspacing() {
 #[test]
 fn test_layout_settings_fallback_to_onehalfspacing_when_setspacing_absent() {
     let doc = parse_latex("\\OnehalfSpacing\nBody.");
-    assert_eq!(doc.layout.body_line_spacing_twips, Some(360));
+    assert_eq!(doc.layout.body_line_spacing_twips, Some(300));
+}
+
+#[test]
+fn test_layout_settings_onehalfspacing_uses_memoir_14pt_factor() {
+    let source = "\\documentclass[14pt]{memoir}\n\\OnehalfSpacing\nBody.";
+    let doc = parse_latex(source);
+    assert_eq!(doc.layout.body_line_spacing_twips, Some(312));
 }
 
 #[test]
@@ -262,6 +269,20 @@ fn test_extract_toc_dot_leader_false_when_explicit_non_dot_leader() {
     let src = "\\renewcommand{\\cftchapterleader}{\\hfill}\nBody.";
     let doc = parse_latex(src);
     assert_eq!(doc.layout.toc_use_dot_leader, Some(false));
+}
+
+#[test]
+fn test_extract_toc_chapter_before_skip_from_setlength() {
+    let src = "\\setlength{\\cftbeforechapterskip}{0.75em plus0pt}\nBody.";
+    let doc = parse_latex(src);
+    assert_eq!(doc.layout.toc_chapter_space_before_twips, Some(210));
+}
+
+#[test]
+fn test_extract_toc_chapter_before_skip_uses_memoir_default() {
+    let src = "\\documentclass[14pt]{memoir}\nBody.";
+    let doc = parse_latex(src);
+    assert_eq!(doc.layout.toc_chapter_space_before_twips, Some(300));
 }
 
 #[test]
@@ -319,6 +340,19 @@ fn test_extract_toc_indents_absent_when_undefined() {
     assert_eq!(doc.layout.toc_numwidth_subsection_twips, None);
     assert_eq!(doc.layout.toc_indent_subsubsection_twips, None);
     assert_eq!(doc.layout.toc_numwidth_subsubsection_twips, None);
+}
+
+#[test]
+fn test_extract_toc_indents_use_memoir_defaults_when_not_overridden() {
+    let doc = parse_latex("\\documentclass[14pt]{memoir}\nBody.");
+    assert_eq!(doc.layout.toc_indent_chapter_twips, Some(0));
+    assert_eq!(doc.layout.toc_numwidth_chapter_twips, Some(420));
+    assert_eq!(doc.layout.toc_indent_section_twips, Some(420));
+    assert_eq!(doc.layout.toc_numwidth_section_twips, Some(644));
+    assert_eq!(doc.layout.toc_indent_subsection_twips, Some(1064));
+    assert_eq!(doc.layout.toc_numwidth_subsection_twips, Some(896));
+    assert_eq!(doc.layout.toc_indent_subsubsection_twips, Some(1960));
+    assert_eq!(doc.layout.toc_numwidth_subsubsection_twips, Some(1148));
 }
 
 #[test]
@@ -2172,6 +2206,12 @@ fn test_extract_heading_alignment_from_headingalign_counter() {
 }
 
 #[test]
+fn test_extract_heading_alignment_sethangfrom_promotes_left_to_justify() {
+    let src = "\\setcounter{headingalign}{1}\n\\sethangfrom{\\noindent #1}\nBody.";
+    assert_eq!(extract_heading_alignment(src), Some("both".to_string()));
+}
+
+#[test]
 fn test_extract_heading_number_delimiter_from_thechapter_dot() {
     let src = "\\renewcommand{\\thechapter}{\\arabic{chapter}.}\nBody.";
     assert_eq!(extract_heading_number_delimiter(src), Some(".".to_string()));
@@ -2493,7 +2533,7 @@ fn test_inline_math_preserves_spaces() {
 #[test]
 fn test_extract_list_settings_labelsep_em() {
     let source = r"\setlist{nosep, labelsep=.5em, labelwidth=!, leftmargin=\dimexpr\parindent-\labelwidth-\labelsep\relax}";
-    let (sep, width, _bullet) = extract_list_settings(source);
+    let (sep, width, _item_indent, _left_margin, _bullet) = extract_list_settings(source, None);
     // 0.5em at 14pt (280 twips/em) = 140 twips
     let sep = sep.expect("labelsep should be extracted");
     assert!((130..=150).contains(&sep), "expected ~140 twips, got {sep}");
@@ -2503,7 +2543,7 @@ fn test_extract_list_settings_labelsep_em() {
 #[test]
 fn test_extract_list_settings_absent() {
     let source = r"\usepackage{enumitem}";
-    let (sep, width, bullet) = extract_list_settings(source);
+    let (sep, width, _item_indent, _left_margin, bullet) = extract_list_settings(source, None);
     assert!(sep.is_none());
     assert!(width.is_none());
     assert!(bullet.is_none());
@@ -2512,7 +2552,7 @@ fn test_extract_list_settings_absent() {
 #[test]
 fn test_extract_labelitemi_char_endash() {
     let source = r"\renewcommand{\labelitemi}{\normalfont\bfseries{--}}";
-    let (_sep, _width, bullet) = extract_list_settings(source);
+    let (_sep, _width, _item_indent, _left_margin, bullet) = extract_list_settings(source, None);
     let bullet = bullet.expect("bullet should be extracted");
     assert_eq!(bullet, "–", "expected en-dash, got {bullet:?}");
 }
@@ -2520,7 +2560,7 @@ fn test_extract_labelitemi_char_endash() {
 #[test]
 fn test_extract_labelitemi_char_absent() {
     let source = r"\usepackage{enumitem}";
-    let (_sep, _width, bullet) = extract_list_settings(source);
+    let (_sep, _width, _item_indent, _left_margin, bullet) = extract_list_settings(source, None);
     assert!(bullet.is_none());
 }
 
@@ -2561,6 +2601,130 @@ fn test_extract_title_page_suppress_inside_titlingpage() {
 fn test_extract_title_page_suppress_absent() {
     let source = "\\begin{document}\nSome text.\n\\end{document}";
     assert!(extract_title_page_suppress_number(source).is_none());
+}
+
+#[test]
+fn test_titlepage_mixed_chunk_applies_leading_vspace_and_alignment() {
+    let source = "\\begin{titlepage}\n\\centering\n\\vspace{12pt}\nTitle line\n\\end{titlepage}";
+    let doc = parse_latex(source);
+    assert_eq!(doc.blocks.len(), 1);
+
+    let Block::StyledParagraph { inlines, style } = &doc.blocks[0] else {
+        panic!("expected styled paragraph, got {:?}", doc.blocks[0]);
+    };
+    assert_eq!(plain_text_from_inlines(inlines).trim(), "Title line");
+    assert_eq!(style.alignment.as_deref(), Some("center"));
+    assert_eq!(style.first_line_indent_twips, Some(0));
+    assert_eq!(style.space_before_twips, Some(240));
+}
+
+#[test]
+fn test_titlepage_manual_linebreaks_trim_surrounding_spaces() {
+    let source = "\\begin{titlepage}\nLine A \\\\\n   Line B\n\\end{titlepage}";
+    let doc = parse_latex(source);
+    assert_eq!(doc.blocks.len(), 1);
+    let Block::StyledParagraph { inlines, .. } = &doc.blocks[0] else {
+        panic!("expected styled paragraph, got {:?}", doc.blocks[0]);
+    };
+    assert!(
+        inlines
+            .iter()
+            .any(|inline| matches!(inline, Inline::LineBreak))
+    );
+    for window in inlines.windows(2) {
+        if matches!(window[0], Inline::LineBreak)
+            && let Inline::Text(text) = &window[1]
+        {
+            assert!(
+                !text.starts_with(' '),
+                "line after break unexpectedly starts with space: {text:?}"
+            );
+        }
+    }
+}
+
+#[test]
+fn test_titlepage_setstretch_applies_line_spacing_override() {
+    let source = "\\begin{titlepage}\n\\setstretch{1.0}\nTitle line\n\\end{titlepage}";
+    let doc = parse_latex(source);
+    assert_eq!(doc.blocks.len(), 1);
+
+    let Block::StyledParagraph { style, .. } = &doc.blocks[0] else {
+        panic!("expected styled paragraph, got {:?}", doc.blocks[0]);
+    };
+    assert_eq!(style.line_spacing_twips, Some(240));
+}
+
+#[test]
+fn test_titlepage_onehalfspacing_uses_document_font_size_factor() {
+    let source = "\\documentclass[14pt]{memoir}\n\\begin{titlepage}\n\\OnehalfSpacing\nTitle line\n\\end{titlepage}";
+    let doc = parse_latex(source);
+    assert_eq!(doc.blocks.len(), 1);
+
+    let Block::StyledParagraph { style, .. } = &doc.blocks[0] else {
+        panic!("expected styled paragraph, got {:?}", doc.blocks[0]);
+    };
+    assert_eq!(style.line_spacing_twips, Some(312));
+}
+
+#[test]
+fn test_layout_settings_extract_linespread_factor() {
+    let doc = parse_latex("\\linespread{1.25}\nBody.");
+    assert_eq!(doc.layout.body_line_spacing_twips, Some(300));
+}
+
+#[test]
+fn test_layout_settings_ignore_body_linespread_when_preamble_has_setspacing() {
+    let source = "\\setSpacing{1.385}\n\\begin{document}\nBody \\linespread{1}\\selectfont text.\n\\end{document}";
+    let doc = parse_latex(source);
+    assert_eq!(doc.layout.body_line_spacing_twips, Some(332));
+}
+
+#[test]
+fn test_titlepage_fontsize_second_arg_overrides_line_spacing() {
+    let source = "\\begin{titlepage}\n\n\\OnehalfSpacing\n\n{\\fontsize{16}{19}\\selectfont\\bfseries Title\\par}\n\n\\end{titlepage}";
+    let doc = parse_latex(source);
+    assert_eq!(doc.blocks.len(), 1);
+
+    let Block::StyledParagraph { style, .. } = &doc.blocks[0] else {
+        panic!("expected styled paragraph, got {:?}", doc.blocks[0]);
+    };
+    assert_eq!(style.font_size_hp, Some(32));
+    assert_eq!(style.line_spacing_twips, Some(285));
+}
+
+#[test]
+fn test_titlepage_flushright_tabular_gets_left_indent_estimate() {
+    let source = "\\begin{titlepage}\n\\begin{flushright}\n\\begin{tabular}{l}\n\\textbf{Научный руководитель:} \\\\\nдоктор наук \\\\\nИван Иванов\n\\end{tabular}\n\\end{flushright}\n\\end{titlepage}";
+    let doc = parse_latex(source);
+    assert_eq!(doc.blocks.len(), 1);
+
+    let Block::StyledParagraph { style, .. } = &doc.blocks[0] else {
+        panic!("expected styled paragraph, got {:?}", doc.blocks[0]);
+    };
+    assert_eq!(style.alignment.as_deref(), Some("left"));
+    assert_eq!(style.first_line_indent_twips, Some(0));
+    assert!(
+        style.left_indent_twips.is_some_and(|value| value > 0),
+        "expected positive left indent, got {:?}",
+        style.left_indent_twips
+    );
+    assert_eq!(style.space_before_twips, None);
+    assert_eq!(style.space_after_twips, None);
+}
+
+#[test]
+fn test_titlepage_flushright_tabular_preserves_vspace_plus_box_padding() {
+    let source = "\\documentclass[14pt]{memoir}\n\\begin{titlepage}\n\\OnehalfSpacing\n\\vspace*{2.5cm}\n\\begin{flushright}\n\\begin{tabular}{l}\n\\textbf{Научный руководитель:} \\\\\nдоктор наук \\\\\nИван Иванов\n\\end{tabular}\n\\end{flushright}\n\\end{titlepage}";
+    let doc = parse_latex(source);
+    assert_eq!(doc.blocks.len(), 1);
+
+    let Block::StyledParagraph { style, .. } = &doc.blocks[0] else {
+        panic!("expected styled paragraph, got {:?}", doc.blocks[0]);
+    };
+    assert_eq!(style.line_spacing_twips, Some(312));
+    assert_eq!(style.space_before_twips, Some(1417));
+    assert_eq!(style.space_after_twips, None);
 }
 
 // ── Bibliography command parsing tests ────────────────────────────────────

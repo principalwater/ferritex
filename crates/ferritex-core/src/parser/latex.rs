@@ -27,6 +27,16 @@ struct ParseMetadata {
     bibliography: HashMap<String, BibEntry>,
 }
 
+const DEFAULT_PAGE_WIDTH_TWIPS: i32 = 11_906;
+const DEFAULT_PAGE_MARGIN_LEFT_TWIPS: i32 = 1_138;
+const DEFAULT_PAGE_MARGIN_RIGHT_TWIPS: i32 = 288;
+const DEFAULT_BODY_FONT_SIZE_HP: usize = 28;
+/// Approximate average glyph width for serif text, in `em`.
+///
+/// Used only for mapping `flushright + tabular{l}` blocks to a fixed-width
+/// right-aligned text block in DOCX without corpus-specific constants.
+const ESTIMATED_AVERAGE_CHAR_WIDTH_EM: f64 = 0.49;
+
 /// Parse a LaTeX source string into a [`Document`] AST.
 ///
 /// Supported constructs:
@@ -47,7 +57,13 @@ struct ParseMetadata {
 #[allow(dead_code)]
 pub fn parse_latex(source: &str) -> Document {
     let autocite_mode = detect_autocite_mode(source);
-    parse_latex_with_mode(source, autocite_mode, &ParseMetadata::default(), false)
+    parse_latex_with_mode(
+        source,
+        autocite_mode,
+        &ParseMetadata::default(),
+        false,
+        false,
+    )
 }
 
 /// Parse an entry `.tex` file with recursive `\input{...}` / `\include{...}` expansion.
@@ -59,10 +75,12 @@ pub fn parse_latex_file(input_path: &Path) -> anyhow::Result<Document> {
     let expanded = expand_inputs_recursive(input_path, root_dir, &mut stack)?;
     let autocite_mode = detect_autocite_mode(&expanded);
     let mut metadata = collect_parse_metadata(&expanded, input_path, root_dir);
-    let mut document = parse_latex_with_mode(&expanded, autocite_mode, &metadata, true);
+    let mut document = parse_latex_with_mode(&expanded, autocite_mode, &metadata, true, true);
     enrich_structural_counters(&mut metadata, &document, &expanded);
     resolve_dynamic_placeholders(&mut document.blocks, &metadata);
+    resolve_footnote_citation_placeholders(&mut document.blocks, &metadata.bibliography);
     resolve_citation_placeholders(&mut document.blocks, &metadata.bibliography);
+    inject_bibliography_entries(&mut document.blocks, &metadata.bibliography);
     document.toc_entries =
         parse_toc_entries_from_sidecar(input_path, autocite_mode, &metadata, &expanded);
     Ok(document)
@@ -251,6 +269,7 @@ fn parse_latex_with_mode(
     autocite_mode: AutociteMode,
     metadata: &ParseMetadata,
     preserve_dynamic_markers: bool,
+    preserve_reference_nodes: bool,
 ) -> Document {
     let source = strip_comments(source);
     let layout = extract_layout_settings(&source);
@@ -280,6 +299,10 @@ fn parse_latex_with_mode(
                     else {
                         continue;
                     };
+                    if let Some(label) = extract_standalone_label(prepared.text.as_str()) {
+                        attach_standalone_label(&mut blocks, label);
+                        continue;
+                    }
 
                     let heading_candidate = strip_heading_prefix_noise(prepared.text.as_str());
                     if let Some(block) = try_parse_section(
@@ -308,8 +331,10 @@ fn parse_latex_with_mode(
                     {
                         blocks.push(block);
                     } else {
+                        let cleaned_chunk =
+                            trim_spaces_around_manual_linebreaks(prepared.text.as_str());
                         let inlines = parse_inlines(
-                            prepared.text.as_str(),
+                            cleaned_chunk.as_str(),
                             autocite_mode,
                             metadata,
                             preserve_dynamic_markers,
@@ -318,7 +343,19 @@ fn parse_latex_with_mode(
                             && !is_single_brace_paragraph(&inlines)
                             && !is_only_linebreaks(&inlines)
                         {
-                            if let Some(style) = prepared.style {
+                            if let Some(mut style) = prepared.style {
+                                if let Some(left_indent) =
+                                    estimate_flushright_tabular_left_indent_twips(
+                                        prepared.text.as_str(),
+                                        &inlines,
+                                        &layout,
+                                        style.font_size_hp,
+                                    )
+                                {
+                                    style.alignment = Some("left".to_string());
+                                    style.left_indent_twips = Some(left_indent);
+                                    style.first_line_indent_twips = Some(0);
+                                }
                                 blocks.push(Block::StyledParagraph { inlines, style });
                             } else {
                                 blocks.push(Block::Paragraph(inlines));
@@ -331,7 +368,12 @@ fn parse_latex_with_mode(
     }
 
     assign_section_numbers(&mut blocks);
-    resolve_references(&mut blocks, &declared_labels, &layout);
+    resolve_references(
+        &mut blocks,
+        &declared_labels,
+        &layout,
+        preserve_reference_nodes,
+    );
     Document {
         blocks,
         layout,
@@ -470,6 +512,12 @@ fn extract_latex_option_value(line: &str, key: &str) -> Option<String> {
 
 fn extract_layout_settings(source: &str) -> DocumentLayout {
     let mut layout = DocumentLayout::default();
+    let preamble = source
+        .split_once("\\begin{document}")
+        .map(|(head, _)| head)
+        .unwrap_or(source);
+    layout.font_size_body_hp = extract_documentclass_fontsize_hp(source);
+    let documentclass_name = extract_documentclass_name(source);
 
     if let Some(options) = extract_last_macro_braced_argument(source, "\\geometry") {
         layout.page_margin_top_twips = extract_latex_option_value(&options, "top")
@@ -482,17 +530,8 @@ fn extract_layout_settings(source: &str) -> DocumentLayout {
             .and_then(|value| parse_latex_length_to_twips(&value));
     }
 
-    if let Some(factor) = extract_last_setspacing_factor(source) {
-        let twips = (240.0 * factor).round();
-        if twips.is_finite() && twips > 0.0 {
-            layout.body_line_spacing_twips = Some(twips as i32);
-        }
-    } else if source.contains("\\OnehalfSpacing") {
-        layout.body_line_spacing_twips = Some(360);
-    } else if source.contains("\\DoubleSpacing") {
-        layout.body_line_spacing_twips = Some(480);
-    } else if source.contains("\\SingleSpacing") {
-        layout.body_line_spacing_twips = Some(240);
+    if let Some(factor) = extract_last_spacing_factor(preamble, layout.font_size_body_hp) {
+        layout.body_line_spacing_twips = spacing_factor_to_twips(factor);
     }
 
     if let Some(header_twips) = extract_setlength_value_twips(source, "headsep") {
@@ -530,9 +569,6 @@ fn extract_layout_settings(source: &str) -> DocumentLayout {
             layout.font_family_body = Some(font);
         }
     }
-
-    // ── Body font size from \documentclass options ─────────────────────
-    layout.font_size_body_hp = extract_documentclass_fontsize_hp(source);
 
     // ── Table body font size ─────────────────────────────────────────
     // \SetTblrInner{font=\footnotesize} → 12pt at 14pt base
@@ -656,9 +692,12 @@ fn extract_layout_settings(source: &str) -> DocumentLayout {
     layout.toc_use_dot_leader = extract_toc_dot_leader(source);
 
     // ── List formatting ──────────────────────────────────────────────
-    let (list_label_sep, list_label_width, list_bullet) = extract_list_settings(source);
+    let (list_label_sep, list_label_width, list_item_indent, list_left_margin, list_bullet) =
+        extract_list_settings(source, layout.body_first_line_indent_twips);
     layout.list_label_sep_twips = list_label_sep;
     layout.list_label_width_twips = list_label_width;
+    layout.list_item_indent_twips = list_item_indent;
+    layout.list_left_indent_twips = list_left_margin;
     layout.list_bullet_char = list_bullet;
     // Left indent for list items = \parindent (body first-line indent).
     if layout.list_left_indent_twips.is_none() {
@@ -704,6 +743,11 @@ fn extract_layout_settings(source: &str) -> DocumentLayout {
         extract_toc_indent_numwidth_twips(source, "chapter");
     layout.toc_indent_chapter_twips = toc_chapter_indent;
     layout.toc_numwidth_chapter_twips = toc_chapter_numwidth;
+    layout.toc_chapter_space_before_twips = extract_toc_chapter_before_skip_twips(
+        source,
+        layout.font_size_body_hp,
+        documentclass_name.as_deref(),
+    );
     let (toc_section_indent, toc_section_numwidth) =
         extract_toc_indent_numwidth_twips(source, "section");
     layout.toc_indent_section_twips = toc_section_indent;
@@ -716,8 +760,56 @@ fn extract_layout_settings(source: &str) -> DocumentLayout {
         extract_toc_indent_numwidth_twips(source, "subsubsection");
     layout.toc_indent_subsubsection_twips = toc_subsubsection_indent;
     layout.toc_numwidth_subsubsection_twips = toc_subsubsection_numwidth;
+    apply_memoir_toc_indent_numwidth_defaults(&mut layout, documentclass_name.as_deref());
 
     layout
+}
+
+fn em_twips_for_body_font(body_font_size_hp: Option<usize>, em: f64) -> i32 {
+    let body_pt = body_font_size_hp.unwrap_or(28) as f64 / 2.0;
+    let twips = (body_pt * 20.0 * em).round();
+    if twips.is_finite() { twips as i32 } else { 0 }
+}
+
+fn apply_memoir_toc_indent_numwidth_defaults(
+    layout: &mut DocumentLayout,
+    documentclass_name: Option<&str>,
+) {
+    if !documentclass_name.is_some_and(|name| name.eq_ignore_ascii_case("memoir")) {
+        return;
+    }
+
+    if layout.toc_indent_chapter_twips.is_none() {
+        layout.toc_indent_chapter_twips = Some(0);
+    }
+    if layout.toc_numwidth_chapter_twips.is_none() {
+        layout.toc_numwidth_chapter_twips =
+            Some(em_twips_for_body_font(layout.font_size_body_hp, 1.5));
+    }
+    if layout.toc_indent_section_twips.is_none() {
+        layout.toc_indent_section_twips =
+            Some(em_twips_for_body_font(layout.font_size_body_hp, 1.5));
+    }
+    if layout.toc_numwidth_section_twips.is_none() {
+        layout.toc_numwidth_section_twips =
+            Some(em_twips_for_body_font(layout.font_size_body_hp, 2.3));
+    }
+    if layout.toc_indent_subsection_twips.is_none() {
+        layout.toc_indent_subsection_twips =
+            Some(em_twips_for_body_font(layout.font_size_body_hp, 3.8));
+    }
+    if layout.toc_numwidth_subsection_twips.is_none() {
+        layout.toc_numwidth_subsection_twips =
+            Some(em_twips_for_body_font(layout.font_size_body_hp, 3.2));
+    }
+    if layout.toc_indent_subsubsection_twips.is_none() {
+        layout.toc_indent_subsubsection_twips =
+            Some(em_twips_for_body_font(layout.font_size_body_hp, 7.0));
+    }
+    if layout.toc_numwidth_subsubsection_twips.is_none() {
+        layout.toc_numwidth_subsubsection_twips =
+            Some(em_twips_for_body_font(layout.font_size_body_hp, 4.1));
+    }
 }
 
 /// Extract the last value assigned to a LaTeX command via `\renewcommand{\name}{value}`
@@ -811,6 +903,28 @@ fn extract_documentclass_fontsize_hp(source: &str) -> Option<usize> {
         }
     }
     None
+}
+
+/// Extract document class name from `\documentclass[...]{<class>}`.
+fn extract_documentclass_name(source: &str) -> Option<String> {
+    let pos = source.find("\\documentclass")?;
+    let mut rest = &source[pos + "\\documentclass".len()..];
+    rest = rest.trim_start();
+    if rest.starts_with('[') {
+        let close = rest.find(']')?;
+        rest = &rest[close + 1..];
+        rest = rest.trim_start();
+    }
+    if !rest.starts_with('{') {
+        return None;
+    }
+    let close = braced_len(rest)?;
+    let class_name = rest[1..close - 1].trim();
+    if class_name.is_empty() {
+        None
+    } else {
+        Some(class_name.to_string())
+    }
 }
 
 /// Map a LaTeX font-size command name to half-points relative to body size.
@@ -1197,7 +1311,21 @@ fn extract_heading_alignment(source: &str) -> Option<String> {
         last = Some(if value == 0 { "center" } else { "left" }.to_string());
     }
 
+    if sethangfrom_uses_noindent_label(source)
+        && !matches!(last.as_deref(), Some("center" | "right"))
+    {
+        last = Some("both".to_string());
+    }
+
     last
+}
+
+fn sethangfrom_uses_noindent_label(source: &str) -> bool {
+    let Some(value) = extract_last_macro_braced_argument(source, "\\sethangfrom") else {
+        return false;
+    };
+    let compact: String = value.chars().filter(|ch| !ch.is_whitespace()).collect();
+    compact.contains("\\noindent#1")
 }
 
 /// Extract heading number delimiter from chapter numbering macros or titlesec labels.
@@ -1566,23 +1694,94 @@ fn extract_toc_appendix_name(source: &str) -> Option<String> {
     Some(normalize_whitespace(&plain).trim().to_string())
 }
 
+/// Extract vertical spacing before TOC chapter entries in twips.
+///
+/// Sources:
+/// - `\setlength{\cftbeforechapterskip}{...}` (preferred)
+/// - `\renewcommand*{\cftbeforechapterskip}{...}`
+/// - memoir default (`1.0em plus 1pt`) when class is `memoir`.
+fn extract_toc_chapter_before_skip_twips(
+    source: &str,
+    body_font_size_hp: Option<usize>,
+    documentclass_name: Option<&str>,
+) -> Option<i32> {
+    if let Some((twips, _)) =
+        extract_last_setlength_value_twips_with_pos(source, "cftbeforechapterskip")
+    {
+        return Some(twips);
+    }
+
+    if let Some(raw) = extract_renewcommand_value(source, "cftbeforechapterskip")
+        && let Some(twips) = parse_latex_length_prefix_to_twips(&raw)
+    {
+        return Some(twips);
+    }
+
+    if documentclass_name.is_some_and(|name| name.eq_ignore_ascii_case("memoir")) {
+        let em_twips = em_twips_for_body_font(body_font_size_hp, 1.0);
+        // memoir default: `1.0em plus 1pt`; map glue to a deterministic nominal value.
+        return Some(em_twips.saturating_add(20));
+    }
+
+    None
+}
+
 // ── List settings extraction ─────────────────────────────────────────────────
 
 /// Extract enumitem list settings from `\setlist{...}` and `\renewcommand{\labelitemi}{...}`.
 ///
-/// Returns `(label_sep_twips, label_width_twips, bullet_char)`.
+/// Returns `(label_sep_twips, label_width_twips, item_indent_twips, left_margin_twips, bullet_char)`.
 /// - `label_sep_twips`: from `labelsep=<dim>` in `\setlist{...}`.
 /// - `label_width_twips`: `None` when `labelwidth=!` (auto), otherwise from `labelwidth=<dim>`.
+/// - `item_indent_twips`: from `itemindent=<dim>` (including simple `\dimexpr` forms).
+/// - `left_margin_twips`: from `leftmargin=<dim>` (including simple `\dimexpr` forms).
 /// - `bullet_char`: from `\renewcommand{\labelitemi}{...}`, stripped of formatting commands.
-fn extract_list_settings(source: &str) -> (Option<i32>, Option<i32>, Option<String>) {
-    let sep = extract_setlist_param_twips(source, "labelsep");
+type ListSettings = (
+    Option<i32>,
+    Option<i32>,
+    Option<i32>,
+    Option<i32>,
+    Option<String>,
+);
+
+fn extract_list_settings(source: &str, body_parindent_twips: Option<i32>) -> ListSettings {
+    let sep = extract_setlist_param_twips(source, "labelsep", None, None, None);
     let width = extract_setlist_labelwidth_twips(source);
+    let itemindent =
+        extract_setlist_param_twips(source, "itemindent", sep, width, body_parindent_twips);
+    let leftmargin =
+        extract_setlist_param_twips(source, "leftmargin", sep, width, body_parindent_twips);
     let bullet = extract_labelitemi_char(source);
-    (sep, width, bullet)
+    (sep, width, itemindent, leftmargin, bullet)
 }
 
 /// Extract a dimension parameter from the first `\setlist{..., name=<dim>, ...}` block.
-fn extract_setlist_param_twips(source: &str, param: &str) -> Option<i32> {
+///
+/// Supports plain lengths (`0.5em`, `1.25cm`) and simple `\dimexpr` arithmetic
+/// that references `\labelwidth`, `\labelsep`, and `\parindent`.
+fn extract_setlist_param_twips(
+    source: &str,
+    param: &str,
+    label_sep_twips: Option<i32>,
+    label_width_twips: Option<i32>,
+    body_parindent_twips: Option<i32>,
+) -> Option<i32> {
+    let raw = extract_setlist_param_raw(source, param)?;
+    if raw.is_empty() {
+        return None;
+    }
+    if let Some(twips) = parse_latex_length_to_twips(raw.as_str()) {
+        return Some(twips);
+    }
+    evaluate_setlist_dimexpr_twips(
+        raw.as_str(),
+        label_sep_twips,
+        label_width_twips,
+        body_parindent_twips,
+    )
+}
+
+fn extract_setlist_param_raw(source: &str, param: &str) -> Option<String> {
     let needle = "\\setlist";
     let mut pos = 0usize;
     while let Some(rel) = source[pos..].find(needle) {
@@ -1613,17 +1812,11 @@ fn extract_setlist_param_twips(source: &str, param: &str) -> Option<i32> {
             let search = format!("{param}=");
             if let Some(rel_p) = body.find(&search) {
                 let after_eq = &body[rel_p + search.len()..];
-                // Collect the dimension token (up to , or }).
-                let dim: String = after_eq
+                let dim = after_eq
                     .chars()
                     .take_while(|c| *c != ',' && *c != '}' && *c != '\n')
-                    .collect();
-                let dim = dim.trim();
-                if !dim.is_empty()
-                    && let Some(tw) = parse_latex_length_to_twips(dim)
-                {
-                    return Some(tw);
-                }
+                    .collect::<String>();
+                return Some(dim.trim().to_string());
             }
         }
         pos = start;
@@ -1631,52 +1824,62 @@ fn extract_setlist_param_twips(source: &str, param: &str) -> Option<i32> {
     None
 }
 
+fn evaluate_setlist_dimexpr_twips(
+    raw: &str,
+    label_sep_twips: Option<i32>,
+    label_width_twips: Option<i32>,
+    body_parindent_twips: Option<i32>,
+) -> Option<i32> {
+    let mut expr = raw.trim().to_string();
+    if !expr.starts_with("\\dimexpr") {
+        return None;
+    }
+    expr = expr["\\dimexpr".len()..].trim().to_string();
+    expr = expr.replace("\\relax", "");
+
+    let sep = label_sep_twips?;
+    let width = label_width_twips.unwrap_or(sep);
+    let parindent = body_parindent_twips?;
+
+    expr = expr.replace("\\labelsep", &sep.to_string());
+    expr = expr.replace("\\labelwidth", &width.to_string());
+    expr = expr.replace("\\parindent", &parindent.to_string());
+    expr = expr.replace(' ', "");
+
+    let mut total: i32 = 0;
+    let mut sign: i32 = 1;
+    let mut token = String::new();
+
+    for ch in expr.chars() {
+        if ch == '+' || ch == '-' {
+            if !token.is_empty() {
+                let value = token.parse::<i32>().ok()?;
+                total = total.saturating_add(sign.saturating_mul(value));
+                token.clear();
+            }
+            sign = if ch == '+' { 1 } else { -1 };
+        } else if ch.is_ascii_digit() {
+            token.push(ch);
+        } else {
+            return None;
+        }
+    }
+    if !token.is_empty() {
+        let value = token.parse::<i32>().ok()?;
+        total = total.saturating_add(sign.saturating_mul(value));
+    }
+    Some(total)
+}
+
 /// Extract `labelwidth` from `\setlist{..., labelwidth=<dim-or-!>, ...}`.
 ///
 /// Returns `None` for `labelwidth=!` (auto-width).
 fn extract_setlist_labelwidth_twips(source: &str) -> Option<i32> {
-    let needle = "\\setlist";
-    let mut pos = 0usize;
-    while let Some(rel) = source[pos..].find(needle) {
-        let start = pos + rel + needle.len();
-        let after_cmd = source[start..].trim_start_matches([' ', '\t', '\n', '\r']);
-        let after_cmd_pos = start + (source[start..].len() - after_cmd.len());
-        let content_start = if after_cmd.starts_with('[') {
-            if let Some(close) = source[after_cmd_pos..].find(']') {
-                after_cmd_pos + close + 1
-            } else {
-                pos = start;
-                continue;
-            }
-        } else {
-            after_cmd_pos
-        };
-        let trimmed = source[content_start..].trim_start_matches([' ', '\t', '\n', '\r']);
-        let trimmed_pos = content_start + (source[content_start..].len() - trimmed.len());
-        if !trimmed.starts_with('{') {
-            pos = start;
-            continue;
-        }
-        if let Some(body) = extract_braced(&source[trimmed_pos..])
-            && let Some(rel_p) = body.find("labelwidth=")
-        {
-            let after_eq = body[rel_p + "labelwidth=".len()..].trim_start();
-            if after_eq.starts_with('!') {
-                // Auto-width — return None.
-                return None;
-            }
-            let dim: String = after_eq
-                .chars()
-                .take_while(|c| *c != ',' && *c != '}' && *c != '\n')
-                .collect();
-            let dim = dim.trim();
-            if !dim.is_empty() {
-                return parse_latex_length_to_twips(dim);
-            }
-        }
-        pos = start;
+    let raw = extract_setlist_param_raw(source, "labelwidth")?;
+    if raw.starts_with('!') {
+        return None;
     }
-    None
+    parse_latex_length_to_twips(raw.trim())
 }
 
 /// Extract the bullet character from `\renewcommand{\labelitemi}{...}`.
@@ -2559,15 +2762,152 @@ fn extract_last_macro_braced_argument(source: &str, macro_name: &str) -> Option<
     last
 }
 
-fn extract_last_setspacing_factor(source: &str) -> Option<f64> {
-    extract_last_macro_braced_argument(source, "\\setSpacing").and_then(|value| {
-        value
-            .trim()
-            .replace(',', ".")
-            .parse::<f64>()
-            .ok()
-            .filter(|factor| factor.is_finite() && *factor > 0.0)
-    })
+fn extract_last_spacing_factor(source: &str, body_font_size_hp: Option<usize>) -> Option<f64> {
+    let mut pos = 0usize;
+    let mut last = None;
+
+    while pos < source.len() {
+        let mut next_cmd: Option<(&str, usize)> = None;
+        for command in [
+            "\\setSpacing",
+            "\\setstretch",
+            "\\linespread",
+            "\\SingleSpacing",
+            "\\OnehalfSpacing",
+            "\\DoubleSpacing",
+            "\\singlespacing",
+            "\\onehalfspacing",
+            "\\doublespacing",
+        ] {
+            if let Some(rel) = source[pos..].find(command) {
+                let abs = pos + rel;
+                match next_cmd {
+                    Some((_, best_abs)) if abs >= best_abs => {}
+                    _ => next_cmd = Some((command, abs)),
+                }
+            }
+        }
+        let Some((command, cmd_start)) = next_cmd else {
+            break;
+        };
+
+        let cmd_end = cmd_start + command.len();
+        if source[cmd_end..]
+            .chars()
+            .next()
+            .is_some_and(|c| c.is_ascii_alphabetic())
+        {
+            pos = cmd_end;
+            continue;
+        }
+
+        match command {
+            "\\setSpacing" | "\\setstretch" | "\\linespread" => {
+                let mut arg_pos = cmd_end;
+                while arg_pos < source.len() && source.as_bytes()[arg_pos].is_ascii_whitespace() {
+                    arg_pos += 1;
+                }
+                if arg_pos < source.len()
+                    && source.as_bytes()[arg_pos] == b'{'
+                    && let Some(arg_len) = braced_len(&source[arg_pos..])
+                {
+                    let value = &source[arg_pos + 1..arg_pos + arg_len - 1];
+                    if let Some(factor) = parse_spacing_factor(value) {
+                        last = Some(factor);
+                    }
+                    pos = arg_pos + arg_len;
+                    continue;
+                }
+            }
+            "\\SingleSpacing" => {
+                last = Some(1.0);
+            }
+            "\\OnehalfSpacing" => {
+                last = Some(memoir_onehalf_spacing_factor(body_font_size_hp));
+            }
+            "\\DoubleSpacing" => {
+                last = Some(memoir_double_spacing_factor(body_font_size_hp));
+            }
+            "\\singlespacing" => {
+                last = Some(1.0);
+            }
+            "\\onehalfspacing" => {
+                last = Some(setspace_onehalf_spacing_factor(body_font_size_hp));
+            }
+            "\\doublespacing" => {
+                last = Some(setspace_double_spacing_factor(body_font_size_hp));
+            }
+            _ => {}
+        }
+
+        pos = cmd_end;
+        if source[pos..].starts_with('*') {
+            pos += 1;
+        }
+    }
+
+    last
+}
+
+fn spacing_factor_to_twips(factor: f64) -> Option<i32> {
+    let twips = (240.0 * factor).round();
+    if twips.is_finite() && twips > 0.0 {
+        Some(twips as i32)
+    } else {
+        None
+    }
+}
+
+fn memoir_onehalf_spacing_factor(body_font_size_hp: Option<usize>) -> f64 {
+    match body_font_size_hp.unwrap_or(20) {
+        20 => 1.25,  // 10pt
+        22 => 1.213, // 11pt
+        24 => 1.241, // 12pt
+        // `memoir` 14pt one-half spacing is visually tighter in DOCX than in LaTeX;
+        // apply a calibrated Word-equivalent factor.
+        28 => 1.30, // 14pt
+        34 => 1.16, // 17pt
+        18 => 1.35, // 9pt
+        _ => 1.16,  // memoir extended-size fallback
+    }
+}
+
+fn memoir_double_spacing_factor(body_font_size_hp: Option<usize>) -> f64 {
+    match body_font_size_hp.unwrap_or(20) {
+        20 => 1.667, // 10pt
+        22 => 1.618, // 11pt
+        24 => 1.655, // 12pt
+        28 => 1.733, // 14pt (paired with one-half calibration above)
+        34 => 1.545, // 17pt
+        18 => 1.8,   // 9pt
+        _ => 1.5,    // memoir extended-size fallback
+    }
+}
+
+fn setspace_onehalf_spacing_factor(body_font_size_hp: Option<usize>) -> f64 {
+    match body_font_size_hp.unwrap_or(20) {
+        20 => 1.25,  // 10pt
+        22 => 1.213, // 11pt
+        24 => 1.241, // 12pt
+        _ => 1.25,   // setspace fallback
+    }
+}
+
+fn setspace_double_spacing_factor(body_font_size_hp: Option<usize>) -> f64 {
+    match body_font_size_hp.unwrap_or(20) {
+        20 => 1.667, // 10pt
+        22 => 1.618, // 11pt
+        24 => 1.655, // 12pt
+        _ => 1.667,  // setspace fallback
+    }
+}
+
+fn parse_spacing_factor(raw: &str) -> Option<f64> {
+    raw.trim()
+        .replace(',', ".")
+        .parse::<f64>()
+        .ok()
+        .filter(|factor| factor.is_finite() && *factor > 0.0)
 }
 
 fn extract_setlength_value_twips(source: &str, name: &str) -> Option<i32> {
@@ -3288,6 +3628,150 @@ fn resolve_inline_placeholders(inlines: &mut [Inline], metadata: &ParseMetadata)
     }
 }
 
+#[derive(Debug, Default)]
+struct FootnoteCitationTracker {
+    last_key: Option<String>,
+    seen_keys: HashSet<String>,
+}
+
+fn resolve_footnote_citation_placeholders(
+    blocks: &mut [Block],
+    bibliography: &HashMap<String, BibEntry>,
+) {
+    let mut tracker = FootnoteCitationTracker::default();
+    for block in blocks {
+        match block {
+            Block::Paragraph(inlines)
+            | Block::StyledParagraph { inlines, .. }
+            | Block::Section { title: inlines, .. }
+            | Block::Figure(Figure {
+                caption: inlines,
+                source: _,
+                ..
+            }) => {
+                resolve_footnote_citations_inlines(inlines, bibliography, &mut tracker, false);
+            }
+            Block::Table(table) => {
+                resolve_footnote_citations_inlines(
+                    &mut table.caption,
+                    bibliography,
+                    &mut tracker,
+                    false,
+                );
+                resolve_footnote_citations_inlines(
+                    &mut table.source,
+                    bibliography,
+                    &mut tracker,
+                    false,
+                );
+                for row in &mut table.rows {
+                    for cell in &mut row.cells {
+                        resolve_footnote_citations_inlines(
+                            &mut cell.content,
+                            bibliography,
+                            &mut tracker,
+                            false,
+                        );
+                    }
+                }
+            }
+            Block::List(list) => {
+                for item in &mut list.items {
+                    resolve_footnote_citations_inlines(item, bibliography, &mut tracker, false);
+                }
+            }
+            Block::DisplayMath(_) | Block::BibliographyHeading { .. } => {}
+        }
+
+        if let Block::Figure(figure) = block {
+            resolve_footnote_citations_inlines(
+                &mut figure.source,
+                bibliography,
+                &mut tracker,
+                false,
+            );
+        }
+    }
+}
+
+fn resolve_footnote_citations_inlines(
+    inlines: &mut [Inline],
+    bibliography: &HashMap<String, BibEntry>,
+    tracker: &mut FootnoteCitationTracker,
+    in_footnote: bool,
+) {
+    for inline in inlines {
+        match inline {
+            Inline::Text(text) => {
+                if in_footnote {
+                    *text = replace_footnote_citation_brackets(text, bibliography, tracker);
+                }
+            }
+            Inline::Bold(children) | Inline::Italic(children) => {
+                resolve_footnote_citations_inlines(children, bibliography, tracker, in_footnote);
+            }
+            Inline::Footnote(children) => {
+                resolve_footnote_citations_inlines(children, bibliography, tracker, true);
+            }
+            Inline::InlineMath(_) | Inline::Reference(_) | Inline::LineBreak => {}
+        }
+    }
+}
+
+fn replace_footnote_citation_brackets(
+    text: &str,
+    bibliography: &HashMap<String, BibEntry>,
+    tracker: &mut FootnoteCitationTracker,
+) -> String {
+    if bibliography.is_empty() || !text.contains('[') {
+        return text.to_string();
+    }
+
+    let mut out = String::with_capacity(text.len());
+    let mut pos = 0usize;
+    while let Some(open_rel) = text[pos..].find('[') {
+        let open = pos + open_rel;
+        out.push_str(&text[pos..open]);
+        let Some(close_rel) = text[open + 1..].find(']') else {
+            out.push_str(&text[open..]);
+            return out;
+        };
+        let close = open + 1 + close_rel;
+        let payload = text[open + 1..close].trim();
+        let keys: Vec<&str> = payload.split(',').map(str::trim).collect();
+        let mut rendered = Vec::new();
+        let mut all_known = !keys.is_empty();
+        for key in keys {
+            if key.is_empty() {
+                continue;
+            }
+            let Some(entry) = bibliography.get(key) else {
+                all_known = false;
+                break;
+            };
+            let rendered_entry = if tracker.last_key.as_deref() == Some(key) {
+                "Там же.".to_string()
+            } else if tracker.seen_keys.contains(key) {
+                format_bibliography_opcit(entry)
+            } else {
+                format_bibliography_entry(entry)
+            };
+            tracker.last_key = Some(key.to_string());
+            tracker.seen_keys.insert(key.to_string());
+            rendered.push(rendered_entry);
+        }
+
+        if all_known && !rendered.is_empty() {
+            out.push_str(&rendered.join("; "));
+        } else {
+            out.push_str(&text[open..=close]);
+        }
+        pos = close + 1;
+    }
+    out.push_str(&text[pos..]);
+    out
+}
+
 fn resolve_citation_placeholders(blocks: &mut [Block], bibliography: &HashMap<String, BibEntry>) {
     for block in blocks {
         match block {
@@ -3417,6 +3901,57 @@ fn format_bibliography_entry(entry: &BibEntry) -> String {
         parts.push(url);
     }
     parts.join(". ")
+}
+
+fn format_bibliography_opcit(entry: &BibEntry) -> String {
+    let lead = [
+        "author",
+        "organization",
+        "institution",
+        "publisher",
+        "title",
+    ]
+    .iter()
+    .find_map(|k| entry.fields.get(*k))
+    .map(|value| value.trim().trim_matches('"').to_string())
+    .unwrap_or_default();
+    if lead.is_empty() {
+        "Указ. соч.".to_string()
+    } else {
+        format!("{}. Указ. соч.", lead.trim_end_matches('.'))
+    }
+}
+
+fn inject_bibliography_entries(blocks: &mut Vec<Block>, bibliography: &HashMap<String, BibEntry>) {
+    if bibliography.is_empty() {
+        return;
+    }
+
+    let mut sorted_keys: Vec<&str> = bibliography.keys().map(String::as_str).collect();
+    sorted_keys.sort_unstable();
+
+    let mut out = Vec::with_capacity(blocks.len() + sorted_keys.len());
+    let mut inserted = false;
+    for block in blocks.drain(..) {
+        let is_bib_heading = matches!(block, Block::BibliographyHeading { .. });
+        out.push(block);
+        if is_bib_heading && !inserted {
+            for (index, key) in sorted_keys.iter().enumerate() {
+                if let Some(entry) = bibliography.get(*key) {
+                    let rendered = format_bibliography_entry(entry);
+                    if !rendered.is_empty() {
+                        out.push(Block::Paragraph(vec![Inline::Text(format!(
+                            "{}. {}",
+                            index + 1,
+                            rendered
+                        ))]));
+                    }
+                }
+            }
+            inserted = true;
+        }
+    }
+    *blocks = out;
 }
 
 fn replace_counter_markers(text: &str, metadata: &ParseMetadata) -> String {
@@ -4153,6 +4688,70 @@ fn extract_label_macro(src: &str) -> Option<String> {
     }
 }
 
+/// Extract a standalone `\label{...}` command from a chunk.
+///
+/// Returns `Some(label)` only when the chunk contains exactly one label command
+/// and no additional visible content.
+fn extract_standalone_label(chunk: &str) -> Option<String> {
+    let trimmed = chunk.trim();
+    if !trimmed.starts_with("\\label") {
+        return None;
+    }
+    let after = trimmed["\\label".len()..].trim_start_matches([' ', '\t']);
+    let content = extract_braced(after)?;
+    let consumed = {
+        let len = braced_len(after)?;
+        "\\label".len() + (trimmed["\\label".len()..].len() - after.len()) + len
+    };
+    if !trimmed[consumed..].trim().is_empty() {
+        return None;
+    }
+    let label = content.trim();
+    if label.is_empty() {
+        None
+    } else {
+        Some(label.to_string())
+    }
+}
+
+/// Attach a standalone `\label{...}` to the most recent relevant block.
+fn attach_standalone_label(blocks: &mut [Block], label: String) {
+    if let Some(last) = blocks.last_mut() {
+        match last {
+            Block::Section {
+                label: target_label,
+                ..
+            } => {
+                if target_label.is_none() {
+                    *target_label = Some(label);
+                }
+            }
+            Block::Table(table) => {
+                if table.label.is_none() {
+                    table.label = Some(label);
+                }
+            }
+            Block::Figure(figure) => {
+                if figure.label.is_none() {
+                    figure.label = Some(label);
+                }
+            }
+            Block::DisplayMath(body) => {
+                if !body.contains("\\label{") {
+                    if !body.trim().is_empty() {
+                        body.push(' ');
+                    }
+                    body.push_str(&format!("\\label{{{label}}}"));
+                }
+            }
+            Block::Paragraph(_)
+            | Block::StyledParagraph { .. }
+            | Block::List(_)
+            | Block::BibliographyHeading { .. } => {}
+        }
+    }
+}
+
 /// Extract tabularray-style label option, e.g. `label = {tab:foo}`.
 fn extract_option_label(src: &str) -> Option<String> {
     extract_option_value(src, "label")
@@ -4757,8 +5356,10 @@ fn prepare_text_chunk(
         return None;
     }
 
-    let begins_titlingpage = chunk.contains("\\begin{titlingpage}");
-    let ends_titlingpage = chunk.contains("\\end{titlingpage}");
+    let begins_titlingpage =
+        chunk.contains("\\begin{titlingpage}") || chunk.contains("\\begin{titlepage}");
+    let ends_titlingpage =
+        chunk.contains("\\end{titlingpage}") || chunk.contains("\\end{titlepage}");
     if begins_titlingpage {
         state.in_titlingpage = true;
         state.current_alignment = None;
@@ -4801,7 +5402,9 @@ fn prepare_text_chunk(
         state.current_alignment = Some("left".to_string());
     }
 
-    if let Some(line_spacing_twips) = extract_spacing_directive_twips(chunk) {
+    if let Some(line_spacing_twips) =
+        extract_spacing_directive_twips(chunk, layout.font_size_body_hp)
+    {
         state.current_line_spacing_twips = Some(line_spacing_twips.max(1));
     }
 
@@ -4809,6 +5412,7 @@ fn prepare_text_chunk(
         state.pending_space_before_twips = Some(vspace_twips.max(0));
         return None;
     }
+    let leading_vspace_twips = extract_leading_vspace_twips(chunk).map(|twips| twips.max(0));
 
     let leading_hfill = chunk.trim_start().starts_with("\\hfill");
     let mut style = ParagraphStyle::default();
@@ -4829,11 +5433,21 @@ fn prepare_text_chunk(
         style.alignment = Some(alignment);
     }
 
-    if let Some(space_before_twips) = state.pending_space_before_twips.take() {
-        style.space_before_twips = Some(space_before_twips);
-    }
+    style.space_before_twips = match (
+        state.pending_space_before_twips.take(),
+        leading_vspace_twips,
+    ) {
+        (Some(pending), Some(leading)) => Some(pending.saturating_add(leading)),
+        (Some(pending), None) => Some(pending),
+        (None, Some(leading)) => Some(leading),
+        (None, None) => None,
+    };
 
-    style.font_size_hp = extract_fontsize_halfpoints(chunk);
+    let (font_size_hp, fontsize_line_spacing_twips) = extract_fontsize_settings(chunk);
+    style.font_size_hp = font_size_hp;
+    if let Some(fontsize_line) = fontsize_line_spacing_twips {
+        style.line_spacing_twips = Some(fontsize_line.max(1));
+    }
 
     if ends_flush {
         state.current_alignment = state.alignment_stack.pop().flatten();
@@ -4853,11 +5467,131 @@ fn prepare_text_chunk(
 
 fn has_nondefault_paragraph_style(style: &ParagraphStyle) -> bool {
     style.alignment.is_some()
+        || style.left_indent_twips.is_some()
         || style.first_line_indent_twips.is_some()
         || style.line_spacing_twips.is_some()
         || style.space_before_twips.is_some()
         || style.space_after_twips.is_some()
         || style.font_size_hp.is_some()
+}
+
+/// Trim whitespace around explicit `\\` line-break commands.
+///
+/// This preserves line-break semantics while preventing synthetic leading
+/// spaces at the start of wrapped title-page lines.
+fn trim_spaces_around_manual_linebreaks(src: &str) -> String {
+    let mut out = String::with_capacity(src.len());
+    let mut pos = 0usize;
+
+    while pos < src.len() {
+        let rest = &src[pos..];
+        if let Some(after_break) = rest.strip_prefix("\\\\") {
+            while out.chars().last().is_some_and(|ch| ch.is_whitespace()) {
+                out.pop();
+            }
+            out.push_str("\\\\");
+            pos += 2;
+
+            if after_break.starts_with('[')
+                && let Some(arg_len) = bracketed_len(after_break)
+            {
+                out.push_str(&after_break[..arg_len]);
+                pos += arg_len;
+            }
+
+            let mut ws_len = 0usize;
+            for (idx, ch) in src[pos..].char_indices() {
+                if ch.is_whitespace() {
+                    ws_len = idx + ch.len_utf8();
+                } else {
+                    break;
+                }
+            }
+            pos += ws_len;
+            continue;
+        }
+
+        if let Some(ch) = rest.chars().next() {
+            out.push(ch);
+            pos += ch.len_utf8();
+        } else {
+            break;
+        }
+    }
+
+    out
+}
+
+fn estimate_flushright_tabular_left_indent_twips(
+    raw_chunk: &str,
+    inlines: &[Inline],
+    layout: &DocumentLayout,
+    paragraph_font_size_hp: Option<usize>,
+) -> Option<i32> {
+    if !raw_chunk.contains("\\begin{flushright}")
+        || !raw_chunk.contains("\\begin{tabular")
+        || !raw_chunk.contains("\\end{tabular")
+    {
+        return None;
+    }
+
+    let max_chars = visible_line_width_chars(inlines).into_iter().max()?;
+    if max_chars == 0 {
+        return None;
+    }
+
+    let page_width_twips = layout
+        .page_width_twips
+        .map(|value| value as i32)
+        .unwrap_or(DEFAULT_PAGE_WIDTH_TWIPS);
+    let margin_left_twips = layout
+        .page_margin_left_twips
+        .unwrap_or(DEFAULT_PAGE_MARGIN_LEFT_TWIPS)
+        .max(0);
+    let margin_right_twips = layout
+        .page_margin_right_twips
+        .unwrap_or(DEFAULT_PAGE_MARGIN_RIGHT_TWIPS)
+        .max(0);
+    let text_width_twips = (page_width_twips - margin_left_twips - margin_right_twips).max(0);
+    if text_width_twips == 0 {
+        return None;
+    }
+
+    let font_size_hp = paragraph_font_size_hp
+        .or(layout.font_size_body_hp)
+        .unwrap_or(DEFAULT_BODY_FONT_SIZE_HP);
+    let font_size_pt = font_size_hp as f64 / 2.0;
+    if !font_size_pt.is_finite() || font_size_pt <= 0.0 {
+        return None;
+    }
+
+    let avg_char_width_twips = font_size_pt * 20.0 * ESTIMATED_AVERAGE_CHAR_WIDTH_EM;
+    let estimated_block_width_twips = ((max_chars as f64) * avg_char_width_twips).round() as i32;
+    Some((text_width_twips - estimated_block_width_twips).max(0))
+}
+
+fn visible_line_width_chars(inlines: &[Inline]) -> Vec<usize> {
+    let mut plain = String::new();
+    push_plain_with_linebreaks(inlines, &mut plain);
+    plain
+        .split('\n')
+        .map(normalize_whitespace)
+        .map(|line| line.trim().chars().count())
+        .filter(|count| *count > 0)
+        .collect()
+}
+
+fn push_plain_with_linebreaks(inlines: &[Inline], out: &mut String) {
+    for inline in inlines {
+        match inline {
+            Inline::Text(text) => out.push_str(text),
+            Inline::LineBreak => out.push('\n'),
+            Inline::Bold(children) | Inline::Italic(children) | Inline::Footnote(children) => {
+                push_plain_with_linebreaks(children, out);
+            }
+            Inline::InlineMath(text) | Inline::Reference(text) => out.push_str(text),
+        }
+    }
 }
 
 fn parse_vspace_only_chunk_twips(chunk: &str) -> Option<i32> {
@@ -4890,26 +5624,128 @@ fn parse_vspace_only_chunk_twips(chunk: &str) -> Option<i32> {
     }
 }
 
-fn extract_spacing_directive_twips(chunk: &str) -> Option<i32> {
-    if let Some(factor) = extract_last_setspacing_factor(chunk) {
-        let twips = (240.0 * factor).round();
-        if twips.is_finite() && twips > 0.0 {
-            return Some(twips as i32);
+fn extract_leading_vspace_twips(chunk: &str) -> Option<i32> {
+    let mut rest = chunk.trim_start();
+    let mut last_twips = None;
+
+    loop {
+        let mut advanced = false;
+
+        for marker in [
+            "\\begin{titlingpage}",
+            "\\begin{titlepage}",
+            "\\end{titlingpage}",
+            "\\end{titlepage}",
+        ] {
+            if let Some(after) = rest.strip_prefix(marker) {
+                rest = after.trim_start();
+                advanced = true;
+                break;
+            }
         }
+        if advanced {
+            continue;
+        }
+
+        if let Some((twips, after)) = consume_vspace_command(rest) {
+            if let Some(twips) = twips {
+                last_twips = Some(twips);
+            }
+            rest = after.trim_start();
+            continue;
+        }
+
+        for command in [
+            "\\centering",
+            "\\raggedright",
+            "\\raggedleft",
+            "\\flushleft",
+            "\\flushright",
+            "\\selectfont",
+            "\\OnehalfSpacing",
+            "\\DoubleSpacing",
+            "\\SingleSpacing",
+            "\\hfill",
+            "\\par",
+        ] {
+            if let Some(after) = consume_control_word(rest, command) {
+                rest = after.trim_start();
+                advanced = true;
+                break;
+            }
+        }
+        if advanced {
+            continue;
+        }
+
+        for command in ["\\setSpacing", "\\setstretch", "\\linespread"] {
+            if let Some(after) = consume_control_with_braced_arg(rest, command) {
+                rest = after.trim_start();
+                advanced = true;
+                break;
+            }
+        }
+        if advanced {
+            continue;
+        }
+
+        if let Some(after) = rest.strip_prefix("\\\\") {
+            let mut after = after;
+            if after.starts_with('[')
+                && let Some(arg_len) = bracketed_len(after)
+            {
+                after = &after[arg_len..];
+            }
+            rest = after.trim_start();
+            continue;
+        }
+
+        break;
     }
-    if chunk.contains("\\OnehalfSpacing") {
-        return Some(360);
-    }
-    if chunk.contains("\\DoubleSpacing") {
-        return Some(480);
-    }
-    if chunk.contains("\\SingleSpacing") {
-        return Some(240);
-    }
-    None
+
+    last_twips
 }
 
-fn extract_fontsize_halfpoints(src: &str) -> Option<usize> {
+fn consume_control_word<'a>(src: &'a str, command: &str) -> Option<&'a str> {
+    let rest = src.strip_prefix(command)?;
+    if rest.chars().next().is_some_and(|c| c.is_ascii_alphabetic()) {
+        None
+    } else {
+        Some(rest)
+    }
+}
+
+fn consume_control_with_braced_arg<'a>(src: &'a str, command: &str) -> Option<&'a str> {
+    let rest = consume_control_word(src, command)?.trim_start();
+    if !rest.starts_with('{') {
+        return None;
+    }
+    let arg_len = braced_len(rest)?;
+    Some(&rest[arg_len..])
+}
+
+fn consume_vspace_command(src: &str) -> Option<(Option<i32>, &str)> {
+    let after_cmd = if let Some(value) = consume_control_word(src, "\\vspace*") {
+        value
+    } else {
+        consume_control_word(src, "\\vspace")?
+    };
+    let after_cmd = after_cmd.trim_start();
+    if !after_cmd.starts_with('{') {
+        return None;
+    }
+    let arg_len = braced_len(after_cmd)?;
+    let payload = &after_cmd[1..arg_len - 1];
+    Some((parse_latex_length_to_twips(payload), &after_cmd[arg_len..]))
+}
+
+fn extract_spacing_directive_twips(chunk: &str, body_font_size_hp: Option<usize>) -> Option<i32> {
+    extract_last_spacing_factor(chunk, body_font_size_hp).and_then(spacing_factor_to_twips)
+}
+
+fn extract_fontsize_settings(src: &str) -> (Option<usize>, Option<i32>) {
+    let mut last_size_hp = None;
+    let mut last_line_twips = None;
     let mut pos = 0usize;
     while let Some(rel) = src[pos..].find("\\fontsize") {
         let cmd_start = pos + rel + "\\fontsize".len();
@@ -4922,22 +5758,69 @@ fn extract_fontsize_halfpoints(src: &str) -> Option<usize> {
             pos = cmd_start;
             continue;
         };
-        let value = tail[1..first_len - 1].trim();
-        let value = value.trim_end_matches("pt").trim().replace(',', ".");
-        if let Ok(pt) = value.parse::<f64>()
+        let font_arg = tail[1..first_len - 1].trim();
+        let font_value = font_arg.trim_end_matches("pt").trim().replace(',', ".");
+        if let Ok(pt) = font_value.parse::<f64>()
             && pt.is_finite()
             && pt > 0.0
         {
-            return Some((pt * 2.0).round() as usize);
+            last_size_hp = Some((pt * 2.0).round() as usize);
         }
 
-        tail = &tail[first_len..];
+        tail = tail[first_len..].trim_start();
+        if tail.starts_with('{')
+            && let Some(second_len) = braced_len(tail)
+        {
+            let line_arg = tail[1..second_len - 1].trim();
+            if let Some(line_value) = parse_fontsize_line_spacing_twips(line_arg, last_size_hp) {
+                last_line_twips = Some(line_value.max(1));
+            }
+            tail = &tail[second_len..];
+        }
         if tail.trim().is_empty() {
             break;
         }
-        pos = cmd_start + first_len;
+        pos = cmd_start + (src[cmd_start..].len() - tail.len());
     }
-    None
+    (last_size_hp, last_line_twips)
+}
+
+fn parse_fontsize_line_spacing_twips(raw: &str, font_size_hp: Option<usize>) -> Option<i32> {
+    if let Some(twips) = parse_latex_length_to_twips(raw) {
+        if let Some(size_hp) = font_size_hp {
+            let font_pt = size_hp as f64 / 2.0;
+            if font_pt > 0.0 {
+                // DOCX auto line-spacing units: 240 == 1.0 line.
+                // Convert LaTeX baseline distance (twips) to a relative line factor.
+                let baseline_pt = twips as f64 / 20.0;
+                let factor = baseline_pt / font_pt;
+                if factor.is_finite() && factor > 0.0 {
+                    return Some((factor * 240.0).round() as i32);
+                }
+            }
+        }
+        // Fallback when font size is unknown: keep the raw value as an explicit auto-like unit.
+        return Some(twips);
+    }
+
+    let numeric = raw
+        .trim()
+        .replace(',', ".")
+        .parse::<f64>()
+        .ok()
+        .filter(|value| value.is_finite() && *value > 0.0)?;
+    if let Some(size_hp) = font_size_hp {
+        let font_pt = size_hp as f64 / 2.0;
+        if font_pt > 0.0 {
+            let factor = numeric / font_pt;
+            if factor.is_finite() && factor > 0.0 {
+                return Some((factor * 240.0).round() as i32);
+            }
+        }
+    }
+    // If only a bare numeric baseline is present and font size is unknown,
+    // treat it as points.
+    Some((numeric * 20.0).round() as i32)
 }
 
 /// Return `true` for preamble lines we want to discard entirely.
@@ -5073,6 +5956,7 @@ fn resolve_references(
     blocks: &mut [Block],
     declared_labels: &[String],
     layout: &crate::model::DocumentLayout,
+    preserve_reference_nodes: bool,
 ) {
     let labels = build_label_registry(blocks, declared_labels, layout);
 
@@ -5081,24 +5965,28 @@ fn resolve_references(
             Block::Section { title, .. }
             | Block::Paragraph(title)
             | Block::StyledParagraph { inlines: title, .. } => {
-                resolve_inline_references(title, &labels);
+                resolve_inline_references(title, &labels, preserve_reference_nodes);
             }
             Block::Table(table) => {
-                resolve_inline_references(&mut table.caption, &labels);
-                resolve_inline_references(&mut table.source, &labels);
+                resolve_inline_references(&mut table.caption, &labels, preserve_reference_nodes);
+                resolve_inline_references(&mut table.source, &labels, preserve_reference_nodes);
                 for row in &mut table.rows {
                     for cell in &mut row.cells {
-                        resolve_inline_references(&mut cell.content, &labels);
+                        resolve_inline_references(
+                            &mut cell.content,
+                            &labels,
+                            preserve_reference_nodes,
+                        );
                     }
                 }
             }
             Block::Figure(figure) => {
-                resolve_inline_references(&mut figure.caption, &labels);
-                resolve_inline_references(&mut figure.source, &labels);
+                resolve_inline_references(&mut figure.caption, &labels, preserve_reference_nodes);
+                resolve_inline_references(&mut figure.source, &labels, preserve_reference_nodes);
             }
             Block::List(list) => {
                 for item in &mut list.items {
-                    resolve_inline_references(item, &labels);
+                    resolve_inline_references(item, &labels, preserve_reference_nodes);
                 }
             }
             Block::DisplayMath(_) | Block::BibliographyHeading { .. } => {}
@@ -5227,18 +6115,28 @@ fn infer_appendix_label_value(label: &str) -> Option<String> {
     }
 }
 
-fn resolve_inline_references(inlines: &mut [Inline], labels: &HashMap<String, String>) {
+fn resolve_inline_references(
+    inlines: &mut [Inline],
+    labels: &HashMap<String, String>,
+    preserve_reference_nodes: bool,
+) {
     for inline in inlines {
         match inline {
             Inline::Reference(label) => {
-                let text = labels
-                    .get(label)
-                    .cloned()
-                    .unwrap_or_else(|| format!("[ref:{label}]"));
-                *inline = Inline::Text(text);
+                if preserve_reference_nodes {
+                    if !labels.contains_key(label) {
+                        *inline = Inline::Text(format!("[ref:{label}]"));
+                    }
+                } else {
+                    let text = labels
+                        .get(label)
+                        .cloned()
+                        .unwrap_or_else(|| format!("[ref:{label}]"));
+                    *inline = Inline::Text(text);
+                }
             }
             Inline::Bold(children) | Inline::Italic(children) | Inline::Footnote(children) => {
-                resolve_inline_references(children, labels);
+                resolve_inline_references(children, labels, preserve_reference_nodes);
             }
             Inline::Text(_) | Inline::InlineMath(_) | Inline::LineBreak => {}
         }

@@ -46,6 +46,7 @@ fn caption_paragraph_top_position_sets_after_skip_and_indent() {
             singlelinecheck: false,
             footnote_font_size_hp: 20,
         },
+        &ReferenceRenderIndex::default(),
     );
     let xml = String::from_utf8(para.build()).expect("paragraph xml should be utf8");
 
@@ -70,6 +71,7 @@ fn caption_paragraph_bottom_position_sets_before_skip() {
             singlelinecheck: false,
             footnote_font_size_hp: 20,
         },
+        &ReferenceRenderIndex::default(),
     );
     let xml = String::from_utf8(para.build()).expect("paragraph xml should be utf8");
 
@@ -92,6 +94,7 @@ fn caption_singlelinecheck_centers_short_caption_only() {
             singlelinecheck: true,
             footnote_font_size_hp: 20,
         },
+        &ReferenceRenderIndex::default(),
     );
     let centered_xml = String::from_utf8(centered.build()).expect("paragraph xml should be utf8");
     assert!(
@@ -114,6 +117,7 @@ fn caption_singlelinecheck_centers_short_caption_only() {
             singlelinecheck: true,
             footnote_font_size_hp: 20,
         },
+        &ReferenceRenderIndex::default(),
     );
     let kept_xml = String::from_utf8(kept.build()).expect("paragraph xml should be utf8");
     assert!(kept_xml.contains("w:jc w:val=\"left\""), "xml: {kept_xml}");
@@ -134,6 +138,7 @@ fn chapter_prefix_does_not_duplicate_trailing_dot() {
             title: vec![Inline::Text("Заголовок".to_string())],
         },
         &profile,
+        &ReferenceRenderIndex::default(),
     );
     let xml = String::from_utf8(para.build()).expect("paragraph xml should be utf8");
     assert!(xml.contains("Глава 1. "), "xml: {xml}");
@@ -155,7 +160,8 @@ fn table_alignment_uses_center_when_requested() {
         }],
     };
     let xml =
-        String::from_utf8(build_table(&table, &profile).build()).expect("table xml should be utf8");
+        String::from_utf8(build_table(&table, &profile, &ReferenceRenderIndex::default()).build())
+            .expect("table xml should be utf8");
     assert!(xml.contains("w:jc w:val=\"center\""), "xml: {xml}");
 }
 
@@ -173,9 +179,29 @@ fn section_heading_uses_latex_driven_indent() {
             title: vec![Inline::Text("Section".to_string())],
         },
         &profile,
+        &ReferenceRenderIndex::default(),
     );
     let xml = String::from_utf8(para.build()).expect("paragraph xml should be utf8");
-    assert!(xml.contains("w:left=\"709\""), "xml: {xml}");
+    assert!(xml.contains("w:firstLine=\"709\""), "xml: {xml}");
+    assert!(!xml.contains("w:left=\"709\""), "xml: {xml}");
+}
+
+#[test]
+fn styled_paragraph_applies_left_indent_override() {
+    let profile = RenderProfile::from_layout(&DocumentLayout::default());
+    let style = ParagraphStyle {
+        left_indent_twips: Some(900),
+        first_line_indent_twips: Some(0),
+        ..ParagraphStyle::default()
+    };
+    let para = build_styled_body_paragraph(
+        &[Inline::Text("Indented".to_string())],
+        &style,
+        &profile,
+        &ReferenceRenderIndex::default(),
+    );
+    let xml = String::from_utf8(para.build()).expect("paragraph xml should be utf8");
+    assert!(xml.contains("w:left=\"900\""), "xml: {xml}");
 }
 
 #[test]
@@ -210,7 +236,8 @@ fn generated_toc_paragraphs_include_chapters_and_sections() {
         toc_entries: Vec::new(),
     };
     let profile = RenderProfile::from_layout(&document.layout);
-    let paragraphs = generated_toc_paragraphs(&document, 1, &profile);
+    let paragraphs =
+        generated_toc_paragraphs(&document, 1, &profile, &ReferenceRenderIndex::default());
     assert_eq!(paragraphs.len(), 2);
 
     let first_xml = String::from_utf8(paragraphs[0].build()).expect("paragraph xml utf8");
@@ -248,7 +275,8 @@ fn generated_toc_paragraphs_from_entries_include_page_header_line() {
         ],
     };
     let profile = RenderProfile::from_layout(&document.layout);
-    let paragraphs = generated_toc_paragraphs(&document, 0, &profile);
+    let paragraphs =
+        generated_toc_paragraphs(&document, 0, &profile, &ReferenceRenderIndex::default());
     assert_eq!(paragraphs.len(), 2);
 
     let header_xml = String::from_utf8(paragraphs[0].build()).expect("paragraph xml utf8");
@@ -271,6 +299,85 @@ fn generated_toc_paragraphs_from_entries_include_page_header_line() {
 }
 
 #[test]
+fn generated_toc_uses_body_line_spacing_from_layout() {
+    let layout = DocumentLayout {
+        body_line_spacing_twips: Some(332),
+        ..DocumentLayout::default()
+    };
+    let document = Document {
+        blocks: Vec::new(),
+        layout: layout.clone(),
+        toc_entries: vec![TocEntry {
+            level: 1,
+            number: Some("1.".to_string()),
+            title: "Intro".to_string(),
+            page: Some("3".to_string()),
+        }],
+    };
+    let profile = RenderProfile::from_layout(&layout);
+    let paragraphs =
+        generated_toc_paragraphs(&document, 0, &profile, &ReferenceRenderIndex::default());
+    assert_eq!(paragraphs.len(), 1);
+
+    let xml = String::from_utf8(paragraphs[0].build()).expect("paragraph xml utf8");
+    assert!(xml.contains("w:line=\"332\""), "xml: {xml}");
+}
+
+#[test]
+fn generated_toc_adds_before_spacing_for_numbered_chapters() {
+    let layout = DocumentLayout {
+        body_line_spacing_twips: Some(332),
+        toc_chapter_space_before_twips: Some(300),
+        ..DocumentLayout::default()
+    };
+    let document = Document {
+        blocks: Vec::new(),
+        layout: layout.clone(),
+        toc_entries: vec![TocEntry {
+            level: 1,
+            number: Some("1.".to_string()),
+            title: "Intro".to_string(),
+            page: Some("3".to_string()),
+        }],
+    };
+    let profile = RenderProfile::from_layout(&layout);
+    let paragraphs =
+        generated_toc_paragraphs(&document, 0, &profile, &ReferenceRenderIndex::default());
+    assert_eq!(paragraphs.len(), 1);
+
+    let xml = String::from_utf8(paragraphs[0].build()).expect("paragraph xml utf8");
+    assert!(xml.contains("w:before=\"300\""), "xml: {xml}");
+    assert!(xml.contains("w:line=\"332\""), "xml: {xml}");
+}
+
+#[test]
+fn generated_toc_adds_before_spacing_for_unnumbered_level1_entries() {
+    let layout = DocumentLayout {
+        body_line_spacing_twips: Some(332),
+        toc_chapter_space_before_twips: Some(300),
+        ..DocumentLayout::default()
+    };
+    let document = Document {
+        blocks: Vec::new(),
+        layout: layout.clone(),
+        toc_entries: vec![TocEntry {
+            level: 1,
+            number: None,
+            title: "ВВЕДЕНИЕ".to_string(),
+            page: Some("4".to_string()),
+        }],
+    };
+    let profile = RenderProfile::from_layout(&layout);
+    let paragraphs =
+        generated_toc_paragraphs(&document, 0, &profile, &ReferenceRenderIndex::default());
+    assert_eq!(paragraphs.len(), 1);
+
+    let xml = String::from_utf8(paragraphs[0].build()).expect("paragraph xml utf8");
+    assert!(xml.contains("w:before=\"300\""), "xml: {xml}");
+    assert!(xml.contains("w:line=\"332\""), "xml: {xml}");
+}
+
+#[test]
 fn toc_entry_uses_latex_chapter_name_prefix_when_configured() {
     let layout = DocumentLayout {
         toc_chapter_name_prefix: Some("Глава".to_string()),
@@ -287,7 +394,8 @@ fn toc_entry_uses_latex_chapter_name_prefix_when_configured() {
         }],
     };
     let profile = RenderProfile::from_layout(&layout);
-    let paragraphs = generated_toc_paragraphs(&document, 0, &profile);
+    let paragraphs =
+        generated_toc_paragraphs(&document, 0, &profile, &ReferenceRenderIndex::default());
     assert_eq!(paragraphs.len(), 1);
 
     let xml = String::from_utf8(paragraphs[0].build()).expect("paragraph xml utf8");
@@ -313,12 +421,40 @@ fn toc_entry_uses_latex_driven_numwidth_for_hanging_indent() {
         }],
     };
     let profile = RenderProfile::from_layout(&layout);
-    let paragraphs = generated_toc_paragraphs(&document, 0, &profile);
+    let paragraphs =
+        generated_toc_paragraphs(&document, 0, &profile, &ReferenceRenderIndex::default());
     assert_eq!(paragraphs.len(), 1);
 
     let xml = String::from_utf8(paragraphs[0].build()).expect("paragraph xml utf8");
     assert!(xml.contains("w:left=\"1100\""), "xml: {xml}");
     assert!(xml.contains("w:hanging=\"700\""), "xml: {xml}");
+}
+
+#[test]
+fn toc_chapter_entry_expands_hanging_indent_for_chapter_name_prefix() {
+    let layout = DocumentLayout {
+        toc_chapter_name_prefix: Some("Глава".to_string()),
+        toc_numwidth_chapter_twips: Some(420),
+        ..DocumentLayout::default()
+    };
+    let document = Document {
+        blocks: Vec::new(),
+        layout: layout.clone(),
+        toc_entries: vec![TocEntry {
+            level: 1,
+            number: Some("1.".to_string()),
+            title: "Длинный заголовок для проверки висячего отступа в оглавлении".to_string(),
+            page: Some("12".to_string()),
+        }],
+    };
+    let profile = RenderProfile::from_layout(&layout);
+    let paragraphs =
+        generated_toc_paragraphs(&document, 0, &profile, &ReferenceRenderIndex::default());
+    assert_eq!(paragraphs.len(), 1);
+
+    let xml = String::from_utf8(paragraphs[0].build()).expect("paragraph xml utf8");
+    assert!(xml.contains("w:left=\"1176\""), "xml: {xml}");
+    assert!(xml.contains("w:hanging=\"1176\""), "xml: {xml}");
 }
 
 #[test]
@@ -332,6 +468,7 @@ fn linebreak_inline_renders_text_wrapping_break() {
         ],
         &ParagraphStyle::default(),
         &profile,
+        &ReferenceRenderIndex::default(),
     );
     let xml = String::from_utf8(para.build()).expect("paragraph xml utf8");
     assert!(xml.contains("w:br w:type=\"textWrapping\""), "xml: {xml}");
@@ -418,7 +555,8 @@ fn toc_entry_chapter_non_bold_when_toc_chapter_entry_bold_false() {
         }],
     };
     let profile = RenderProfile::from_layout(&layout);
-    let paragraphs = generated_toc_paragraphs(&document, 0, &profile);
+    let paragraphs =
+        generated_toc_paragraphs(&document, 0, &profile, &ReferenceRenderIndex::default());
     assert_eq!(paragraphs.len(), 1);
     let xml = String::from_utf8(paragraphs[0].build()).expect("xml utf8");
     // When non-bold is requested, w:b w:val="false" must appear in the title run.
@@ -445,7 +583,8 @@ fn toc_entry_uses_aftersnum_chapter_separator() {
         }],
     };
     let profile = RenderProfile::from_layout(&layout);
-    let paragraphs = generated_toc_paragraphs(&document, 0, &profile);
+    let paragraphs =
+        generated_toc_paragraphs(&document, 0, &profile, &ReferenceRenderIndex::default());
     assert_eq!(paragraphs.len(), 1);
     let xml = String::from_utf8(paragraphs[0].build()).expect("xml utf8");
     // Number prefix should use aftersnum ". " (rendered as "1. ").
@@ -466,10 +605,10 @@ fn list_indent_defaults_use_body_first_line_indent() {
     let profile = RenderProfile::from_layout(&layout);
     // list_left should equal body first-line indent (parindent).
     assert_eq!(profile.list_left_indent_twips, 709);
-    // list_hanging = labelsep + labelwidth (both default to ~142 twips).
+    // item indent defaults to a positive hanging-style value when not configured.
     assert!(
-        profile.list_hanging_indent_twips > 0,
-        "hanging indent should be positive"
+        profile.list_item_indent_twips > 0,
+        "item indent should be positive"
     );
 }
 

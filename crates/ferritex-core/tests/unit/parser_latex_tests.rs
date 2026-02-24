@@ -2815,3 +2815,26 @@ fn test_bibliography_explicit_title_overrides_language() {
         other => panic!("expected BibliographyHeading, got {other:?}"),
     }
 }
+
+// ── Dissertation counter fallback gate tests ───────────────────────────────
+
+#[test]
+fn test_counter_fallbacks_skipped_for_non_dissertation_class() {
+    // When document class is NOT a dissertation class, the placeholder
+    // "Диссертация состоит из..." must be left untouched by the parser.
+    // parse_latex() has no \documentclass, so document_class = None → gate fires.
+    let placeholder = "Диссертация состоит из введения, главы, заключения и приложений.";
+    let doc = parse_latex(placeholder);
+    // The text should survive unchanged in the parsed paragraph.
+    let found = doc.blocks.iter().any(|b| match b {
+        Block::Paragraph(inlines) => inlines.iter().any(|inline| match inline {
+            Inline::Text(t) => t.contains("главы"),
+            _ => false,
+        }),
+        _ => false,
+    });
+    assert!(
+        found,
+        "dissertation placeholder should be preserved unchanged for non-dissertation class"
+    );
+}

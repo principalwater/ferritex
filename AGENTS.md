@@ -73,9 +73,21 @@ categories must all follow this pattern — no exceptions:
 | List geometry and bullet marker | `\setlist{labelsep=…, labelwidth=…}`, `\renewcommand{\labelitemi}{…}` | `list_left_indent_twips`, `list_hanging_indent_twips`, `list_label_sep_twips`, `list_label_width_twips`, `list_bullet_char` | left=709 twips, hanging=284 twips, bullet="•" | ✅ parsed + rendered |
 | Source attribution spacing | `\newcommand{\tablesource}{...\vspace{…}...}`, `\newcommand{\figuresource}{...\vspace{…}...}` | `source_vspace_table_twips`, `source_vspace_figure_twips` | table 80 twips (4pt), figure 40 twips (2pt) | ✅ parsed + rendered |
 | Title page page-number suppression | `\thispagestyle{empty}` inside `titlepage`/`titlingpage` | `title_page_suppress_number` | false (standard page numbering) | ✅ parsed + rendered |
-| Bibliography heading placeholder | `\printbibliography[title=…]`, `\insertbibliofullsorted`, `\insertbiblioauthor`, `\insertbibliofull` | `Block::BibliographyHeading { title }` | title=`СПИСОК ЛИТЕРАТУРЫ` | ✅ parsed + rendered |
+| Bibliography heading placeholder | `\printbibliography[title=…]`, `\insertbibliofullsorted`, `\insertbiblioauthor`, `\insertbibliofull` | `Block::BibliographyHeading { title }` | title from `default_bibliography_title_for_language(document_language)`, fallback `"REFERENCES"` | ✅ parsed + rendered |
+| TOC position marker | `\tableofcontents` | `Block::TableOfContents` | no language text stored — renderer generates TOC from AST | ✅ parsed + rendered |
 | Float block alignment | `\centering`, `\raggedright`, `\raggedleft`, `\flushleft`, `\flushright` inside `table/figure` blocks | `Table.alignment`, `Figure.alignment` | table: left, figure: center | ✅ parsed + rendered |
 | Language | babel/polyglossia main language | `document_language` | None (no language tag) | ✅ parsed + rendered |
+
+**Known exception — `apply_known_counter_fallbacks`** (`parser/latex.rs`):
+Contains dissertation-specific Russian counter placeholder templates
+(e.g. "Диссертация состоит из введения..."). These are gated on
+`ParseMetadata.document_class` containing "disser\*": only documents
+whose `\documentclass` matches that pattern trigger the replacement.
+All other document classes receive a no-op early return. This is an
+acknowledged corpus-specific feature, acceptable because:
+(1) it is class-gated, (2) false positives are structurally impossible
+for non-matching text, (3) the placeholder strings live in the LaTeX
+source, not hardcoded in the renderer.
 
 **Test requirement**: every `DocumentLayout` field must have a
 unit test in `parser/latex.rs` that:

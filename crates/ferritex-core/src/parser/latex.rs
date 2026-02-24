@@ -25,6 +25,9 @@ struct ParseMetadata {
     counters: HashMap<String, i64>,
     text_counters: HashMap<String, String>,
     bibliography: HashMap<String, BibEntry>,
+    /// LaTeX document class name (e.g. `"memoir"`, `"disser"`, `"article"`).
+    /// `None` when no `\documentclass` is found (e.g. in test snippets).
+    document_class: Option<String>,
 }
 
 const DEFAULT_PAGE_WIDTH_TWIPS: i32 = 11_906;
@@ -3049,6 +3052,7 @@ fn parse_latex_length_prefix_to_twips(raw: &str) -> Option<i32> {
 fn collect_parse_metadata(source: &str, input_path: &Path, root_dir: &Path) -> ParseMetadata {
     let mut metadata = ParseMetadata {
         counters: collect_setcounter_values(source),
+        document_class: extract_documentclass_name(source),
         ..ParseMetadata::default()
     };
 
@@ -4028,6 +4032,19 @@ fn replace_counter_markers(text: &str, metadata: &ParseMetadata) -> String {
 }
 
 fn apply_known_counter_fallbacks(text: &str, metadata: &ParseMetadata) -> String {
+    // DISSERTATION-SPECIFIC: The patterns below match placeholder strings from
+    // Russian dissertation style templates (e.g. the `disser` document class).
+    // Gated on document class to avoid false positives for unrelated documents.
+    // When document_class is None (e.g. test snippets without \documentclass),
+    // we skip all replacements — safe because the template strings are not
+    // realistic content for non-dissertation documents.
+    let is_dissertation_class = metadata.document_class.as_deref().is_some_and(|c| {
+        c.eq_ignore_ascii_case("disser") || c.to_ascii_lowercase().contains("dissert")
+    });
+    if !is_dissertation_class {
+        return text.to_string();
+    }
+
     let mut out = text.to_string();
 
     if out.contains("XX печатных изданиях") {

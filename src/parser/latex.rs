@@ -310,7 +310,10 @@ fn parse_latex_with_mode(
                             metadata,
                             preserve_dynamic_markers,
                         );
-                        if !inlines.is_empty() && !is_single_brace_paragraph(&inlines) {
+                        if !inlines.is_empty()
+                            && !is_single_brace_paragraph(&inlines)
+                            && !is_only_linebreaks(&inlines)
+                        {
                             if let Some(style) = prepared.style {
                                 blocks.push(Block::StyledParagraph { inlines, style });
                             } else {
@@ -675,6 +678,13 @@ fn extract_layout_settings(source: &str) -> DocumentLayout {
     }
     layout.toc_chapter_name_prefix =
         extract_toc_chapter_name_prefix(source, layout.chapter_name.as_deref());
+    layout.toc_chapter_entry_bold = extract_toc_chapter_entry_bold(source);
+    layout.toc_chapter_page_bold = extract_toc_chapter_page_bold(source);
+    layout.toc_aftersnum_chapter = extract_toc_aftersnum(source, "chapter");
+    layout.toc_aftersnum_section = extract_toc_aftersnum(source, "section");
+    layout.toc_aftersnum_subsection = extract_toc_aftersnum(source, "subsection");
+    layout.toc_aftersnum_subsubsection = extract_toc_aftersnum(source, "subsubsection");
+    layout.toc_appendix_name = extract_toc_appendix_name(source);
     let (toc_chapter_indent, toc_chapter_numwidth) =
         extract_toc_indent_numwidth_twips(source, "chapter");
     layout.toc_indent_chapter_twips = toc_chapter_indent;
@@ -712,13 +722,31 @@ fn extract_renewcommand_value(source: &str, cmd_name: &str) -> Option<String> {
             while cur < source.len() && source.as_bytes()[cur].is_ascii_whitespace() {
                 cur += 1;
             }
-            // Expect {\\cmdname}
-            let Some(name_len) = braced_len(&source[cur..]) else {
+            // Accept both `\renewcommand{\cmdname}` and `\renewcommand\cmdname` forms.
+            let name;
+            if cur < source.len() && source.as_bytes()[cur] == b'{' {
+                // Braced form: {\cmdname}
+                let Some(name_len) = braced_len(&source[cur..]) else {
+                    pos = start;
+                    continue;
+                };
+                name = source[cur + 1..cur + name_len - 1].trim().to_string();
+                cur += name_len;
+            } else if cur < source.len() && source.as_bytes()[cur] == b'\\' {
+                // Unbraced form: \cmdname
+                cur += 1; // skip leading backslash
+                let cmd_end = cur
+                    + source[cur..]
+                        .chars()
+                        .take_while(|c| c.is_ascii_alphanumeric() || *c == '@')
+                        .map(char::len_utf8)
+                        .sum::<usize>();
+                name = format!("\\{}", &source[cur..cmd_end]);
+                cur = cmd_end;
+            } else {
                 pos = start;
                 continue;
             };
-            let name = source[cur + 1..cur + name_len - 1].trim();
-            cur += name_len;
             // Skip optional [nargs]
             while cur < source.len() && source.as_bytes()[cur].is_ascii_whitespace() {
                 cur += 1;
@@ -1422,6 +1450,104 @@ fn extract_toc_chapter_name_prefix(source: &str, chapter_name: Option<&str>) -> 
         plain.push(ch);
     }
 
+    Some(normalize_whitespace(&plain).trim().to_string())
+}
+
+/// Detect whether chapter TOC entry text should be bold.
+///
+/// Returns `Some(false)` when `\renewcommand{\cftchapterfont}{\normalfont}` (or `\mdseries`)
+/// is present, indicating the project explicitly requests non-bold chapter TOC entries.
+/// Returns `Some(true)` when `\bfseries` or `\bf` is seen.
+/// Returns `None` when no explicit font override is found.
+fn extract_toc_chapter_entry_bold(source: &str) -> Option<bool> {
+    let value = extract_renewcommand_value(source, "cftchapterfont")?;
+    let v = value.trim().to_ascii_lowercase();
+    if v.contains("normalfont") || v.contains("mdseries") {
+        Some(false)
+    } else if v.contains("bfseries") || v.contains("\\bf") {
+        Some(true)
+    } else {
+        // Any other override: treat as non-bold (explicit override detected).
+        Some(false)
+    }
+}
+
+/// Detect whether chapter TOC page-numbers should be bold.
+///
+/// Returns `Some(false)` when `\renewcommand{\cftchapterpagefont}{\normalfont}` is present.
+/// Returns `Some(true)` when `\bfseries` is seen.
+/// Returns `None` when no explicit page-font override is found.
+fn extract_toc_chapter_page_bold(source: &str) -> Option<bool> {
+    let value = extract_renewcommand_value(source, "cftchapterpagefont")?;
+    let v = value.trim().to_ascii_lowercase();
+    if v.contains("normalfont") || v.contains("mdseries") {
+        Some(false)
+    } else if v.contains("bfseries") || v.contains("\\bf") {
+        Some(true)
+    } else {
+        Some(false)
+    }
+}
+
+/// Strip LaTeX control sequences from a string, substituting known shorthands.
+///
+/// - `\space`, `~` → space
+/// - `\quad` → four spaces
+/// - `\,` → thin space (`\u{202F}`)
+/// - Other `\cmd` sequences → removed
+/// - Braces `{` `}` → removed
+fn strip_latex_controls(raw: &str) -> String {
+    let expanded = raw
+        .replace("\\space", " ")
+        .replace("\\quad", "    ")
+        .replace("\\,", "\u{202F}")
+        .replace('~', "\u{00A0}");
+    let mut out = String::new();
+    let mut chars = expanded.chars().peekable();
+    while let Some(ch) = chars.next() {
+        if ch == '\\' {
+            // Skip over alphabetic command name.
+            while chars.peek().is_some_and(|c| c.is_ascii_alphabetic()) {
+                chars.next();
+            }
+            continue;
+        }
+        if ch == '{' || ch == '}' {
+            continue;
+        }
+        out.push(ch);
+    }
+    out
+}
+
+/// Extract the `\cft<level>aftersnum{...}` separator for a given TOC level.
+///
+/// `level` should be one of `"chapter"`, `"section"`, `"subsection"`, `"subsubsection"`.
+/// The content is normalized via [`strip_latex_controls`].
+fn extract_toc_aftersnum(source: &str, level: &str) -> Option<String> {
+    let cmd = format!("cft{level}aftersnum");
+    let raw = extract_renewcommand_value(source, &cmd)?;
+    if raw.trim().is_empty() {
+        return Some(String::new());
+    }
+    let plain = strip_latex_controls(&raw);
+    // Do not trim trailing whitespace: separators like ". " must preserve the trailing space.
+    Some(normalize_whitespace(&plain))
+}
+
+/// Extract the TOC appendix prefix from `\renewcommand{\cftappendixname}{...}`.
+///
+/// Any `\appendixname` reference is substituted with the value extracted from
+/// `\renewcommand{\appendixname}{...}`, or `"Appendix"` as a final fallback.
+fn extract_toc_appendix_name(source: &str) -> Option<String> {
+    let raw = extract_renewcommand_value(source, "cftappendixname")?;
+    if raw.trim().is_empty() {
+        return Some(String::new());
+    }
+    let appendix_name = extract_renewcommand_value(source, "appendixname")
+        .unwrap_or_else(|| "Appendix".to_string());
+    let substituted = raw.replace("\\appendixname", &appendix_name);
+    let plain = strip_latex_controls(&substituted);
     Some(normalize_whitespace(&plain).trim().to_string())
 }
 
@@ -6046,6 +6172,14 @@ fn parse_leading_int_len(src: &str) -> Option<usize> {
     if saw_digit { Some(end) } else { None }
 }
 
+/// Returns `true` when every inline in the slice is a `LineBreak`.
+///
+/// Used to suppress spurious empty `Block::Paragraph` entries produced by
+/// a lone `\\` on its own paragraph-chunk (e.g. between two blank lines).
+fn is_only_linebreaks(inlines: &[Inline]) -> bool {
+    !inlines.is_empty() && inlines.iter().all(|i| matches!(i, Inline::LineBreak))
+}
+
 fn is_single_brace_paragraph(inlines: &[Inline]) -> bool {
     if inlines
         .iter()
@@ -8476,5 +8610,118 @@ Body.";
         assert_eq!(doc.layout.chapter_name.as_deref(), Some("Глава"));
         assert_eq!(doc.layout.heading_alignment.as_deref(), Some("left"));
         assert_eq!(doc.layout.heading_number_delimiter.as_deref(), Some("."));
+    }
+
+    // ── Task 1: toc_chapter_entry_bold ────────────────────────────────────
+
+    #[test]
+    fn test_toc_chapter_entry_bold_normalfont() {
+        let src = r"\renewcommand{\cftchapterfont}{\normalfont}
+Body.";
+        let doc = parse_latex(src);
+        assert_eq!(doc.layout.toc_chapter_entry_bold, Some(false));
+    }
+
+    #[test]
+    fn test_toc_chapter_entry_bold_absent() {
+        let doc = parse_latex("Body.");
+        assert_eq!(doc.layout.toc_chapter_entry_bold, None);
+    }
+
+    // ── Task 1: toc_chapter_page_bold ────────────────────────────────────
+
+    #[test]
+    fn test_toc_chapter_page_bold_normalfont() {
+        let src = r"\renewcommand{\cftchapterpagefont}{\normalfont}
+Body.";
+        let doc = parse_latex(src);
+        assert_eq!(doc.layout.toc_chapter_page_bold, Some(false));
+    }
+
+    #[test]
+    fn test_toc_chapter_page_bold_absent() {
+        let doc = parse_latex("Body.");
+        assert_eq!(doc.layout.toc_chapter_page_bold, None);
+    }
+
+    // ── Task 1: toc_aftersnum ────────────────────────────────────────────
+
+    #[test]
+    fn test_toc_aftersnum_chapter_present() {
+        let src = r"\renewcommand\cftchapteraftersnum{.\space}
+Body.";
+        let doc = parse_latex(src);
+        assert_eq!(doc.layout.toc_aftersnum_chapter.as_deref(), Some(". "));
+    }
+
+    #[test]
+    fn test_toc_aftersnum_section_present() {
+        let src = r"\renewcommand\cftsectionaftersnum{.\space}
+Body.";
+        let doc = parse_latex(src);
+        assert_eq!(doc.layout.toc_aftersnum_section.as_deref(), Some(". "));
+    }
+
+    #[test]
+    fn test_toc_aftersnum_all_absent() {
+        let doc = parse_latex("Body.");
+        assert_eq!(doc.layout.toc_aftersnum_chapter, None);
+        assert_eq!(doc.layout.toc_aftersnum_section, None);
+        assert_eq!(doc.layout.toc_aftersnum_subsection, None);
+        assert_eq!(doc.layout.toc_aftersnum_subsubsection, None);
+    }
+
+    // ── Task 1: toc_appendix_name ────────────────────────────────────────
+
+    #[test]
+    fn test_toc_appendix_name_present() {
+        let src = r"\renewcommand{\appendixname}{Appendix}
+\renewcommand{\cftappendixname}{\appendixname\space}
+Body.";
+        let doc = parse_latex(src);
+        assert_eq!(doc.layout.toc_appendix_name.as_deref(), Some("Appendix"));
+    }
+
+    #[test]
+    fn test_toc_appendix_name_absent() {
+        let doc = parse_latex("Body.");
+        assert_eq!(doc.layout.toc_appendix_name, None);
+    }
+
+    // ── Task 2: is_only_linebreaks — no Block from lone \\ ────────────────
+
+    #[test]
+    fn test_linebreak_only_chunk_no_block() {
+        let src = "First paragraph.\n\\\\\n\nSecond paragraph.";
+        let doc = parse_latex(src);
+        let para_count = doc
+            .blocks
+            .iter()
+            .filter(|b| matches!(b, Block::Paragraph(_)))
+            .count();
+        assert_eq!(para_count, 2, "expected 2 paragraphs, got: {para_count}");
+    }
+
+    // ── Task 2: inline math preserves surrounding spaces ─────────────────
+
+    #[test]
+    fn test_inline_math_preserves_spaces() {
+        let doc = parse_latex("Let $P$ denote the value.");
+        let Block::Paragraph(inlines) = &doc.blocks[0] else {
+            panic!("expected paragraph");
+        };
+        let text: String = inlines
+            .iter()
+            .map(|i| match i {
+                Inline::Text(s) => s.clone(),
+                Inline::InlineMath(_) => "MATH".to_string(),
+                _ => String::new(),
+            })
+            .collect();
+        assert!(text.contains("Let "), "space before math missing: {text:?}");
+        assert!(
+            text.contains(" denote"),
+            "space after math missing: {text:?}"
+        );
     }
 }

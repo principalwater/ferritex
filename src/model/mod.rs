@@ -171,6 +171,27 @@ pub struct DocumentLayout {
     /// TOC subsubsection entry number width in twips.
     /// Parsed from `\setlength{\cftsubsubsectionnumwidth}{...}` or `\cftsetindents{subsubsection}{...}{...}`.
     pub toc_numwidth_subsubsection_twips: Option<i32>,
+    /// Whether chapter TOC entry text should be bold.
+    /// `Some(false)` when `\renewcommand{\cftchapterfont}{\normalfont}` is present.
+    pub toc_chapter_entry_bold: Option<bool>,
+    /// Whether chapter TOC page-number should be bold.
+    /// `Some(false)` when `\renewcommand{\cftchapterpagefont}{\normalfont}` is present.
+    pub toc_chapter_page_bold: Option<bool>,
+    /// Separator appended after chapter number in TOC.
+    /// Extracted from `\renewcommand\cftchapteraftersnum{...}`.
+    pub toc_aftersnum_chapter: Option<String>,
+    /// Separator after section number in TOC.
+    /// Extracted from `\renewcommand\cftsectionaftersnum{...}`.
+    pub toc_aftersnum_section: Option<String>,
+    /// Separator after subsection number in TOC.
+    /// Extracted from `\renewcommand\cftsubsectionaftersnum{...}`.
+    pub toc_aftersnum_subsection: Option<String>,
+    /// Separator after subsubsection number in TOC.
+    /// Extracted from `\renewcommand\cftsubsubsectionaftersnum{...}`.
+    pub toc_aftersnum_subsubsection: Option<String>,
+    /// Prefix for appendix entries in TOC.
+    /// Extracted from `\renewcommand{\cftappendixname}{...}`.
+    pub toc_appendix_name: Option<String>,
 
     // ── List formatting ──────────────────────────────────────────────
     /// Left indent for list items in twips.

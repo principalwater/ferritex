@@ -48,6 +48,10 @@ const LIST_LEVEL_LEFT_INDENT_TWIPS: i32 = 600;
 const LIST_LEVEL_HANGING_TWIPS: i32 = 240;
 const LIST_NUM_ID_BASE: usize = 100;
 const DEFAULT_TOC_RIGHT_MARGIN_TWIPS: i32 = 0;
+/// Default: chapter TOC entry text is bold (memoir/tocloft default when no `\cftchapterfont` override).
+const DEFAULT_TOC_CHAPTER_ENTRY_BOLD: bool = true;
+/// Default: chapter page number in TOC is bold (memoir/tocloft default when no `\cftchapterpagefont` override).
+const DEFAULT_TOC_CHAPTER_PAGE_BOLD: bool = true;
 const FOOTNOTE_MARKER_RUN_XML: &str = "<w:r><w:rPr><w:vertAlign w:val=\"superscript\" /></w:rPr><w:footnoteRef/></w:r><w:r><w:t xml:space=\"preserve\"> </w:t></w:r>";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -128,6 +132,22 @@ struct RenderProfile {
     toc_numwidth_subsection_twips: i32,
     toc_indent_subsubsection_twips: i32,
     toc_numwidth_subsubsection_twips: i32,
+    /// Whether chapter TOC entry text is bold. Driven by `\cftchapterfont`.
+    toc_chapter_entry_bold: bool,
+    /// Whether chapter TOC page number is bold. Driven by `\cftchapterpagefont`.
+    toc_chapter_page_bold: bool,
+    /// Separator after chapter number in TOC (e.g. `". "`). Driven by `\cftchapteraftersnum`.
+    toc_aftersnum_chapter: String,
+    /// Separator after section number in TOC. Driven by `\cftsectionaftersnum`.
+    toc_aftersnum_section: String,
+    /// Separator after subsection number in TOC. Driven by `\cftsubsectionaftersnum`.
+    toc_aftersnum_subsection: String,
+    /// Separator after subsubsection number in TOC. Driven by `\cftsubsubsectionaftersnum`.
+    toc_aftersnum_subsubsection: String,
+    /// Prefix for appendix entries in TOC. Driven by `\cftappendixname`.
+    /// Reserved for future appendix TOC rendering; extracted but not yet applied.
+    #[allow(dead_code)]
+    toc_appendix_name: String,
 
     // ── List formatting ──────────────────────────────────────────────
     list_left_indent_twips: i32,
@@ -310,6 +330,23 @@ impl RenderProfile {
                 layout.toc_numwidth_subsubsection_twips,
                 0,
             ),
+            // TOC entry bold/font: fallback = bold (memoir/tocloft default).
+            toc_chapter_entry_bold: layout
+                .toc_chapter_entry_bold
+                .unwrap_or(DEFAULT_TOC_CHAPTER_ENTRY_BOLD),
+            toc_chapter_page_bold: layout
+                .toc_chapter_page_bold
+                .unwrap_or(DEFAULT_TOC_CHAPTER_PAGE_BOLD),
+            // TOC aftersnum separators: empty string = no explicit separator.
+            toc_aftersnum_chapter: layout.toc_aftersnum_chapter.clone().unwrap_or_default(),
+            toc_aftersnum_section: layout.toc_aftersnum_section.clone().unwrap_or_default(),
+            toc_aftersnum_subsection: layout.toc_aftersnum_subsection.clone().unwrap_or_default(),
+            toc_aftersnum_subsubsection: layout
+                .toc_aftersnum_subsubsection
+                .clone()
+                .unwrap_or_default(),
+            // TOC appendix prefix: empty = no appendix prefix.
+            toc_appendix_name: layout.toc_appendix_name.clone().unwrap_or_default(),
             // List indentation: fallback matches body first-line indent.
             list_left_indent_twips: layout
                 .list_left_indent_twips
@@ -352,6 +389,18 @@ impl RenderProfile {
         );
         let stop_twips = (text_width_twips as i32 - self.toc_right_margin_twips.max(0)).max(1_000);
         stop_twips as usize
+    }
+
+    /// Return the `aftersnum` separator string for a given TOC level (1-based).
+    ///
+    /// Driven by `\cft<level>aftersnum` in the LaTeX source.
+    fn toc_level_aftersnum(&self, level: u8) -> &str {
+        match level {
+            1 => &self.toc_aftersnum_chapter,
+            2 => &self.toc_aftersnum_section,
+            3 => &self.toc_aftersnum_subsection,
+            _ => &self.toc_aftersnum_subsubsection,
+        }
     }
 
     fn toc_level_indent_twips(&self, level: u8) -> i32 {
@@ -1585,6 +1634,7 @@ fn build_toc_entry_paragraph(
             );
         }
 
+        let aftersnum = profile.toc_level_aftersnum(level);
         let mut prefix = String::new();
         if level == 1 {
             let chapter_prefix = profile.toc_chapter_name_prefix.trim();
@@ -1592,13 +1642,27 @@ fn build_toc_entry_paragraph(
                 prefix.push_str(&chapter_prefix.to_uppercase());
                 prefix.push(' ');
             }
-            prefix.push_str(number.trim_end_matches('.'));
-            prefix.push_str(&profile.heading_number_delimiter);
+            let number_core = number.trim_end_matches('.');
+            prefix.push_str(number_core);
+            // Use aftersnum separator if available, else fall back to heading delimiter.
+            if !aftersnum.is_empty() {
+                prefix.push_str(aftersnum);
+            } else {
+                prefix.push_str(&profile.heading_number_delimiter);
+            }
         } else {
             prefix.push_str(number);
+            if !aftersnum.is_empty() {
+                // Replace trailing dot/space from LaTeX number with aftersnum.
+                let trimmed = prefix.trim_end_matches(['.', ' ']);
+                prefix = format!("{trimmed}{aftersnum}");
+            }
         }
         if !prefix.is_empty() {
-            prefix.push(' ');
+            // Ensure single space after prefix if not already ending with whitespace.
+            if !prefix.ends_with(|c: char| c.is_whitespace()) {
+                prefix.push(' ');
+            }
             para = para.add_run(Run::new().add_text(prefix));
         }
     }
@@ -1608,8 +1672,17 @@ fn build_toc_entry_paragraph(
     } else {
         title.to_vec()
     };
-    for run in inline_runs_with_footnote_size(&title, false, false, profile.font_size_footnote_hp) {
-        para = para.add_run(run);
+    // Apply bold/non-bold per toc_chapter_entry_bold (level-1 only).
+    let title_runs =
+        inline_runs_with_footnote_size(&title, false, false, profile.font_size_footnote_hp);
+    if level == 1 && !profile.toc_chapter_entry_bold {
+        for run in title_runs {
+            para = para.add_run(run.disable_bold());
+        }
+    } else {
+        for run in title_runs {
+            para = para.add_run(run);
+        }
     }
 
     if let Some(page) = page {
@@ -1619,10 +1692,16 @@ fn build_toc_entry_paragraph(
         if profile.toc_use_dot_leader {
             tab = tab.leader(TabLeaderType::Dot);
         }
+        let page_run = Run::new().add_text(page);
+        let page_run = if level == 1 && !profile.toc_chapter_page_bold {
+            page_run.disable_bold()
+        } else {
+            page_run
+        };
         para = para
             .add_tab(tab)
             .add_run(Run::new().add_tab())
-            .add_run(Run::new().add_text(page));
+            .add_run(page_run);
     }
 
     para
@@ -2263,5 +2342,78 @@ mod tests {
         assert_eq!(resolved, Some(image_path.clone()));
 
         let _ = std::fs::remove_dir_all(&root);
+    }
+
+    // ── Task 3: new TOC fields — fallback defaults ────────────────────
+
+    #[test]
+    fn toc_fallback_defaults_new_fields() {
+        let profile = RenderProfile::from_layout(&DocumentLayout::default());
+        assert!(
+            profile.toc_chapter_entry_bold,
+            "default chapter entry should be bold"
+        );
+        assert!(
+            profile.toc_chapter_page_bold,
+            "default chapter page number should be bold"
+        );
+        assert_eq!(profile.toc_aftersnum_chapter, "");
+        assert_eq!(profile.toc_aftersnum_section, "");
+        assert_eq!(profile.toc_aftersnum_subsection, "");
+        assert_eq!(profile.toc_aftersnum_subsubsection, "");
+    }
+
+    #[test]
+    fn toc_entry_chapter_non_bold_when_toc_chapter_entry_bold_false() {
+        let layout = DocumentLayout {
+            toc_chapter_entry_bold: Some(false),
+            ..DocumentLayout::default()
+        };
+        let document = Document {
+            blocks: Vec::new(),
+            layout: layout.clone(),
+            toc_entries: vec![TocEntry {
+                level: 1,
+                number: Some("1.".to_string()),
+                title: "Introduction".to_string(),
+                page: Some("5".to_string()),
+            }],
+        };
+        let profile = RenderProfile::from_layout(&layout);
+        let paragraphs = generated_toc_paragraphs(&document, 0, &profile);
+        assert_eq!(paragraphs.len(), 1);
+        let xml = String::from_utf8(paragraphs[0].build()).expect("xml utf8");
+        // When non-bold is requested, w:b w:val="false" must appear in the title run.
+        assert!(
+            xml.contains("w:b w:val=\"false\""),
+            "expected non-bold chapter entry, xml: {xml}"
+        );
+    }
+
+    #[test]
+    fn toc_entry_uses_aftersnum_chapter_separator() {
+        let layout = DocumentLayout {
+            toc_aftersnum_chapter: Some(". ".to_string()),
+            ..DocumentLayout::default()
+        };
+        let document = Document {
+            blocks: Vec::new(),
+            layout: layout.clone(),
+            toc_entries: vec![TocEntry {
+                level: 1,
+                number: Some("1.".to_string()),
+                title: "Sample chapter".to_string(),
+                page: Some("3".to_string()),
+            }],
+        };
+        let profile = RenderProfile::from_layout(&layout);
+        let paragraphs = generated_toc_paragraphs(&document, 0, &profile);
+        assert_eq!(paragraphs.len(), 1);
+        let xml = String::from_utf8(paragraphs[0].build()).expect("xml utf8");
+        // Number prefix should use aftersnum ". " (rendered as "1. ").
+        assert!(
+            xml.contains("1. "),
+            "expected '1. ' with aftersnum separator, xml: {xml}"
+        );
     }
 }

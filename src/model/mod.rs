@@ -8,6 +8,10 @@ pub struct Document {
     pub blocks: Vec<Block>,
     /// Effective layout settings extracted from LaTeX project sources.
     pub layout: DocumentLayout,
+    /// Optional table of contents entries extracted from sidecar files (e.g. `.toc`).
+    ///
+    /// When empty, renderer should fall back to deriving TOC from section blocks.
+    pub toc_entries: Vec<TocEntry>,
 }
 
 /// Rendering-related layout settings extracted from LaTeX sources.
@@ -123,6 +127,50 @@ pub struct DocumentLayout {
     /// Delimiter after heading number (e.g. `"."`, `""`, `":"`, `" —"`).
     /// Parsed from `\thechapter` or heading format definitions.
     pub heading_number_delimiter: Option<String>,
+    /// Left indent for section headings (`\section`) in twips.
+    /// Parsed from `\setsecindent{...}`.
+    pub heading_indent_section_twips: Option<i32>,
+    /// Left indent for subsection headings (`\subsection`) in twips.
+    /// Parsed from `\setsubsecindent{...}`.
+    pub heading_indent_subsection_twips: Option<i32>,
+    /// Left indent for subsubsection headings (`\subsubsection`) in twips.
+    /// Parsed from `\setsubsubsecindent{...}`.
+    pub heading_indent_subsubsection_twips: Option<i32>,
+
+    // ── Table of contents formatting ────────────────────────────────────
+    /// Extra right margin for TOC title lines in twips.
+    /// Parsed from `\setrmarg{...}` when present.
+    pub toc_right_margin_twips: Option<i32>,
+    /// Whether TOC page numbers should use dot leaders.
+    /// Parsed from `\cft...leader` / `\cftdotfill` customizations.
+    pub toc_use_dot_leader: Option<bool>,
+    /// Optional chapter-name prefix for numbered chapter entries in TOC.
+    /// Parsed from `\renewcommand*{\cftchaptername}{...}`.
+    pub toc_chapter_name_prefix: Option<String>,
+    /// TOC chapter entry left indent in twips.
+    /// Parsed from `\setlength{\cftchapterindent}{...}` or `\cftsetindents{chapter}{...}{...}`.
+    pub toc_indent_chapter_twips: Option<i32>,
+    /// TOC chapter entry number width in twips.
+    /// Parsed from `\setlength{\cftchapternumwidth}{...}` or `\cftsetindents{chapter}{...}{...}`.
+    pub toc_numwidth_chapter_twips: Option<i32>,
+    /// TOC section entry left indent in twips.
+    /// Parsed from `\setlength{\cftsectionindent}{...}` or `\cftsetindents{section}{...}{...}`.
+    pub toc_indent_section_twips: Option<i32>,
+    /// TOC section entry number width in twips.
+    /// Parsed from `\setlength{\cftsectionnumwidth}{...}` or `\cftsetindents{section}{...}{...}`.
+    pub toc_numwidth_section_twips: Option<i32>,
+    /// TOC subsection entry left indent in twips.
+    /// Parsed from `\setlength{\cftsubsectionindent}{...}` or `\cftsetindents{subsection}{...}{...}`.
+    pub toc_indent_subsection_twips: Option<i32>,
+    /// TOC subsection entry number width in twips.
+    /// Parsed from `\setlength{\cftsubsectionnumwidth}{...}` or `\cftsetindents{subsection}{...}{...}`.
+    pub toc_numwidth_subsection_twips: Option<i32>,
+    /// TOC subsubsection entry left indent in twips.
+    /// Parsed from `\setlength{\cftsubsubsectionindent}{...}` or `\cftsetindents{subsubsection}{...}{...}`.
+    pub toc_indent_subsubsection_twips: Option<i32>,
+    /// TOC subsubsection entry number width in twips.
+    /// Parsed from `\setlength{\cftsubsubsectionnumwidth}{...}` or `\cftsetindents{subsubsection}{...}{...}`.
+    pub toc_numwidth_subsubsection_twips: Option<i32>,
 
     // ── List formatting ──────────────────────────────────────────────
     /// Left indent for list items in twips.
@@ -145,6 +193,38 @@ pub struct DocumentLayout {
     pub document_language: Option<String>,
 }
 
+/// A single table-of-contents entry extracted from LaTeX auxiliary data.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct TocEntry {
+    /// Heading depth (1 = chapter/front matter, 2 = section, ...).
+    pub level: u8,
+    /// Optional visible heading number (`"1."`, `"1.2"`...).
+    pub number: Option<String>,
+    /// Visible entry title text.
+    pub title: String,
+    /// Optional source page number from `.toc` (`"14"` etc.).
+    pub page: Option<String>,
+}
+
+/// Per-paragraph style overrides extracted from LaTeX declarations.
+///
+/// `None` means "inherit renderer defaults/profile".
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct ParagraphStyle {
+    /// Paragraph alignment (`"left"`, `"center"`, `"right"`, `"both"`).
+    pub alignment: Option<String>,
+    /// First-line indent override in twips.
+    pub first_line_indent_twips: Option<i32>,
+    /// Line spacing override in twips.
+    pub line_spacing_twips: Option<i32>,
+    /// Space before paragraph in twips.
+    pub space_before_twips: Option<i32>,
+    /// Space after paragraph in twips.
+    pub space_after_twips: Option<i32>,
+    /// Paragraph font size override in half-points.
+    pub font_size_hp: Option<usize>,
+}
+
 /// A block-level element.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Block {
@@ -163,6 +243,11 @@ pub enum Block {
     },
     /// A body paragraph consisting of inline elements.
     Paragraph(Vec<Inline>),
+    /// A body paragraph with explicit style overrides extracted from LaTeX.
+    StyledParagraph {
+        inlines: Vec<Inline>,
+        style: ParagraphStyle,
+    },
     /// A table with an optional caption and rows of cells.
     Table(Table),
     /// A figure with an optional embedded image and caption.
@@ -183,6 +268,8 @@ pub struct Table {
     pub label: Option<String>,
     /// Source/attribution line (`\tablesource{…}`), if present.
     pub source: Vec<Inline>,
+    /// Preferred table alignment (`"left"`, `"center"`, `"right"`), if expressed by LaTeX.
+    pub alignment: Option<String>,
     /// Rows of cells; each cell contains inline content.
     pub rows: Vec<TableRow>,
 }
@@ -216,6 +303,8 @@ pub struct Figure {
     pub label: Option<String>,
     /// Source/attribution line (`\figuresource{…}`), if present.
     pub source: Vec<Inline>,
+    /// Preferred figure alignment (`"left"`, `"center"`, `"right"`), if expressed by LaTeX.
+    pub alignment: Option<String>,
 }
 
 /// A bullet or numbered list block.
@@ -233,6 +322,8 @@ pub struct List {
 pub enum Inline {
     /// Plain text span.
     Text(String),
+    /// Explicit line break (`\\`, `\newline`, `\linebreak`).
+    LineBreak,
     /// Bold text — may contain nested inlines.
     Bold(Vec<Inline>),
     /// Italic text — may contain nested inlines.

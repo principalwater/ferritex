@@ -34,6 +34,11 @@ const LINE_SPACING_DEFAULT_BODY_TWIPS: i32 = 360;
 
 const FIRST_LINE_INDENT_TWIPS: i32 = 709;
 const DEFAULT_CAPTION_LABEL_SEPARATOR: &str = ". ";
+const DEFAULT_CAPTION_SKIP_TWIPS: i32 = 0;
+const DEFAULT_CAPTION_INDENT_TWIPS: i32 = 0;
+/// Heuristic character budget used to estimate "single-line" captions when
+/// `singlelinecheck=true` and no layout engine metrics are available.
+const CAPTION_SINGLELINE_ESTIMATE_CHARS: usize = 80;
 const IMAGE_EXTENSIONS: &[&str] = &["png", "jpg", "jpeg", "bmp", "tif", "tiff", "gif", "webp"];
 const EMU_PER_TWIP: u32 = 635;
 const IMAGE_SAFE_SCALE_NUM: u32 = 96;
@@ -42,6 +47,22 @@ const LIST_LEVEL_LEFT_INDENT_TWIPS: i32 = 600;
 const LIST_LEVEL_HANGING_TWIPS: i32 = 240;
 const LIST_NUM_ID_BASE: usize = 100;
 const FOOTNOTE_MARKER_RUN_XML: &str = "<w:r><w:rPr><w:vertAlign w:val=\"superscript\" /></w:rPr><w:footnoteRef/></w:r><w:r><w:t xml:space=\"preserve\"> </w:t></w:r>";
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum CaptionPosition {
+    Top,
+    Bottom,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct CaptionRenderSettings {
+    default_alignment: AlignmentType,
+    indent_twips: i32,
+    skip_twips: i32,
+    position: CaptionPosition,
+    singlelinecheck: bool,
+    footnote_font_size_hp: usize,
+}
 
 /// Fully resolved rendering settings derived from [`DocumentLayout`].
 ///
@@ -77,6 +98,14 @@ struct RenderProfile {
     caption_label_table: String,
     caption_label_separator_figure: String,
     caption_label_separator_table: String,
+    caption_skip_twips_figure: i32,
+    caption_skip_twips_table: i32,
+    caption_position_figure: CaptionPosition,
+    caption_position_table: CaptionPosition,
+    caption_singlelinecheck_figure: bool,
+    caption_singlelinecheck_table: bool,
+    caption_indent_twips_figure: i32,
+    caption_indent_twips_table: i32,
 
     // ── Heading formatting ─────────────────────────────────────────────
     chapter_name: String,
@@ -168,6 +197,32 @@ impl RenderProfile {
                 .caption_label_separator_table
                 .clone()
                 .unwrap_or_else(|| DEFAULT_CAPTION_LABEL_SEPARATOR.to_string()),
+            caption_skip_twips_figure: sanitize_nonnegative_twips(
+                layout.caption_skip_twips_figure,
+                DEFAULT_CAPTION_SKIP_TWIPS,
+            ),
+            caption_skip_twips_table: sanitize_nonnegative_twips(
+                layout.caption_skip_twips_table,
+                DEFAULT_CAPTION_SKIP_TWIPS,
+            ),
+            caption_position_figure: parse_caption_position(
+                layout.caption_position_figure.as_deref(),
+                CaptionPosition::Bottom,
+            ),
+            caption_position_table: parse_caption_position(
+                layout.caption_position_table.as_deref(),
+                CaptionPosition::Top,
+            ),
+            caption_singlelinecheck_figure: layout.caption_singlelinecheck_figure.unwrap_or(true),
+            caption_singlelinecheck_table: layout.caption_singlelinecheck_table.unwrap_or(true),
+            caption_indent_twips_figure: sanitize_nonnegative_twips(
+                layout.caption_indent_twips_figure,
+                DEFAULT_CAPTION_INDENT_TWIPS,
+            ),
+            caption_indent_twips_table: sanitize_nonnegative_twips(
+                layout.caption_indent_twips_table,
+                DEFAULT_CAPTION_INDENT_TWIPS,
+            ),
             // Heading: no chapter prefix by default, no uppercase, left-aligned.
             chapter_name: layout.chapter_name.clone().unwrap_or_default(),
             heading_uppercase: layout.heading_uppercase.unwrap_or(false),
@@ -226,10 +281,47 @@ fn parse_alignment(s: &str) -> AlignmentType {
     }
 }
 
+fn parse_caption_position(value: Option<&str>, fallback: CaptionPosition) -> CaptionPosition {
+    match value.map(str::to_ascii_lowercase).as_deref() {
+        Some("top") | Some("above") => CaptionPosition::Top,
+        Some("bottom") | Some("below") => CaptionPosition::Bottom,
+        _ => fallback,
+    }
+}
+
 fn sanitize_twips(value: Option<i32>, fallback: i32) -> i32 {
     match value {
         Some(v) if v > 0 => v,
         _ => fallback,
+    }
+}
+
+fn sanitize_nonnegative_twips(value: Option<i32>, fallback: i32) -> i32 {
+    match value {
+        Some(v) if v >= 0 => v,
+        _ => fallback,
+    }
+}
+
+fn table_caption_settings(profile: &RenderProfile) -> CaptionRenderSettings {
+    CaptionRenderSettings {
+        default_alignment: profile.caption_alignment,
+        indent_twips: profile.caption_indent_twips_table,
+        skip_twips: profile.caption_skip_twips_table,
+        position: profile.caption_position_table,
+        singlelinecheck: profile.caption_singlelinecheck_table,
+        footnote_font_size_hp: profile.font_size_footnote_hp,
+    }
+}
+
+fn figure_caption_settings(profile: &RenderProfile) -> CaptionRenderSettings {
+    CaptionRenderSettings {
+        default_alignment: profile.caption_alignment,
+        indent_twips: profile.caption_indent_twips_figure,
+        skip_twips: profile.caption_skip_twips_figure,
+        position: profile.caption_position_figure,
+        singlelinecheck: profile.caption_singlelinecheck_figure,
+        footnote_font_size_hp: profile.font_size_footnote_hp,
     }
 }
 
@@ -304,16 +396,26 @@ pub fn render_docx_with_context(
                     0
                 };
                 let table_number = float_number(eff_chapter_tab, table_no);
-                if !t.caption.is_empty() {
+                let caption_settings = table_caption_settings(&profile);
+                if !t.caption.is_empty() && caption_settings.position == CaptionPosition::Top {
                     docx = docx.add_paragraph(caption_paragraph(
                         &profile.caption_label_table,
                         Some(table_number.as_str()),
                         &profile.caption_label_separator_table,
                         &t.caption,
-                        &profile,
+                        caption_settings,
                     ));
                 }
                 docx = docx.add_table(build_table(t, &profile));
+                if !t.caption.is_empty() && caption_settings.position == CaptionPosition::Bottom {
+                    docx = docx.add_paragraph(caption_paragraph(
+                        &profile.caption_label_table,
+                        Some(table_number.as_str()),
+                        &profile.caption_label_separator_table,
+                        &t.caption,
+                        caption_settings,
+                    ));
+                }
                 if !t.source.is_empty() {
                     docx = docx.add_paragraph(source_paragraph(&t.source, &profile));
                 }
@@ -596,29 +698,92 @@ fn float_number(chapter_no: usize, local_no: usize) -> String {
     }
 }
 
-/// A centred bold paragraph used for captions.
+/// A caption paragraph with alignment/indent/spacing derived from `RenderProfile`.
 fn caption_paragraph(
     kind: &str,
     number: Option<&str>,
     separator: &str,
     inlines: &[Inline],
-    profile: &RenderProfile,
+    settings: CaptionRenderSettings,
 ) -> Paragraph {
+    let alignment = effective_caption_alignment(
+        settings.default_alignment,
+        settings.singlelinecheck,
+        inlines,
+    );
     let mut para = Paragraph::new()
         .style("Caption")
-        .align(profile.caption_alignment)
-        .line_spacing(single_spacing())
-        .indent(Some(0), None, None, None);
+        .align(alignment)
+        .line_spacing(caption_line_spacing(settings.skip_twips, settings.position))
+        .indent(Some(settings.indent_twips), None, None, None);
 
     let prefixed = caption_is_prefixed(kind, inlines);
     if !prefixed && let Some(prefix) = caption_prefix_text(kind, number, separator) {
         para = para.add_run(Run::new().add_text(prefix).bold());
     }
 
-    for run in inline_runs_with_footnote_size(inlines, true, false, profile.font_size_footnote_hp) {
+    for run in inline_runs_with_footnote_size(inlines, true, false, settings.footnote_font_size_hp)
+    {
         para = para.add_run(run);
     }
     para
+}
+
+fn caption_line_spacing(skip_twips: i32, position: CaptionPosition) -> LineSpacing {
+    let mut spacing = single_spacing();
+    let skip = skip_twips.max(0) as u32;
+    if skip == 0 {
+        return spacing;
+    }
+    match position {
+        CaptionPosition::Top => spacing = spacing.after(skip),
+        CaptionPosition::Bottom => spacing = spacing.before(skip),
+    }
+    spacing
+}
+
+fn effective_caption_alignment(
+    default_alignment: AlignmentType,
+    singlelinecheck: bool,
+    inlines: &[Inline],
+) -> AlignmentType {
+    if singlelinecheck && caption_is_single_line_candidate(inlines) {
+        AlignmentType::Center
+    } else {
+        default_alignment
+    }
+}
+
+fn caption_is_single_line_candidate(inlines: &[Inline]) -> bool {
+    let mut chars = 0usize;
+    let mut has_hard_break = false;
+    collect_caption_text_stats(inlines, &mut chars, &mut has_hard_break);
+    !has_hard_break && chars <= CAPTION_SINGLELINE_ESTIMATE_CHARS
+}
+
+fn collect_caption_text_stats(inlines: &[Inline], chars: &mut usize, has_hard_break: &mut bool) {
+    for inline in inlines {
+        match inline {
+            Inline::Text(value) => {
+                if value.chars().any(|ch| ch == '\n' || ch == '\r') {
+                    *has_hard_break = true;
+                }
+                *chars += value.chars().filter(|ch| !ch.is_whitespace()).count();
+            }
+            Inline::Bold(children) | Inline::Italic(children) => {
+                collect_caption_text_stats(children, chars, has_hard_break);
+            }
+            Inline::Footnote(children) => {
+                collect_caption_text_stats(children, chars, has_hard_break);
+            }
+            Inline::InlineMath(value) | Inline::Reference(value) => {
+                if value.chars().any(|ch| ch == '\n' || ch == '\r') {
+                    *has_hard_break = true;
+                }
+                *chars += value.chars().filter(|ch| !ch.is_whitespace()).count();
+            }
+        }
+    }
 }
 
 fn caption_prefix_text(kind: &str, number: Option<&str>, separator: &str) -> Option<String> {
@@ -755,6 +920,18 @@ fn render_figure_block(
 ) -> Docx {
     let mut embedded = false;
     let max_image_width_emu = profile.max_image_width_emu();
+    let caption_settings = figure_caption_settings(profile);
+    let render_caption_before_figure = caption_settings.position == CaptionPosition::Top;
+
+    if render_caption_before_figure && !figure.caption.is_empty() {
+        docx = docx.add_paragraph(caption_paragraph(
+            &profile.caption_label_figure,
+            figure_number,
+            &profile.caption_label_separator_figure,
+            &figure.caption,
+            caption_settings,
+        ));
+    }
 
     if let Some(raw_path) = figure.image_path.as_deref() {
         if let Some(resolved) =
@@ -787,13 +964,13 @@ fn render_figure_block(
         docx = docx.add_paragraph(figure_placeholder_paragraph(fallback));
     }
 
-    if !figure.caption.is_empty() {
+    if !render_caption_before_figure && !figure.caption.is_empty() {
         docx = docx.add_paragraph(caption_paragraph(
             &profile.caption_label_figure,
             figure_number,
             &profile.caption_label_separator_figure,
             &figure.caption,
-            profile,
+            caption_settings,
         ));
     }
 
@@ -1233,6 +1410,7 @@ fn ensure_default_language(xml: &str, lang: Option<&str>) -> String {
 mod tests {
     use super::*;
     use crate::model::Inline;
+    use docx_rs::BuildXML;
 
     #[test]
     fn float_number_is_chapter_aware() {
@@ -1258,6 +1436,96 @@ mod tests {
             caption_prefix_text("Figure", Some("3"), ": "),
             Some("Figure 3: ".to_string())
         );
+    }
+
+    #[test]
+    fn caption_paragraph_top_position_sets_after_skip_and_indent() {
+        let inlines = vec![Inline::Text("Sample caption".to_string())];
+        let para = caption_paragraph(
+            "Table",
+            Some("1"),
+            ". ",
+            &inlines,
+            CaptionRenderSettings {
+                default_alignment: AlignmentType::Left,
+                indent_twips: 120,
+                skip_twips: 60,
+                position: CaptionPosition::Top,
+                singlelinecheck: false,
+                footnote_font_size_hp: 20,
+            },
+        );
+        let xml = String::from_utf8(para.build()).expect("paragraph xml should be utf8");
+
+        assert!(xml.contains("w:after=\"60\""), "xml: {xml}");
+        assert!(xml.contains("w:left=\"120\""), "xml: {xml}");
+        assert!(xml.contains("w:jc w:val=\"left\""), "xml: {xml}");
+    }
+
+    #[test]
+    fn caption_paragraph_bottom_position_sets_before_skip() {
+        let inlines = vec![Inline::Text("Sample caption".to_string())];
+        let para = caption_paragraph(
+            "Figure",
+            Some("2"),
+            ". ",
+            &inlines,
+            CaptionRenderSettings {
+                default_alignment: AlignmentType::Center,
+                indent_twips: 0,
+                skip_twips: 40,
+                position: CaptionPosition::Bottom,
+                singlelinecheck: false,
+                footnote_font_size_hp: 20,
+            },
+        );
+        let xml = String::from_utf8(para.build()).expect("paragraph xml should be utf8");
+
+        assert!(xml.contains("w:before=\"40\""), "xml: {xml}");
+    }
+
+    #[test]
+    fn caption_singlelinecheck_centers_short_caption_only() {
+        let short = vec![Inline::Text("Short caption".to_string())];
+        let centered = caption_paragraph(
+            "Figure",
+            Some("1"),
+            ". ",
+            &short,
+            CaptionRenderSettings {
+                default_alignment: AlignmentType::Left,
+                indent_twips: 0,
+                skip_twips: 0,
+                position: CaptionPosition::Bottom,
+                singlelinecheck: true,
+                footnote_font_size_hp: 20,
+            },
+        );
+        let centered_xml =
+            String::from_utf8(centered.build()).expect("paragraph xml should be utf8");
+        assert!(
+            centered_xml.contains("w:jc w:val=\"center\""),
+            "xml: {centered_xml}"
+        );
+
+        let long_text = "very long caption text ".repeat(8);
+        let long = vec![Inline::Text(long_text)];
+        let kept = caption_paragraph(
+            "Figure",
+            Some("1"),
+            ". ",
+            &long,
+            CaptionRenderSettings {
+                default_alignment: AlignmentType::Left,
+                indent_twips: 0,
+                skip_twips: 0,
+                position: CaptionPosition::Bottom,
+                singlelinecheck: true,
+                footnote_font_size_hp: 20,
+            },
+        );
+        let kept_xml = String::from_utf8(kept.build()).expect("paragraph xml should be utf8");
+        assert!(kept_xml.contains("w:jc w:val=\"left\""), "xml: {kept_xml}");
     }
 
     #[test]

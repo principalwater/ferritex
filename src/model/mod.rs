@@ -85,6 +85,30 @@ pub struct DocumentLayout {
     /// Table caption label separator text.
     /// Parsed from `\captionsetup[table]{labelsep=...}` and related declarations.
     pub caption_label_separator_table: Option<String>,
+    /// Figure caption spacing (`skip`) in twips.
+    /// Parsed from `\captionsetup[figure]{skip=...}` with global fallback.
+    pub caption_skip_twips_figure: Option<i32>,
+    /// Table caption spacing (`skip`) in twips.
+    /// Parsed from `\captionsetup[table]{skip=...}` with global fallback.
+    pub caption_skip_twips_table: Option<i32>,
+    /// Figure caption position (`"top"` or `"bottom"`).
+    /// Parsed from `\captionsetup[figure]{position=...}` with global fallback.
+    pub caption_position_figure: Option<String>,
+    /// Table caption position (`"top"` or `"bottom"`).
+    /// Parsed from `\captionsetup[table]{position=...}` with global fallback.
+    pub caption_position_table: Option<String>,
+    /// Whether single-line figure captions should be centered.
+    /// Parsed from `\captionsetup[figure]{singlelinecheck=...}` with global fallback.
+    pub caption_singlelinecheck_figure: Option<bool>,
+    /// Whether single-line table captions should be centered.
+    /// Parsed from `\captionsetup[table]{singlelinecheck=...}` with global fallback.
+    pub caption_singlelinecheck_table: Option<bool>,
+    /// Figure caption indent in twips.
+    /// Parsed from `\captionsetup[figure]{indent=...}` with global fallback.
+    pub caption_indent_twips_figure: Option<i32>,
+    /// Table caption indent in twips.
+    /// Parsed from `\captionsetup[table]{indent=...}` with global fallback.
+    pub caption_indent_twips_table: Option<i32>,
 
     // ── Heading formatting ─────────────────────────────────────────────
     /// Chapter name prefix (e.g. `"Глава"`, `"Chapter"`, `""`).

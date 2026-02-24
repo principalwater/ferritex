@@ -2727,7 +2727,8 @@ fn test_titlepage_flushright_tabular_preserves_vspace_plus_box_padding() {
 
 #[test]
 fn test_try_parse_bibliography_printbibliography_no_title() {
-    let block = try_parse_bibliography_command("\\printbibliography");
+    // With Russian language, default title is "СПИСОК ЛИТЕРАТУРЫ".
+    let block = try_parse_bibliography_command("\\printbibliography", Some("ru-RU"));
     match block {
         Some(Block::BibliographyHeading { title }) => {
             assert_eq!(title, "СПИСОК ЛИТЕРАТУРЫ");
@@ -2738,7 +2739,9 @@ fn test_try_parse_bibliography_printbibliography_no_title() {
 
 #[test]
 fn test_try_parse_bibliography_printbibliography_with_title() {
-    let block = try_parse_bibliography_command("\\printbibliography[title={References}]");
+    // Explicit title= always overrides language default.
+    let block =
+        try_parse_bibliography_command("\\printbibliography[title={References}]", Some("ru-RU"));
     match block {
         Some(Block::BibliographyHeading { title }) => {
             assert_eq!(title, "References");
@@ -2749,14 +2752,17 @@ fn test_try_parse_bibliography_printbibliography_with_title() {
 
 #[test]
 fn test_try_parse_bibliography_nobibheading_skipped() {
-    let block =
-        try_parse_bibliography_command("\\printbibliography[heading=nobibheading, section=1]");
+    let block = try_parse_bibliography_command(
+        "\\printbibliography[heading=nobibheading, section=1]",
+        None,
+    );
     assert!(block.is_none(), "nobibheading should produce None");
 }
 
 #[test]
 fn test_try_parse_bibliography_insertbibliofullsorted() {
-    let block = try_parse_bibliography_command("\\insertbibliofullsorted");
+    // With Russian language, default title is "СПИСОК ЛИТЕРАТУРЫ".
+    let block = try_parse_bibliography_command("\\insertbibliofullsorted", Some("ru-RU"));
     match block {
         Some(Block::BibliographyHeading { title }) => {
             assert_eq!(title, "СПИСОК ЛИТЕРАТУРЫ");
@@ -2767,6 +2773,45 @@ fn test_try_parse_bibliography_insertbibliofullsorted() {
 
 #[test]
 fn test_try_parse_bibliography_not_a_bib_command() {
-    assert!(try_parse_bibliography_command("\\chapter{Introduction}").is_none());
-    assert!(try_parse_bibliography_command("Some paragraph text.").is_none());
+    assert!(try_parse_bibliography_command("\\chapter{Introduction}", None).is_none());
+    assert!(try_parse_bibliography_command("Some paragraph text.", None).is_none());
+}
+
+#[test]
+fn test_bibliography_default_title_english() {
+    // With English language, default title is "REFERENCES".
+    let block = try_parse_bibliography_command("\\insertbibliofullsorted", Some("en-US"));
+    match block {
+        Some(Block::BibliographyHeading { title }) => {
+            assert_eq!(title, "REFERENCES");
+        }
+        other => panic!("expected BibliographyHeading, got {other:?}"),
+    }
+}
+
+#[test]
+fn test_bibliography_default_title_unknown_language_falls_back_to_references() {
+    // Unknown language tag falls back to "REFERENCES".
+    let block = try_parse_bibliography_command("\\printbibliography", None);
+    match block {
+        Some(Block::BibliographyHeading { title }) => {
+            assert_eq!(title, "REFERENCES");
+        }
+        other => panic!("expected BibliographyHeading, got {other:?}"),
+    }
+}
+
+#[test]
+fn test_bibliography_explicit_title_overrides_language() {
+    // Explicit title= wins regardless of language.
+    let block = try_parse_bibliography_command(
+        "\\printbibliography[title=Works Cited]",
+        Some("ru-RU"),
+    );
+    match block {
+        Some(Block::BibliographyHeading { title }) => {
+            assert_eq!(title, "Works Cited");
+        }
+        other => panic!("expected BibliographyHeading, got {other:?}"),
+    }
 }

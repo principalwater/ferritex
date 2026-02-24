@@ -323,9 +323,10 @@ fn parse_latex_with_mode(
                         try_parse_structural_heading_command(prepared.text.as_str())
                     {
                         blocks.push(block);
-                    } else if let Some(block) =
-                        try_parse_bibliography_command(prepared.text.as_str())
-                    {
+                    } else if let Some(block) = try_parse_bibliography_command(
+                        prepared.text.as_str(),
+                        layout.document_language.as_deref(),
+                    ) {
                         blocks.push(block);
                     } else {
                         let cleaned_chunk =
@@ -2621,6 +2622,30 @@ fn default_chapter_name_for_language(language: Option<&str>) -> Option<&'static 
         Some("pt-BR") => Some("Capítulo"),
         Some("tr-TR") => Some("Bölüm"),
         _ => None,
+    }
+}
+
+/// Returns the default bibliography section title for the given BCP-47 language tag.
+///
+/// Used as fallback when `\printbibliography` has no `title=` argument and when
+/// `\insertbibliofullsorted` or similar commands appear without an explicit title.
+///
+/// Follows the same pattern as [`default_chapter_name_for_language`].
+/// Falls back to `"REFERENCES"` for unknown or absent language tags.
+fn default_bibliography_title_for_language(language: Option<&str>) -> &'static str {
+    match language {
+        Some("ru-RU") => "СПИСОК ЛИТЕРАТУРЫ",
+        Some("uk-UA") => "СПИСОК ЛІТЕРАТУРИ",
+        Some("be-BY") => "СПІС ЛІТАРАТУРЫ",
+        Some("kk-KZ") => "ӘДЕБИЕТТЕР ТІЗІМІ",
+        Some("en-US") | Some("en-GB") => "REFERENCES",
+        Some("de-DE") => "LITERATURVERZEICHNIS",
+        Some("fr-FR") => "BIBLIOGRAPHIE",
+        Some("es-ES") => "BIBLIOGRAFÍA",
+        Some("it-IT") => "BIBLIOGRAFIA",
+        Some("pt-BR") => "REFERÊNCIAS",
+        Some("tr-TR") => "KAYNAKLAR",
+        _ => "REFERENCES",
     }
 }
 
@@ -6268,9 +6293,21 @@ fn try_parse_structural_heading_command(chunk: &str) -> Option<Block> {
 /// - `\insertbiblioauthor` — same default
 ///
 /// Only the heading is rendered; no `.bib` file entries are parsed.
-fn try_parse_bibliography_command(chunk: &str) -> Option<Block> {
+/// Detect bibliography-rendering commands and emit a `Block::BibliographyHeading`.
+///
+/// Recognised commands:
+/// - `\printbibliography[title=...]` — title from optional arg or language default
+/// - `\insertbibliofullsorted` — language-derived default title
+/// - `\insertbiblioauthor` — same default
+///
+/// The `language` parameter is a BCP-47 tag (e.g. `"ru-RU"`, `"en-US"`) derived from
+/// `\usepackage[...]{babel}` or `\setmainlanguage{...}`. When `None`, defaults to
+/// `"REFERENCES"`. Explicit `title=` arguments always take precedence over the default.
+///
+/// Only the heading is rendered; no `.bib` file entries are parsed.
+fn try_parse_bibliography_command(chunk: &str, language: Option<&str>) -> Option<Block> {
     let s = chunk.trim_start();
-    let default_title = "СПИСОК ЛИТЕРАТУРЫ".to_string();
+    let default_title = || default_bibliography_title_for_language(language).to_string();
 
     if let Some(rest) = s.strip_prefix("\\printbibliography") {
         // Try to extract title from optional [title=...] argument.
@@ -6279,13 +6316,13 @@ fn try_parse_bibliography_command(chunk: &str) -> Option<Block> {
             if let Some(close) = after.find(']') {
                 let args = &after[1..close];
                 let no_heading = args.contains("nobibheading");
-                let t = extract_printbibliography_title(args).unwrap_or(default_title);
+                let t = extract_printbibliography_title(args).unwrap_or_else(default_title);
                 (t, no_heading)
             } else {
-                (default_title, false)
+                (default_title(), false)
             }
         } else {
-            (default_title, false)
+            (default_title(), false)
         };
         // Skip `heading=nobibheading` — those have no visible heading.
         if has_nobibheading || title.trim().is_empty() {
@@ -6299,7 +6336,7 @@ fn try_parse_bibliography_command(chunk: &str) -> Option<Block> {
         || s.starts_with("\\insertbibliofull")
     {
         return Some(Block::BibliographyHeading {
-            title: default_title,
+            title: default_title(),
         });
     }
 

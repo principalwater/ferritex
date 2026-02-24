@@ -1,33 +1,76 @@
-# ferritex
+# FerriTeX
 
-`ferritex` is a production-oriented native Rust TUI/CLI utility for building LaTeX (`.tex`) projects into DOCX (`.docx`) and PDF output formats.
+**FerriTeX** is a native Rust CLI/TUI tool that converts LaTeX (`.tex`) projects
+into DOCX (`.docx`) and other output formats — without invoking LaTeX or any external
+toolchain. *Ferri* for Rust's iron-clad reliability, *TeX* for the source format.
+
+---
+
+## How it works
+
+FerriTeX parses your LaTeX source, extracts layout and style parameters from the
+preamble (geometry, fonts, heading formatting, list settings, spacing, captions, and
+more), and feeds them into a backend renderer. The rendering contract is strictly
+**LaTeX-first**: every visual decision is derived from what the LaTeX project itself
+declares. Backend constants are used only as fallback defaults when the source does
+not express a preference.
+
+```
+LaTeX source → parser → AST + DocumentLayout → renderer → DOCX / PDF / Markdown
+```
+
+All output formats consume the same intermediate representation, so adding a new
+backend does not require touching the parser.
+
+---
 
 ## Status
 
-`ferritex` v0.7 is in progress — unified build core with format selection.
+Current release: **v0.9.1**
 
-Implemented so far:
-- Sections/subsections, paragraphs, inline styles.
-- Placeholder references (`\label`, `\ref`, `\cite`) as `[key]`.
-- `\autocite{...}` style-aware placeholder:
-  - footnote placeholder when project style sets footnote autocites
-  - inline placeholder otherwise
-- Tables (`tabular`, `tblr`, `longtblr`) and source lines.
-- Figures (caption text + source lines).
-- Lists (`itemize`, `enumerate`).
-- Math: inline `$...$`, display `equation` / `equation*` / `\[...\]` (plain-text approximation).
-- Footnotes: `\footnote{...}` rendered as native DOCX footnotes.
-- File inclusion: `\input{...}` and `\include{...}` are recursively expanded.
+### Implemented
 
-## Conversion Contract
+| Feature | Notes |
+|---|---|
+| Sections / subsections / paragraphs | `\chapter`, `\section`, `\subsection`, `\subsubsection`; `*` variants |
+| Inline styles | Bold, italic, nested combinations |
+| File inclusion | `\input{}`, `\include{}` — recursive expansion |
+| Tables | `tabular`, `tblr`, `longtblr` |
+| Figures | Caption text; source attribution via `\figuresource{...}` |
+| Lists | `itemize`, `enumerate`; geometry from `\setlist{...}` |
+| Math | Inline `$...$`, display `equation` / `equation*` / `\[...\]` (plain-text approximation) |
+| Footnotes | Native DOCX footnote references (`\footnote{}`) |
+| Citations | `\autocite{}` — footnote or inline placeholder depending on project style |
+| Table of contents | `\tableofcontents` — generates TOC from document section structure |
+| Bibliography heading | `\printbibliography`, `\insertbibliofullsorted`, etc.; title from `title=` or derived from document language |
+| Title page | `titlepage` / `titlingpage`; page number suppression via `\thispagestyle{empty}` |
+| Layout extraction | Page margins, paper size, line spacing, paragraph indent, font family and size, heading format, list geometry, caption labels, TOC indent/numwidth/leader settings, source-line spacing |
+| Cross-references | `\label{}`, `\ref{}`, `\cite{}` — currently as `[key]` placeholders |
+| TUI mode | Interactive conversion via `ratatui` |
 
-`ferritex` follows a **LaTeX-first rendering contract**:
-- Document layout, numbering, spacing, references, and typography should be derived from the source LaTeX project configuration.
-- Format backends (DOCX now, PDF next) must consume the same AST semantics and produce equivalent structure.
-- Backend-side hardcoded styling is a fallback only when the source project does not provide the required signal.
-- Output produced by `ferritex build` must reflect the same effective formatting parameters as the canonical LaTeX build workflow (geometry, heading formatting, page numbering, footnotes/citations, counters, and related style options).
-- New rendering fixes must be implemented through generic parameter extraction and mapping (`LaTeX -> AST/metadata -> renderer`), never through corpus-specific constants.
-- Validation on one project is acceptable as QA coverage, but implementation must stay reusable for arbitrary LaTeX projects.
+### Not yet implemented
+
+- OMML / Word equation rendering (currently plain-text approximation)
+- Image embedding in DOCX
+- Bibliography entry list rendering (heading is placed, entries are pending)
+- PDF output backend
+- Resolved `\ref` / `\cite` hyperlinks in body text
+
+---
+
+## Conversion contract
+
+FerriTeX follows a strict **LaTeX-driven rendering policy**:
+
+- Layout, numbering, spacing, and typography are extracted from the LaTeX source and
+  propagate through `DocumentLayout` into the renderer.
+- Renderer constants serve only as documented fallback defaults.
+- Formatting bugs are fixed by improving parser extraction, never by hardcoding
+  project-specific values in the renderer.
+- Validated on one project counts as QA coverage; implementation must remain reusable
+  for arbitrary LaTeX projects (articles, theses, books, journals).
+
+---
 
 ## Installation
 
@@ -38,28 +81,35 @@ cargo install --path .
 ## Usage
 
 ```bash
-# Unified build (recommended)
+# Build to DOCX
 ferritex build --input main.tex --format docx
-ferritex build --input main.tex --format both --output-dir out/
 
-# Legacy non-interactive (compatible with previous versions)
+# Build to multiple formats
+ferritex build --input main.tex --format all --output-dir out/
+
+# Legacy shorthand (compatible with older versions)
 ferritex --input main.tex --output main.docx
 ferritex convert --input main.tex --output main.docx
 
-# Interactive TUI mode
+# Interactive TUI
 ferritex tui
 ferritex tui --input main.tex --output main.docx
 ```
 
-### TUI Keys
+### TUI keys
 
-- `Tab` / `Up` / `Down`: switch input/output field
-- `Enter`: run conversion
-- `Ctrl+U`: clear focused field
-- `q` / `Esc`: quit
+| Key | Action |
+|-----|--------|
+| `Tab` / `Up` / `Down` | Switch field |
+| `Enter` | Run conversion |
+| `Ctrl+U` | Clear focused field |
+| `q` / `Esc` | Quit |
+
+---
 
 ## Documentation
 
-- [Architecture](docs/ARCHITECTURE.md)
 - [Supported elements](docs/SUPPORTED_ELEMENTS.md)
+- [Architecture](docs/ARCHITECTURE.md)
 - [Roadmap](docs/ROADMAP.md)
+- [Agent / contributor instructions](AGENTS.md)

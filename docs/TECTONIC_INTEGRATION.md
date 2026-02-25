@@ -13,8 +13,22 @@ Use `tectonic` as the primary embedded TeX engine for:
 | API | Role in ferritex | Current state |
 |---|---|---|
 | `tectonic::driver::ProcessingSessionBuilder` | Probe session for effective style values with in-memory input and `.log` marker parsing | Implemented |
-| `tectonic::TexEngine` | Runtime profile anchor for probe execution settings (`halt_on_error`, `shell_escape`, `build_date`) | First integration slice implemented |
+| `tectonic::TexEngine` | Runtime profile anchor for probe execution settings and low-level pass orchestration (`halt_on_error`, `shell_escape`, `build_date`, pass strategy) | Implemented with direct pass control |
 | `tectonic::latex_to_pdf` | Direct PDF generation from LaTeX source bytes for parity-oriented PDF backend workflows | Implemented in `ferritex-renderer-pdf` |
+
+## Probe Pass Orchestration
+
+Probe execution now uses explicit low-level pass plans under the `TexEngine` runtime profile:
+
+1. Primary pass:
+   - `PassSetting::Tex` (single TeX pass),
+   - used for fast marker extraction from probe macros.
+2. Recovery pass (conditional):
+   - `PassSetting::Default` with `reruns=1`,
+   - executed only when primary pass returns run errors or produces zero extracted fields.
+3. Selection policy:
+   - prefer recovery output when it clears run-error status or yields richer probe signal,
+   - otherwise keep primary output and continue with confidence filtering.
 
 ## Probe Reliability Model
 

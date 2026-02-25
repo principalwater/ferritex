@@ -6786,8 +6786,6 @@ fn is_skippable(chunk: &str) -> bool {
         || c.starts_with("\\usepackage")
         || c.starts_with("\\begin{document}")
         || c.starts_with("\\end{document}")
-        || c.starts_with("\\begin{landscape}")
-        || c.starts_with("\\end{landscape}")
         || c.starts_with("\\maketitle")
         || c.starts_with("\\printnomenclature")
         || c.starts_with("\\makenomenclature")
@@ -6812,8 +6810,6 @@ fn is_skippable(chunk: &str) -> bool {
         || c.starts_with("\\begingroup")
         || c.starts_with("\\endgroup")
         || c.starts_with("\\appendix")
-        || c.starts_with("\\landscape")
-        || c.starts_with("\\endlandscape")
         || c.starts_with("\\endTOCtrue")
         || c.starts_with("\\pagestyle")
         || c.starts_with("\\thispagestyle")
@@ -7215,9 +7211,12 @@ fn try_parse_plain_heading(
 /// Supported commands:
 /// - `\tableofcontents[*]` -> [`Block::TableOfContents`]
 /// - `\newpage`, `\clearpage`, `\cleardoublepage` -> [`Block::PageBreak`]
+/// - `\begin{landscape}`, `\end{landscape}`, `\landscape`, `\endlandscape`
+///   -> [`Block::PageBreak`] (orientation switch marker fallback)
 fn try_parse_structural_heading_command(chunk: &str) -> Option<Block> {
     let command = chunk.trim_start();
-    if is_standalone_page_break_command(command) {
+    if is_standalone_page_break_command(command) || is_standalone_landscape_switch_command(command)
+    {
         Some(Block::PageBreak)
     } else if command.starts_with("\\tableofcontents") {
         Some(Block::TableOfContents)
@@ -7243,6 +7242,32 @@ fn is_standalone_page_break_command(chunk: &str) -> bool {
         if !consumed_any {
             break;
         }
+    }
+
+    matched && rest.is_empty()
+}
+
+fn is_standalone_landscape_switch_command(chunk: &str) -> bool {
+    let mut rest = chunk.trim();
+    let mut matched = false;
+
+    loop {
+        let next = if let Some(after) = rest.strip_prefix("\\begin{landscape}") {
+            Some(after)
+        } else if let Some(after) = rest.strip_prefix("\\end{landscape}") {
+            Some(after)
+        } else if let Some(after) = consume_control_word(rest, "\\landscape") {
+            Some(after)
+        } else {
+            consume_control_word(rest, "\\endlandscape")
+        };
+
+        let Some(after) = next else {
+            break;
+        };
+
+        matched = true;
+        rest = after.trim_start();
     }
 
     matched && rest.is_empty()

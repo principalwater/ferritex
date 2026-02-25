@@ -37,6 +37,20 @@ const DEFAULT_BODY_FONT_SIZE_HP: usize = 28;
 const DEFAULT_BODY_LINE_SPACING_TWIPS: i32 = 360;
 /// DOCX auto line-spacing unit: `240` represents single spacing.
 const DOCX_AUTO_LINE_SPACING_UNIT_TWIPS: f64 = 240.0;
+/// DOCX conversion constant: `1pt = 20 twips`.
+const DOCX_TWIPS_PER_POINT_F64: f64 = 20.0;
+/// TeX pica: `1pc = 12pt`.
+const TWIPS_PER_PICA_F64: f64 = 12.0 * DOCX_TWIPS_PER_POINT_F64;
+/// TeX big point: `1bp = 1/72in = 20 twips`.
+const TWIPS_PER_BIG_POINT_F64: f64 = 20.0;
+/// TeX scaled point: `65536sp = 1pt`.
+const TWIPS_PER_SCALED_POINT_F64: f64 = DOCX_TWIPS_PER_POINT_F64 / 65_536.0;
+/// TeX didot point: `1157dd = 1238pt`.
+const TWIPS_PER_DIDOT_POINT_F64: f64 = DOCX_TWIPS_PER_POINT_F64 * (1238.0 / 1157.0);
+/// TeX cicero: `1cc = 12dd`.
+const TWIPS_PER_CICERO_F64: f64 = TWIPS_PER_DIDOT_POINT_F64 * 12.0;
+/// Approximate x-height used for `ex` conversion when font metrics are unavailable.
+const EX_TO_EM_RATIO_F64: f64 = 0.430_556;
 /// Approximate average glyph width for serif text, in `em`.
 ///
 /// Used only for mapping `flushright + tabular{l}` blocks to a fixed-width
@@ -2022,6 +2036,7 @@ fn extract_toc_chapter_before_skip_twips(
 /// - `label_sep_twips`: from `labelsep=<dim>` in `\setlist{...}`.
 /// - `label_width_twips`: `None` when `labelwidth=!` (auto), otherwise from `labelwidth=<dim>`.
 /// - `item_indent_twips`: from `itemindent=<dim>` (including simple `\dimexpr` forms).
+///   Falls back to `listparindent=<dim>` when `itemindent` is absent.
 /// - `left_margin_twips`: from `leftmargin=<dim>` (including simple `\dimexpr` forms).
 /// - `bullet_char`: from `\renewcommand{\labelitemi}{...}`, stripped of formatting commands.
 type ListSettings = (
@@ -2037,19 +2052,29 @@ fn extract_list_settings_with_body_font(
     body_parindent_twips: Option<i32>,
     body_font_size_hp: Option<usize>,
 ) -> ListSettings {
-    let sep = extract_setlist_param_twips(source, "labelsep", None, None, None, body_font_size_hp);
+    let sep =
+        extract_setlist_param_twips(source, &["labelsep"], None, None, None, body_font_size_hp);
     let width = extract_setlist_labelwidth_twips_with_body_font(source, body_font_size_hp);
-    let itemindent = extract_setlist_param_twips(
+    let listparindent = extract_setlist_param_twips(
         source,
-        "itemindent",
+        &["listparindent"],
         sep,
         width,
         body_parindent_twips,
         body_font_size_hp,
     );
+    let itemindent = extract_setlist_param_twips(
+        source,
+        &["itemindent"],
+        sep,
+        width,
+        body_parindent_twips,
+        body_font_size_hp,
+    )
+    .or(listparindent);
     let leftmargin = extract_setlist_param_twips(
         source,
-        "leftmargin",
+        &["leftmargin"],
         sep,
         width,
         body_parindent_twips,
@@ -2059,23 +2084,38 @@ fn extract_list_settings_with_body_font(
     (sep, width, itemindent, leftmargin, bullet)
 }
 
-/// Extract a dimension parameter from the first `\setlist{..., name=<dim>, ...}` block.
+/// Extract a dimension parameter from the last matching `\setlist{..., name=<dim>, ...}` block.
 ///
 /// Supports plain lengths (`0.5em`, `1.25cm`) and simple `\dimexpr` arithmetic
 /// that references `\labelwidth`, `\labelsep`, and `\parindent`.
 fn extract_setlist_param_twips(
     source: &str,
-    param: &str,
+    params: &[&str],
     label_sep_twips: Option<i32>,
     label_width_twips: Option<i32>,
     body_parindent_twips: Option<i32>,
     body_font_size_hp: Option<usize>,
 ) -> Option<i32> {
-    let raw = extract_setlist_param_raw(source, param)?;
+    let raw = extract_setlist_param_raw(source, params)?;
     if raw.is_empty() {
         return None;
     }
+    let raw_trimmed = raw.trim();
+    if raw_trimmed.eq_ignore_ascii_case("\\parindent") {
+        return body_parindent_twips;
+    }
+    if raw_trimmed.eq_ignore_ascii_case("\\labelsep") {
+        return label_sep_twips;
+    }
+    if raw_trimmed.eq_ignore_ascii_case("\\labelwidth") {
+        return label_width_twips.or(label_sep_twips);
+    }
     if let Some(twips) = parse_latex_length_to_twips_with_body_font(raw.as_str(), body_font_size_hp)
+    {
+        return Some(twips);
+    }
+    if let Some(twips) =
+        parse_latex_length_prefix_to_twips_with_body_font(raw.as_str(), body_font_size_hp)
     {
         return Some(twips);
     }
@@ -2084,12 +2124,14 @@ fn extract_setlist_param_twips(
         label_sep_twips,
         label_width_twips,
         body_parindent_twips,
+        body_font_size_hp,
     )
 }
 
-fn extract_setlist_param_raw(source: &str, param: &str) -> Option<String> {
+fn extract_setlist_param_raw(source: &str, params: &[&str]) -> Option<String> {
     let needle = "\\setlist";
     let mut pos = 0usize;
+    let mut last_match: Option<String> = None;
     while let Some(rel) = source[pos..].find(needle) {
         let start = pos + rel + needle.len();
         // Skip optional [list-type] argument.
@@ -2114,20 +2156,59 @@ fn extract_setlist_param_raw(source: &str, param: &str) -> Option<String> {
             continue;
         }
         if let Some(body) = extract_braced(&source[trimmed_pos..]) {
-            // Look for `param=<dim>` inside the body.
-            let search = format!("{param}=");
-            if let Some(rel_p) = body.find(&search) {
-                let after_eq = &body[rel_p + search.len()..];
-                let dim = after_eq
-                    .chars()
-                    .take_while(|c| *c != ',' && *c != '}' && *c != '\n')
-                    .collect::<String>();
-                return Some(dim.trim().to_string());
-            }
+            last_match = extract_setlist_param_from_body(body, params).or(last_match);
         }
         pos = start;
     }
-    None
+    last_match
+}
+
+fn extract_setlist_param_from_body(body: &str, params: &[&str]) -> Option<String> {
+    let mut last_match: Option<String> = None;
+    for entry in split_top_level_csv(body) {
+        let token = entry.trim();
+        let Some((raw_key, raw_value)) = token.split_once('=') else {
+            continue;
+        };
+        let key = normalize_setlist_key(raw_key);
+        if params
+            .iter()
+            .any(|param| normalize_setlist_key(param) == key)
+        {
+            last_match = Some(raw_value.trim().to_string());
+        }
+    }
+    last_match
+}
+
+fn split_top_level_csv(input: &str) -> Vec<&str> {
+    let mut parts = Vec::new();
+    let mut start = 0usize;
+    let mut brace_depth = 0i32;
+    let mut bracket_depth = 0i32;
+    let mut paren_depth = 0i32;
+
+    for (idx, ch) in input.char_indices() {
+        match ch {
+            '{' => brace_depth += 1,
+            '}' => brace_depth = brace_depth.saturating_sub(1),
+            '[' => bracket_depth += 1,
+            ']' => bracket_depth = bracket_depth.saturating_sub(1),
+            '(' => paren_depth += 1,
+            ')' => paren_depth = paren_depth.saturating_sub(1),
+            ',' if brace_depth == 0 && bracket_depth == 0 && paren_depth == 0 => {
+                parts.push(&input[start..idx]);
+                start = idx + 1;
+            }
+            _ => {}
+        }
+    }
+    parts.push(&input[start..]);
+    parts
+}
+
+fn normalize_setlist_key(raw: &str) -> String {
+    raw.trim().trim_end_matches('*').to_ascii_lowercase()
 }
 
 fn evaluate_setlist_dimexpr_twips(
@@ -2135,6 +2216,7 @@ fn evaluate_setlist_dimexpr_twips(
     label_sep_twips: Option<i32>,
     label_width_twips: Option<i32>,
     body_parindent_twips: Option<i32>,
+    body_font_size_hp: Option<usize>,
 ) -> Option<i32> {
     let mut expr = raw.trim().to_string();
     if !expr.starts_with("\\dimexpr") {
@@ -2150,7 +2232,7 @@ fn evaluate_setlist_dimexpr_twips(
     expr = expr.replace("\\labelsep", &sep.to_string());
     expr = expr.replace("\\labelwidth", &width.to_string());
     expr = expr.replace("\\parindent", &parindent.to_string());
-    expr = expr.replace(' ', "");
+    expr = expr.replace([' ', '\t'], "");
 
     let mut total: i32 = 0;
     let mut sign: i32 = 1;
@@ -2159,33 +2241,44 @@ fn evaluate_setlist_dimexpr_twips(
     for ch in expr.chars() {
         if ch == '+' || ch == '-' {
             if !token.is_empty() {
-                let value = token.parse::<i32>().ok()?;
+                let value = parse_setlist_dimexpr_term_twips(&token, body_font_size_hp)?;
                 total = total.saturating_add(sign.saturating_mul(value));
                 token.clear();
             }
             sign = if ch == '+' { 1 } else { -1 };
-        } else if ch.is_ascii_digit() {
-            token.push(ch);
         } else {
-            return None;
+            token.push(ch);
         }
     }
     if !token.is_empty() {
-        let value = token.parse::<i32>().ok()?;
+        let value = parse_setlist_dimexpr_term_twips(&token, body_font_size_hp)?;
         total = total.saturating_add(sign.saturating_mul(value));
     }
     Some(total)
+}
+
+fn parse_setlist_dimexpr_term_twips(term: &str, body_font_size_hp: Option<usize>) -> Option<i32> {
+    let trimmed = term.trim().trim_matches(['{', '}']);
+    if trimmed.is_empty() {
+        return None;
+    }
+    if let Ok(value) = trimmed.parse::<i32>() {
+        return Some(value);
+    }
+    parse_latex_length_prefix_to_twips_with_body_font(trimmed, body_font_size_hp)
 }
 
 fn extract_setlist_labelwidth_twips_with_body_font(
     source: &str,
     body_font_size_hp: Option<usize>,
 ) -> Option<i32> {
-    let raw = extract_setlist_param_raw(source, "labelwidth")?;
-    if raw.starts_with('!') {
+    let raw = extract_setlist_param_raw(source, &["labelwidth"])?;
+    let raw = raw.trim();
+    if raw.starts_with('!') || raw.starts_with('*') {
         return None;
     }
-    parse_latex_length_to_twips_with_body_font(raw.trim(), body_font_size_hp)
+    parse_latex_length_to_twips_with_body_font(raw, body_font_size_hp)
+        .or_else(|| parse_latex_length_prefix_to_twips_with_body_font(raw, body_font_size_hp))
 }
 
 /// Extract the bullet character from `\renewcommand{\labelitemi}{...}`.
@@ -3688,15 +3781,30 @@ fn parse_latex_length_to_twips_with_body_font(
         return None;
     }
 
+    parse_single_latex_length_to_twips(&normalized, body_font_size_hp)
+        .or_else(|| parse_additive_latex_length_to_twips(&normalized, body_font_size_hp))
+}
+
+fn parse_single_latex_length_to_twips(
+    normalized: &str,
+    body_font_size_hp: Option<usize>,
+) -> Option<i32> {
     // `em` is relative — 1 em equals the body font size.
     let em_twips =
         em_twips_for_body_font(body_font_size_hp.or(Some(DEFAULT_BODY_FONT_SIZE_HP)), 1.0) as f64;
+    let ex_twips = em_twips * EX_TO_EM_RATIO_F64;
     for (unit, twips_per_unit) in [
         ("mm", 56.692_913_f64),
         ("cm", 566.929_133_f64),
         ("in", 1440.0_f64),
         ("em", em_twips),
-        ("pt", 20.0_f64),
+        ("ex", ex_twips),
+        ("pt", DOCX_TWIPS_PER_POINT_F64),
+        ("pc", TWIPS_PER_PICA_F64),
+        ("bp", TWIPS_PER_BIG_POINT_F64),
+        ("dd", TWIPS_PER_DIDOT_POINT_F64),
+        ("cc", TWIPS_PER_CICERO_F64),
+        ("sp", TWIPS_PER_SCALED_POINT_F64),
     ] {
         if let Some(number) = normalized.strip_suffix(unit) {
             let value = number.replace(',', ".").parse::<f64>().ok()?;
@@ -3710,8 +3818,59 @@ fn parse_latex_length_to_twips_with_body_font(
             return Some(twips as i32);
         }
     }
-
     None
+}
+
+fn parse_additive_latex_length_to_twips(
+    normalized: &str,
+    body_font_size_hp: Option<usize>,
+) -> Option<i32> {
+    let canonical = normalized.replace("plus", "+").replace("minus", "-");
+    let has_plus = canonical.contains('+');
+    let has_minus_after_first = canonical.char_indices().skip(1).any(|(_, ch)| ch == '-');
+    let has_operator = has_plus || has_minus_after_first;
+    if !has_operator {
+        return None;
+    }
+
+    let mut total: i64 = 0;
+    let mut sign: i64 = 1;
+    let mut token_start = 0usize;
+    let chars: Vec<(usize, char)> = canonical.char_indices().collect();
+
+    if let Some((_, first)) = chars.first()
+        && (*first == '+' || *first == '-')
+    {
+        sign = if *first == '+' { 1 } else { -1 };
+        token_start = 1;
+    }
+
+    for (idx, ch) in chars {
+        if idx < token_start {
+            continue;
+        }
+        if ch != '+' && ch != '-' {
+            continue;
+        }
+
+        let token = canonical[token_start..idx].trim();
+        if token.is_empty() {
+            return None;
+        }
+        let value = parse_single_latex_length_to_twips(token, body_font_size_hp)? as i64;
+        total = total.saturating_add(sign.saturating_mul(value));
+        sign = if ch == '+' { 1 } else { -1 };
+        token_start = idx + 1;
+    }
+
+    let token = canonical[token_start..].trim();
+    if token.is_empty() {
+        return None;
+    }
+    let value = parse_single_latex_length_to_twips(token, body_font_size_hp)? as i64;
+    total = total.saturating_add(sign.saturating_mul(value));
+
+    i32::try_from(total).ok()
 }
 
 fn parse_latex_length_prefix_to_twips_with_body_font(
@@ -3748,7 +3907,9 @@ fn parse_latex_length_prefix_to_twips_with_body_font(
     }
 
     let unit_tail = compact[end..].to_ascii_lowercase();
-    for unit in ["mm", "cm", "in", "em", "pt"] {
+    for unit in [
+        "mm", "cm", "in", "em", "ex", "pt", "pc", "bp", "dd", "cc", "sp",
+    ] {
         if unit_tail.starts_with(unit) {
             let candidate = format!("{}{}", &compact[..end], unit);
             return parse_latex_length_to_twips_with_body_font(&candidate, body_font_size_hp);

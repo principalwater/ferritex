@@ -677,12 +677,12 @@ fn list_indent_defaults_use_body_first_line_indent() {
         ..DocumentLayout::default()
     };
     let profile = RenderProfile::from_layout(&layout);
-    // list_left should equal body first-line indent (parindent).
+    // list text-left should equal body first-line indent (parindent).
     assert_eq!(profile.list_left_indent_twips, 709);
-    // item indent defaults to a positive hanging-style value when not configured.
+    // list hanging indent defaults to a positive label-span value.
     assert!(
-        profile.list_item_indent_twips > 0,
-        "item indent should be positive"
+        profile.list_hanging_indent_twips > 0,
+        "list hanging indent should be positive"
     );
 }
 
@@ -718,10 +718,81 @@ fn list_label_sep_fallback_scales_with_font_size() {
         ..DocumentLayout::default()
     };
     let profile = RenderProfile::from_layout(&layout);
-    // sep = 120 (0.5em at 12pt), width = 200, item_indent = sep + width = 320
+    // sep = 120 (0.5em at 12pt), width = 200, hanging = 320.
     assert_eq!(
-        profile.list_item_indent_twips, 320,
+        profile.list_hanging_indent_twips, 320,
         "12pt font sep fallback (120) + explicit width (200) should = 320"
+    );
+}
+
+#[test]
+fn list_text_indent_compensates_leftmargin_when_itemindent_absent() {
+    let layout = DocumentLayout {
+        body_first_line_indent_twips: Some(709),
+        list_left_indent_twips: Some(429),
+        list_label_sep_twips: Some(140),
+        list_label_width_twips: Some(140),
+        list_item_indent_twips: None,
+        ..DocumentLayout::default()
+    };
+    let profile = RenderProfile::from_layout(&layout);
+    assert_eq!(profile.list_hanging_indent_twips, 280);
+    assert_eq!(
+        profile.list_left_indent_twips, 709,
+        "leftmargin + default itemindent should keep text aligned with parindent"
+    );
+}
+
+#[test]
+fn list_item_paragraph_uses_hanging_indent_xml() {
+    let profile = RenderProfile::from_layout(&DocumentLayout::default());
+    let para = build_list_item(
+        &[Inline::Text("List item".to_string())],
+        100,
+        &profile,
+        &ReferenceRenderIndex::default(),
+    );
+    let xml = String::from_utf8(para.build()).expect("paragraph xml should be utf8");
+    assert!(
+        xml.contains("w:hanging=\"284\""),
+        "expected hanging indent in list paragraph xml: {xml}"
+    );
+    assert!(
+        !xml.contains("w:firstLine=\""),
+        "list paragraph should not use firstLine indent: {xml}"
+    );
+}
+
+#[test]
+fn footnote_reference_trims_trailing_space_before_marker() {
+    let profile = RenderProfile::from_layout(&DocumentLayout::default());
+    let para = append_inlines_to_paragraph(
+        Paragraph::new(),
+        &[
+            Inline::Text("Reference spacing ".to_string()),
+            Inline::Footnote(vec![Inline::Text("Note".to_string())]),
+        ],
+        InlineRenderState {
+            bold: false,
+            italic: false,
+            force_italic: false,
+            footnote_hp: profile.font_size_footnote_hp,
+        },
+        &ReferenceRenderIndex::default(),
+        &profile,
+    );
+    let xml = String::from_utf8(para.build()).expect("paragraph xml should be utf8");
+    assert!(
+        xml.contains("Reference spacing</w:t>"),
+        "expected trimmed text before footnote marker: {xml}"
+    );
+    assert!(
+        !xml.contains("Reference spacing </w:t>"),
+        "trailing space before superscript marker must be removed: {xml}"
+    );
+    assert!(
+        xml.contains("w:footnoteReference"),
+        "expected footnote reference run: {xml}"
     );
 }
 

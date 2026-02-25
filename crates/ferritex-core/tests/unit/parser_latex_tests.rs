@@ -2632,6 +2632,84 @@ fn test_extract_list_settings_absent() {
 }
 
 #[test]
+fn test_extract_list_settings_prefers_last_setlist_override() {
+    let source = r"\setlist{labelsep=.4em}\setlist{labelsep=.8em}";
+    let (sep, _width, _item_indent, _left_margin, _bullet) =
+        extract_list_settings_with_body_font(source, None, None);
+    assert_eq!(
+        sep,
+        Some(224),
+        "expected .8em at 14pt to win as last override"
+    );
+}
+
+#[test]
+fn test_extract_list_settings_accepts_labelsep_star_and_spaces() {
+    let source = r"\setlist{ labelsep* = .5em , labelwidth = ! }";
+    let (sep, width, _item_indent, _left_margin, _bullet) =
+        extract_list_settings_with_body_font(source, None, None);
+    assert_eq!(sep, Some(140));
+    assert_eq!(width, None);
+}
+
+#[test]
+fn test_extract_list_settings_itemindent_falls_back_to_listparindent() {
+    let doc = parse_latex(
+        "\\setlength{\\parindent}{1.25cm}\n\\setlist{listparindent=\\parindent}\nBody.",
+    );
+    assert_eq!(doc.layout.list_item_indent_twips, Some(709));
+}
+
+#[test]
+fn test_extract_list_settings_dimexpr_supports_unit_terms() {
+    let source =
+        r"\setlist{labelsep=.5em,labelwidth=.5em,leftmargin=\dimexpr\parindent-1em+1pt\relax}";
+    let (_sep, _width, _item_indent, left_margin, _bullet) =
+        extract_list_settings_with_body_font(source, Some(709), Some(28));
+    assert_eq!(left_margin, Some(449));
+}
+
+#[test]
+fn test_parse_latex_length_supports_additional_tex_units() {
+    assert_eq!(
+        parse_latex_length_to_twips_with_body_font("1pc", None),
+        Some(240)
+    );
+    assert_eq!(
+        parse_latex_length_to_twips_with_body_font("1bp", None),
+        Some(20)
+    );
+    assert_eq!(
+        parse_latex_length_to_twips_with_body_font("65536sp", None),
+        Some(20)
+    );
+    assert_eq!(
+        parse_latex_length_to_twips_with_body_font("1dd", None),
+        Some(21)
+    );
+    assert_eq!(
+        parse_latex_length_to_twips_with_body_font("1cc", None),
+        Some(257)
+    );
+    assert_eq!(
+        parse_latex_length_to_twips_with_body_font("1ex", Some(28)),
+        Some(121)
+    );
+}
+
+#[test]
+fn test_parse_latex_length_supports_plus_minus_glue() {
+    assert_eq!(
+        parse_latex_length_to_twips_with_body_font("1em plus 1pt", Some(28)),
+        Some(300)
+    );
+    assert_eq!(
+        parse_latex_length_to_twips_with_body_font("1em minus 1pt", Some(28)),
+        Some(260)
+    );
+}
+
+#[test]
 fn test_extract_labelitemi_char_endash() {
     let source = r"\renewcommand{\labelitemi}{\normalfont\bfseries{--}}";
     let (_sep, _width, _item_indent, _left_margin, bullet) =

@@ -4,6 +4,10 @@
 - This project is 100% Rust. No Python, no shell scripts, no Pandoc
   subprocess calls, no FFI to non-Rust libraries unless absolutely
   unavoidable (document why in this file if so).
+- TeX evaluation for style/layout semantics must not rely on external
+  `latexmk`/`pdflatex`/`xelatex` subprocess orchestration in runtime code.
+  If TeX execution is required for semantic extraction, use an embedded Rust
+  engine crate (planned: `tectonic`).
 - ferritex is a generic LaTeX-driven converter for arbitrary LaTeX projects
   (DOCX implemented, PDF/Markdown backends scaffolded)
   (articles, journal papers, dissertations, books, theses). Do not tune
@@ -15,12 +19,17 @@
 - No unwrap() in library code — use anyhow::Result or thiserror types.
 
 ## Architecture rules
-- The pipeline is strictly: LaTeX source → AST + StyleMap → backend renderer output
+- The pipeline is strictly:
+  LaTeX source → (LayoutProbe + parser static extraction) → AST + StyleMap → backend renderer output
 - The parser and renderer are completely decoupled via the AST.
   Never let docx-rs types leak into the parser, never let nom/regex
   types leak into the renderer.
 - Treat `DocumentLayout` as the project-wide **StyleMap**:
   extracted style/layout semantics passed from parser to renderers.
+- Extraction precedence is mandatory:
+  1. `LayoutProbe` (engine-evaluated effective values) when available.
+  2. Static parser extraction from LaTeX source.
+  3. Renderer fallback defaults only when both layers are absent.
 - New LaTeX elements go in:
   `crates/ferritex-core/src/parser/latex.rs` +
   `crates/ferritex-core/src/model/mod.rs` +
@@ -48,8 +57,10 @@
   improvements first, not one-off renderer hacks bound to a single corpus.
 
 ### LaTeX-driven parameter policy (comprehensive)
-Every formatting decision in the renderer must trace back to parser
-extraction:
+Every formatting decision in the renderer must trace back to
+engine-evaluated and/or parser extraction:
+- effective values from `LayoutProbe` sidecar (preferred when present)
+- static extraction from LaTeX source
 - global document-level settings via `DocumentLayout`
 - block-local directives (inside specific float/list blocks) via block fields
 Renderer constants serve only as **fallback defaults** for when the
@@ -85,6 +96,23 @@ categories must all follow this pattern — no exceptions:
 | Caption label bold | `\captionsetup{labelfont=bf}` | `caption_label_bold_figure/table` | true | ✅ parsed + rendered |
 | TOC depth | `\setcounter{tocdepth}{N}` | `toc_depth` | 2 | ✅ parsed + rendered |
 | Page gutter | `\geometry{bindingoffset=...}` | `page_gutter_twips` | 0 | ✅ parsed + rendered |
+
+### LayoutProbe dependency policy (planned implementation baseline)
+
+The following crates are approved for evaluation in the LayoutProbe stream:
+
+| Crate | Version | License | Role |
+|---|---|---|---|
+| `tectonic` | `0.15.0` | MIT | Embedded TeX engine for effective layout/style probing |
+| `codebook-tree-sitter-latex` | `0.6.1` | MIT | Syntax-level LaTeX parsing assistance (not semantic evaluation) |
+| `biblatex` | `0.11.0` | MIT/Apache-2.0 | Bibliography metadata parsing/evaluation support |
+
+Restricted candidates:
+
+| Crate | Version | License | Policy |
+|---|---|---|---|
+| `tex_engine` | `0.1.8` | GPL-3.0-or-later | Not allowed for MIT-licensed ferritex core integration |
+| `rustex_lib` | `0.1.7` | GPL-3.0-or-later | Not allowed for MIT-licensed ferritex core integration |
 
 **Known exception — `apply_known_counter_fallbacks`** (`parser/latex.rs`):
 Contains dissertation-specific Russian counter placeholder templates

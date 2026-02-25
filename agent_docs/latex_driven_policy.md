@@ -10,10 +10,12 @@ All formatting parameters must be derived from the LaTeX project, not hardcoded 
 Every formatting rule must follow this pipeline:
 
 1. LaTeX source (main file + included style/config files)
-2. Parser extraction (`crates/ferritex-core/src/parser/latex.rs`)
-3. `DocumentLayout` field (`crates/ferritex-core/src/model/mod.rs`)
-4. Renderer mapping (`RenderProfile::from_layout()` in `crates/ferritex-renderer-docx/src/lib.rs`)
-5. Backend emission logic consumes mapped values
+2. `LayoutProbe` extraction of effective values (planned, embedded TeX engine; no external LaTeX subprocess orchestration)
+3. Parser static extraction (`crates/ferritex-core/src/parser/latex.rs`)
+4. Merge into `DocumentLayout` fields with strict precedence:
+   - probe value > parser value > renderer fallback
+5. Renderer mapping (`RenderProfile::from_layout()` in `crates/ferritex-renderer-docx/src/lib.rs`)
+6. Backend emission logic consumes mapped values
 
 ## Product Coverage
 
@@ -29,21 +31,21 @@ No behavior may be tied to one private template or one project-specific style pa
 ## Renderer Hardcoding Policy
 
 - Renderer constants are fallback defaults only.
-- Fallbacks apply only when LaTeX does not provide a value.
+- Fallbacks apply only when neither probe extraction nor parser extraction provides a value.
 - Renderer must not introduce one-off formatting overrides for a specific corpus.
 
 ## Bug-Fix Rule
 
 When users report formatting mismatches:
 
-- First fix parser extraction and layout propagation.
+- First fix extraction/propagation (probe and/or parser layers) and only then renderer mapping.
 - Do not patch with renderer-local hardcoded values as the primary fix.
 
 ## Change Checklist for New Formatting Parameters
 
 For each new LaTeX formatting feature, update all three layers:
 
-1. Parser extraction (`crates/ferritex-core/src/parser/latex.rs`)
+1. Probe/parser extraction (`LayoutProbe` stream and/or `crates/ferritex-core/src/parser/latex.rs`)
 2. Model field (`crates/ferritex-core/src/model/mod.rs`)
 3. Renderer consumption + fallback mapping (`crates/ferritex-renderer-docx/src/lib.rs`)
 

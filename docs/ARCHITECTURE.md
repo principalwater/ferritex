@@ -1,14 +1,18 @@
 # Architecture
 
 `ferritex` uses a strict pipeline orchestrated by the build core.
-The parser produces two output-neutral contracts:
+Core extraction produces two output-neutral contracts:
 - structural AST (`Document`, `Block`, `Inline`)
 - style metadata (`DocumentLayout`, treated as **StyleMap**)
 
 ```text
 LaTeX source
-    ↓ parser
-AST + StyleMap (extracted from preamble)
+    ↓
+LayoutProbe (engine-evaluated effective style values; planned)
+    ↓
+Parser static extraction (source-level semantics)
+    ↓
+AST + StyleMap (merged with precedence: probe > parser > fallback)
     ↓           ↓          ↓
 DOCX        PDF        Markdown ...
 renderer  renderer    renderer
@@ -18,7 +22,7 @@ renderer  renderer    renderer
 
 | Crate | Purpose |
 |-------|---------|
-| `ferritex-core` | LaTeX parser, AST model (`Block`, `Inline`), `DocumentLayout` (StyleMap) |
+| `ferritex-core` | LaTeX extraction core: parser + (planned) LayoutProbe + AST model (`Block`, `Inline`) + `DocumentLayout` (StyleMap) |
 | `ferritex-renderer-docx` | DOCX renderer + `RenderProfile::from_layout()` — **fully implemented** |
 | `ferritex-renderer-pdf` | PDF renderer — **stub** |
 | `ferritex-renderer-md` | Markdown renderer — **stub** |
@@ -26,13 +30,15 @@ renderer  renderer    renderer
 `RenderProfile::from_layout()` is the single bridge where `DocumentLayout` option fields
 are resolved to concrete values with fallback defaults. All renderer functions consume
 `RenderProfile`, never raw `DocumentLayout`.
+Fallbacks are valid only when both probe and parser layers did not provide a value.
 
 ## Stage responsibilities
 
 1. **Build core** (`src/build/`): resolves paths, selects output format(s), orchestrates pipeline execution.
-2. **Parse** (`crates/ferritex-core/src/parser/`): reads LaTeX (including recursive includes), extracts document semantics and style parameters.
-3. **Model** (`crates/ferritex-core/src/model/`): defines AST + StyleMap as the only parser↔renderer contract.
-4. **Render** (`crates/ferritex-renderer-*/src/`): maps AST + StyleMap to backend primitives (`docx`, `pdf`, `md` backends are crate-isolated).
+2. **LayoutProbe** (`ferritex-core`, planned): evaluates effective layout/style values using embedded Rust TeX engine execution.
+3. **Parse** (`crates/ferritex-core/src/parser/`): reads LaTeX (including recursive includes), extracts static semantics and style parameters.
+4. **Model** (`crates/ferritex-core/src/model/`): defines AST + StyleMap as the only parser/probe↔renderer contract.
+5. **Render** (`crates/ferritex-renderer-*/src/`): maps AST + StyleMap to backend primitives (`docx`, `pdf`, `md` backends are crate-isolated).
 
 ## Build core
 
@@ -48,14 +54,17 @@ Output formats are selected via `OutputFormat`
 - Deterministic, reproducible conversion.
 - Parser and renderers are decoupled by AST + StyleMap types.
 - No subprocess wrappers around external converters.
+- For TeX evaluation/probing, prefer embedded Rust engine crates over shelling out to LaTeX toolchain binaries.
 - Single build core with format-specific renderers.
 - LaTeX-first parameter propagation: backend layout/styling decisions should be driven by source LaTeX metadata whenever available.
 
 ## LaTeX-first propagation
 
-The parser is responsible for extracting style-relevant intent from LaTeX
+Extraction layers are responsible for style-relevant intent from LaTeX
 sources (geometry, heading/TOC formatting, counters, labels, bibliography and
-citation behavior, include graph, block-local directives).
+citation behavior, include graph, block-local directives):
+- `LayoutProbe`: effective engine-evaluated values (planned).
+- Parser: static source-level extraction and normalization.
 
 Renderers must consume this intent through AST + StyleMap rather than adding
 document-specific hardcoded formatting rules.
@@ -79,7 +88,7 @@ propagated to ferritex outputs. Backend constants are fallback-only.
 
 For every visual/formatting issue discovered during QA:
 1. Identify the corresponding LaTeX-origin parameter or semantic signal.
-2. Add/extend parser extraction logic.
+2. Add/extend extraction logic (probe and/or parser).
 3. Normalize into generic AST/StyleMap fields.
 4. Apply in renderer through deterministic mapping and keep backend defaults as fallback.
 

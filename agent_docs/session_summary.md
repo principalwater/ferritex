@@ -10,17 +10,17 @@
 Mandatory pipeline:
 
 ```text
-LaTeX source -> parser extraction -> AST + DocumentLayout -> RenderProfile::from_layout() -> renderer
+LaTeX source -> (LayoutProbe + parser extraction) -> AST + DocumentLayout -> RenderProfile::from_layout() -> renderer
 ```
 
 All renderer constants are fallback defaults only.
 
 ## Repository State
 
-- Active branch: `feat/docs-audit-and-update`
-- Working tree: dirty (v0.9.2+ parity fixes are local, not committed in this branch yet)
-- Open PR with conflicts: `#33` (`feat/docs-audit-and-update` -> `master`), `mergeStateStatus=DIRTY`
-  - root cause: squash-merge trap (branch still contains commit equivalent to already merged `#32`)
+- Active branch: `fix/v0.9.3-list-parity`
+- Open PR: `#34` (`fix/v0.9.3-list-parity` -> `master`)
+- Latest branch commit: `499faac` (`fix(v0.9.3): improve list parity extraction and superscript spacing`)
+- Working tree after PR commit: dirty in docs/plans (strategic rewrite toward LayoutProbe architecture in progress)
 - Local quality gate on current tree: green
   - `cargo fmt --all` ✅
   - `cargo clippy --workspace --all-targets -- -D warnings` ✅
@@ -58,6 +58,28 @@ All renderer constants are fallback defaults only.
   - `cargo test --test integration_docx -- --nocapture` ✅
   - `cargo clippy -p ferritex-core --all-targets -- -D warnings` ✅
   - `cargo test -p ferritex-core parse_latex_length_supports -- --nocapture` ✅
+
+## Strategic Direction Update (2026-02-25)
+
+Team decision: shift from parser-only extraction to a two-layer extraction model
+to maximize compatibility across diverse real-world LaTeX projects.
+
+Approved architecture target:
+
+```text
+LaTeX source -> LayoutProbe (embedded `tectonic`) + parser static extraction
+             -> merge (`probe > parser > fallback`)
+             -> DocumentLayout
+             -> renderer
+```
+
+Approved/considered dependency direction:
+- Primary probe engine: `tectonic` (`0.15.0`, MIT)
+- Optional helpers:
+  - `codebook-tree-sitter-latex` (`0.6.1`, MIT) for syntax indexing only
+  - `biblatex` (`0.11.0`, MIT/Apache-2.0) for bibliography semantics
+- Excluded for MIT core integration:
+  - `tex_engine`, `rustex_lib` (GPL-3.0-or-later)
 
 ## Capability Snapshot
 
@@ -159,14 +181,12 @@ The following defects are confirmed as next work batch and must be solved parser
 
 ## Immediate Next Steps
 
-1. Execute the new active plan:
+1. Execute new foundation plan:
+   - `agent_docs/plans/v0.9.5-layoutprobe-tectonic-foundation.md`
+2. Keep parity stream active for remaining DOCX deltas:
    - `agent_docs/plans/v0.9.3-docx-parity-disstyles-wave2.md`
-2. Start cross-cutting test modernization stream:
+3. Start cross-cutting test modernization stream:
    - `agent_docs/plans/v0.9.4-test-organization-and-property-based.md`
    - run comprehensive test organization audit (Rust Book model) and property-based adoption plan
 
-3. Resolve PR conflict hygiene before merge:
-   - rebuild branch from `origin/master`
-   - cherry-pick only unique commits (exclude duplicate equivalent of merged `c33803e`)
-
-4. Keep `v1.0` backend work (PDF/MD) blocked until this DOCX parity wave stabilizes on quality gate + manual QA.
+4. Keep `v1.0` backend work (PDF/MD) blocked until LayoutProbe foundation and DOCX parity wave stabilize on quality gate + manual QA.

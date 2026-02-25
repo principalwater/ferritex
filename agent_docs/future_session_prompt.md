@@ -1,171 +1,188 @@
 # Future Session Prompt (Claude Code / Codex)
 
-Copy and use this at the beginning of a new session to restore full project context.
+Copy and use this at the beginning of a new session to restore project context without wasting tokens on unnecessary full-repo scans.
 
 ---
 
 ```markdown
 ## Role
 
-You are an AI coding agent (Claude Code / OpenAI Codex) working on
-the `ferritex` repository.
+You are an AI coding agent (Claude Code / OpenAI Codex) working on the `ferritex` repository.
 
-Project goal: a **LaTeX-driven, reusable conversion engine** with a core
-crate (`ferritex-core`) and multiple renderer crates
+Project goal: a **LaTeX-driven, reusable conversion engine** with a shared core
+(`ferritex-core`) and multiple renderer crates
 (`ferritex-renderer-docx`, `ferritex-renderer-pdf`, `ferritex-renderer-md`, …),
 with **no document-specific hardcoded formatting**.
 
 ---
 
-## Mandatory files to read before any work
+## Operating mode (context-efficient)
 
-Before touching any code, read and internalize:
+Work in **context-efficient mode** by default:
 
-- `CLAUDE.md` — Claude Code session rules (if present)
-- `AGENTS.md` — non-negotiable constraints, architecture, privacy, policy table
-- `agent_docs/README.md` — index of agent documentation
-- `agent_docs/latex_driven_policy.md` — strict LaTeX-driven policy
-- `agent_docs/coding_conventions.md` — code style rules
-- `agent_docs/git_workflow.md` — branch, commit, PR workflow
-- `agent_docs/memory_policy.md` — how project memory works
-- `agent_docs/session_summary.md` — current state of the project
-- **all** `.md` files in `agent_docs/plans/` — active and archival plans
-- `docs/ARCHITECTURE.md` — ferritex architecture
-- `docs/ROADMAP.md` — development roadmap
-- `docs/SUPPORTED_ELEMENTS.md` — LaTeX elements currently supported
-
-If any of these files are missing or clearly outdated, do not invent
-content — ask the user or create/update minimal versions following
-existing conventions.
+1. Rebuild context from repository Markdown memory first.
+2. Do **not** do a full codebase scan unless the task explicitly requires repo-wide audit/refactor.
+3. Read code lazily and only for files relevant to the current task.
+4. Use targeted `rg`/file reads and focused test runs during iteration.
+5. Run full workspace quality gate only before final commit/PR (or when changes are cross-cutting).
 
 ---
 
-## Memory policy
+## Mandatory docs to read before coding
 
-- Do NOT rely on any global or external history (`~/.codex/`, `~/.claude/`).
-- The _only_ long-term project memory lives in repository Markdown files.
-- Project source-of-truth hierarchy (in order of authority):
+Read and internalize these files before touching code:
+
+- `CLAUDE.md` — client-specific runtime/session rules (if present)
+- `AGENTS.md` — non-negotiable constraints, architecture, privacy, policy table
+- `agent_docs/README.md` — index of agent docs and plans
+- `agent_docs/latex_driven_policy.md`
+- `agent_docs/coding_conventions.md`
+- `agent_docs/git_workflow.md`
+- `agent_docs/memory_policy.md`
+- `agent_docs/session_summary.md`
+- all `.md` files in `agent_docs/plans/`
+- `docs/ARCHITECTURE.md`
+- `docs/ROADMAP.md`
+- `docs/SUPPORTED_ELEMENTS.md`
+
+If any file is missing/outdated, do not invent hidden context. Ask the user or update docs minimally and explicitly.
+
+---
+
+## Memory policy (authoritative context)
+
+- Do **not** rely on global/external histories (`~/.codex/`, `~/.claude/`).
+- The only authoritative project memory is repository Markdown.
+- Source-of-truth hierarchy:
   1. `AGENTS.md`
   2. `agent_docs/*.md` (including `plans/`)
   3. `docs/*.md`
-- `CLAUDE.md` (if present) is Claude-specific runtime guidance; it is not a replacement
-  for repository project memory listed above.
-- When new stable decisions are made, update:
-  - `agent_docs/*.md` for agent behavior, workflow, policies, plans;
-  - `docs/*.md` for architecture, renderer contracts, supported elements;
-  - `agent_docs/session_summary.md` for progress and next steps.
-- Plans live in `agent_docs/plans/` only. Never store plans in `~/.claude/plans/`.
-  After plan mode, copy the plan file into `agent_docs/plans/` immediately.
+- `CLAUDE.md` is runtime guidance for Claude clients, not a replacement for project memory.
+- Persist stable decisions back into repository Markdown:
+  - process/policy -> `agent_docs/*.md`
+  - architecture/contracts/support matrix -> `docs/*.md`
+  - progress/next actions -> `agent_docs/session_summary.md`
+- Plans must live in `agent_docs/plans/` only.
 
-Scratch / temporary compaction notes go to `agent-docs/compaction/`
-(gitignored, local-only).
+Scratch notes: `agent-docs/compaction/` (gitignored).
 
 ---
 
-## Key constraint: LaTeX-driven, multi-backend core
+## Core constraint: LaTeX-driven, multi-backend architecture
 
-- No renderer or crate may hardcode layout or styling for a specific
-  document.
-- All formatting (fonts, sizes, margins, spacing, heading styles,
-  list styles, footnote formatting, captions, table layout, math, TOC,
-  numbering, etc.) must come from:
-  - LaTeX sources (classes, packages, style files, commands), and/or
-  - explicit project configuration files, and/or
-  - generic rules described in `agent_docs/latex_driven_policy.md`.
-- The pipeline is:
-  `LaTeX source → Parser → AST + DocumentLayout → RenderProfile::from_layout() → renderer`
-- `DocumentLayout` fields are all `Option<T>`; `None` means "LaTeX did not
-  express this preference, use fallback default."
-- Constants in renderer crates are fallback defaults only — not visual tweaks.
-- `ferritex` must work for any LaTeX project (articles, journals,
-  dissertations, books, reports) without code changes.
+No renderer/crate may hardcode layout/styling for a specific document.
 
-If you think a one-off hack is needed:
+All formatting decisions (fonts, margins, spacing, headings, lists, captions, footnotes, TOC, numbering, math, etc.) must come from:
+- LaTeX sources (including included style/config files), and/or
+- explicit project config, and/or
+- generic documented fallback rules.
 
-1. Extend the LaTeX parser in `ferritex-core` to extract the parameter.
-2. Add a field to `DocumentLayout`.
-3. Resolve it in `RenderProfile::from_layout()` with a generic fallback.
-4. Consume it in the renderer.
-5. Add paired tests (present → value, absent → None, renderer fallback).
-6. Document the change in `docs/` and/or `agent_docs/`.
+Pipeline (mandatory):
+`LaTeX source -> (LayoutProbe + Parser) -> AST + DocumentLayout -> RenderProfile::from_layout() -> renderer`
+
+`DocumentLayout` fields are `Option<T>`:
+- `Some(...)` => explicit LaTeX preference (probe or parser extracted)
+- `None` => renderer fallback default
+
+Extraction precedence is mandatory:
+1. LayoutProbe (engine-evaluated effective values)
+2. Parser static extraction
+3. Renderer fallback defaults only if both layers are absent
+
+If a one-off fix seems needed, do this instead:
+1. probe/parser extraction (`ferritex-core`)
+2. `DocumentLayout` field
+3. merge precedence check (`probe > parser > fallback`)
+4. `RenderProfile::from_layout()` mapping + generic fallback
+5. renderer consumption
+6. paired tests (present/absent/fallback)
+7. docs update
 
 ---
 
-## Technical layout
+## Test strategy expectations
+
+Follow Rust-way test organization and keep test signal high:
+- Rust Book reference:
+  - https://doc.rust-lang.org/book/ch11-03-test-organization.html
+
+Adopt property-based testing where it gives high leverage:
+- prioritize invariants over many hand-written examples
+- start from core/renderer critical invariants
+- keep deterministic CI behavior and reproducible failures
+- align with:
+  - `agent_docs/plans/v0.9.4-test-organization-and-property-based.md`
+
+---
+
+## Technical map (quick reference)
 
 Core:
+- `crates/ferritex-core/src/parser/latex.rs`
+- `crates/ferritex-core/src/model/mod.rs`
+- `crates/ferritex-core/tests/`
 
-- `crates/ferritex-core/src/parser/latex.rs` — LaTeX parser
-- `crates/ferritex-core/src/model/mod.rs` — AST, `DocumentLayout`, `Block`, `Inline`
-- `crates/ferritex-core/tests/` — core tests
+DOCX renderer:
+- `crates/ferritex-renderer-docx/src/lib.rs`
+- `crates/ferritex-renderer-docx/tests/`
 
-Renderers:
+Other renderers:
+- `crates/ferritex-renderer-pdf/src/` (stub/in progress)
+- `crates/ferritex-renderer-md/src/` (stub/in progress)
 
-- `crates/ferritex-renderer-docx/src/lib.rs` — DOCX renderer + `RenderProfile`
-- `crates/ferritex-renderer-pdf/src/` — PDF renderer (stub)
-- `crates/ferritex-renderer-md/src/` — Markdown renderer (stub)
-
-CLI / glue:
-
-- `src/build/mod.rs` — build orchestration
-- `src/renderer/mod.rs` — glue layer
+Orchestration/CLI:
+- `src/build/mod.rs`
+- `src/renderer/mod.rs`
 - `src/cli.rs`, `src/tui.rs`, `src/lib.rs`, `src/main.rs`
 
-Tests:
-
-- `tests/fixtures/*.tex` — minimal test fixtures
-- `tests/integration_docx.rs`, `tests/integration_pdf.rs`, `tests/integration_md.rs`
+Workspace/integration tests:
+- `tests/fixtures/*.tex`
+- `tests/integration*.rs`
 - `tests/integration/*.rs`
 - `tests/common/*`
-- `tests/unit/` — unit test suites
+- `tests/unit/*`
 
-When implementing changes: parser-first → model → renderer → tests.
+Implementation order: parser -> model -> renderer -> tests -> docs.
+
+---
+
+## Session flow
+
+1. Read mandatory docs and rebuild context from `session_summary` + plans.
+2. Determine active focus from docs (do not assume stale priorities).
+3. If user already gave a concrete task, execute it directly.
+   If not, ask for one specific session task.
+4. Implement with LaTeX-driven policy and minimal required code exploration.
+5. Validate changes.
+6. Update docs memory before session end.
+
+---
+
+## Validation policy
+
+During iteration:
+- run focused tests/checks for touched areas.
+
+Before commit/PR:
+- `cargo fmt --all`
+- `cargo clippy --workspace --all-targets -- -D warnings`
+- `cargo test --workspace`
 
 ---
 
 ## Manual QA artifact convention
 
-- When the user asks to build DOCX/PDF/MD for parity checks:
-  - ask the user for the input `.tex` path (never assume or hardcode
-    a private project path),
-  - default output directory: `/tmp/` (e.g. `/tmp/output.docx`).
+When user asks to build DOCX/PDF/MD for parity checks:
+- ask for input `.tex` path (never assume private path),
+- default output to `/tmp/` (e.g. `/tmp/output.docx`).
 
 ---
 
-## Git workflow summary
+## Git/PR workflow
 
-- Always work on feature branches: `git checkout -b feat/vX.Y-description`
-- Never push directly to master.
-- Always through PRs with quality gate green:
-  `cargo fmt --all && cargo clippy --workspace --all-targets -- -D warnings && cargo test --workspace`
-- Bot auto-merges with `bot-merge` label (squash + delete branch).
-- SSH key must be added per-session:
-  `export SSH_AUTH_SOCK=$(ls -t /tmp/com.apple.launchd.*/Listeners 2>/dev/null | head -1)`
-
----
-
-## Session workflow
-
-1. Read all mandatory docs and all plan files.
-2. From `agent_docs/session_summary.md` and `agent_docs/plans/`, rebuild
-   your understanding of:
-   - current state of `ferritex-core` and renderers,
-   - current focus areas,
-   - agreed constraints and recent decisions,
-   - next steps.
-3. Ask the user what **specific task** should be done in this session
-   (feature, bugfix, refactor, tests, docs).
-4. Design and implement the task while strictly following:
-   - `latex_driven_policy.md`,
-   - `ARCHITECTURE.md`,
-   - `ROADMAP.md`,
-   - `coding_conventions.md`,
-   - `git_workflow.md`.
-5. If you change architecture, supported elements, or policies:
-   - update `docs/*.md` and/or `agent_docs/*.md`;
-   - update `agent_docs/session_summary.md` with:
-     - what was done,
-     - important decisions,
-     - issues discovered,
-     - suggested next steps.
+- Always work on feature branches (`feat/...`, `fix/...`, `chore/...`).
+- Never push directly to `master`.
+- Merge only through PR with green quality gate.
+- Bot merge path allowed via `bot-merge` label.
+- Be careful with squash-merge rebase trap; prefer clean branch + cherry-pick of unique commits when needed.
 ```

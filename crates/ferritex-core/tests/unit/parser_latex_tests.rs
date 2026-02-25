@@ -634,6 +634,41 @@ fn test_tableofcontents_with_asterisk_becomes_toc_node() {
 }
 
 #[test]
+fn test_newpage_command_becomes_page_break_block() {
+    let doc = parse_latex("\\newpage");
+    assert_eq!(doc.blocks, vec![Block::PageBreak]);
+}
+
+#[test]
+fn test_clearpage_and_cleardoublepage_become_page_break_blocks() {
+    let doc = parse_latex("\\clearpage\n\n\\cleardoublepage");
+    assert_eq!(doc.blocks.len(), 2, "unexpected blocks: {:?}", doc.blocks);
+    assert!(matches!(doc.blocks[0], Block::PageBreak));
+    assert!(matches!(doc.blocks[1], Block::PageBreak));
+}
+
+#[test]
+fn test_standalone_page_break_between_paragraphs_is_preserved() {
+    let doc = parse_latex("Before.\n\n\\newpage\n\nAfter.");
+    assert_eq!(doc.blocks.len(), 3, "unexpected blocks: {:?}", doc.blocks);
+    assert!(matches!(doc.blocks[0], Block::Paragraph(_)));
+    assert!(matches!(doc.blocks[1], Block::PageBreak));
+    assert!(matches!(doc.blocks[2], Block::Paragraph(_)));
+}
+
+#[test]
+fn test_inline_newpage_command_does_not_emit_page_break_block() {
+    let doc = parse_latex("Before \\newpage after.");
+    assert!(
+        doc.blocks
+            .iter()
+            .all(|block| !matches!(block, Block::PageBreak)),
+        "unexpected page-break block in {:?}",
+        doc.blocks
+    );
+}
+
+#[test]
 fn test_tochelper_like_macro_is_not_expanded_into_body_noise() {
     let src = "\\newcommand*{\\tocheader}{\\ifnumequal{\\value{pgnum}}{1}{\\hbox to \\linewidth{X}\\afterpage{\\tocheader}}{}}\n\\addtocontents{toc}{\\protect\\tocheader}\n\\tableofcontents*";
     let expanded = expand_simple_macros(src);

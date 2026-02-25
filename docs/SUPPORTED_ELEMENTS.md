@@ -15,7 +15,7 @@ Rendering policy:
 | `\textit{}`, `\emph{}`, `{\it …}`, `{\itshape …}` | ✅ v0.1 | Recursive nesting supported |
 | `\label{}`, `\ref{}`, `\cite{}` | ✅ v0.1 | Emitted as `[key]` placeholder text |
 | `\autocite{}` | ✅ v0.5 | Style-aware placeholder: footnote or inline (`[key]`) based on LaTeX style config |
-| Preamble (`\documentclass`, `\usepackage`, etc.) | ✅ v0.1 | Everything before `\begin{document}` is discarded; layout commands (`\vspace`, `\newpage`, etc.) skipped |
+| Preamble (`\documentclass`, `\usepackage`, etc.) | ✅ v0.1 | Everything before `\begin{document}` is discarded; preamble-only layout commands are skipped |
 | `\tableofcontents` | ✅ v0.9.1 | Emits `Block::TableOfContents`; renderer generates TOC paragraphs from following section blocks or `.toc` file entries. No language text stored in AST — heading text must come from a preceding `\chapter*{...}` in the document. |
 | TOC depth (`\setcounter{tocdepth}{N}`) | ✅ v0.9.2 | Parsed into `DocumentLayout.toc_depth`; generated DOCX TOC includes only levels allowed by LaTeX counter depth. |
 | `%` comments | ✅ v0.1 | Stripped before parsing |
@@ -33,6 +33,7 @@ Rendering policy:
 | Body paragraph alignment (`\raggedright`, `\centering`, `\raggedleft` in body context) | ✅ v0.9.2 | Parsed into `body_text_alignment`; mapped to BodyText/ListParagraph defaults and paragraph rendering fallback alignment. |
 | Page-number alignment (`\lfoot`, `\cfoot`, `\rfoot`, `\fancyfoot[...]`, `\makeoddfoot`, `\makeevenfoot`, `\makeoddhead`, `\makeevenhead`) | ✅ v0.9.2 | Parsed into `page_number_alignment`; used by generated DOCX page-number header paragraph. |
 | Page gutter (`\geometry{bindingoffset=...}`) | ✅ v0.9.2 | Parsed into `page_gutter_twips`; mapped to DOCX section gutter with fallback `0`. |
+| Explicit page breaks (`\newpage`, `\clearpage`, `\cleardoublepage`) | ✅ v0.9.3 | Parsed into `Block::PageBreak`; renderer emits DOCX page-break paragraph (`w:br w:type=\"page\"`). |
 | Math (`$…$`) | ✅ v0.4 | Rendered as italic plain-text approximation |
 | Math (`\begin{equation}`, `\begin{equation*}`) | ✅ v0.4 | Rendered as centered italic plain-text approximation |
 | Math (`\[…\]`) | ✅ v0.5 | Rendered as centered italic plain-text approximation |

@@ -33,6 +33,9 @@ pub struct DocumentLayout {
     pub page_margin_header_twips: Option<i32>,
     /// Footer distance in twips.
     pub page_margin_footer_twips: Option<i32>,
+    /// Binding gutter in twips.
+    /// Parsed from `\geometry{bindingoffset=...}`.
+    pub page_gutter_twips: Option<i32>,
 
     // ── Line spacing ───────────────────────────────────────────────────
     /// Body paragraph line spacing in twips (`240 = single`, `360 = 1.5`).
@@ -89,6 +92,12 @@ pub struct DocumentLayout {
     /// Table caption label separator text.
     /// Parsed from `\captionsetup[table]{labelsep=...}` and related declarations.
     pub caption_label_separator_table: Option<String>,
+    /// Whether figure caption label should be bold.
+    /// Parsed from `\captionsetup[figure]{labelfont=...}` with global fallback.
+    pub caption_label_bold_figure: Option<bool>,
+    /// Whether table caption label should be bold.
+    /// Parsed from `\captionsetup[table]{labelfont=...}` with global fallback.
+    pub caption_label_bold_table: Option<bool>,
     /// Figure caption spacing (`skip`) in twips.
     /// Parsed from `\captionsetup[figure]{skip=...}` with global fallback.
     pub caption_skip_twips_figure: Option<i32>,
@@ -127,6 +136,15 @@ pub struct DocumentLayout {
     /// Delimiter after heading number (e.g. `"."`, `""`, `":"`, `" —"`).
     /// Parsed from `\thechapter` or heading format definitions.
     pub heading_number_delimiter: Option<String>,
+    /// Delimiter after section number (`\section`) in body headings.
+    /// Parsed from `\setsecnumformat` / `headingdelim` conventions.
+    pub heading_number_delimiter_section: Option<String>,
+    /// Delimiter after subsection number (`\subsection`) in body headings.
+    /// Parsed from `\setsecnumformat` / `headingdelim` conventions.
+    pub heading_number_delimiter_subsection: Option<String>,
+    /// Delimiter after subsubsection number (`\subsubsection`) in body headings.
+    /// Parsed from `\setsecnumformat` / `headingdelim` conventions.
+    pub heading_number_delimiter_subsubsection: Option<String>,
     /// Left indent for section headings (`\section`) in twips.
     /// Parsed from `\setsecindent{...}`.
     pub heading_indent_section_twips: Option<i32>,
@@ -136,11 +154,39 @@ pub struct DocumentLayout {
     /// Left indent for subsubsection headings (`\subsubsection`) in twips.
     /// Parsed from `\setsubsubsecindent{...}`.
     pub heading_indent_subsubsection_twips: Option<i32>,
+    /// Space before chapter-level headings in twips.
+    /// Parsed from `\setlength{\beforechapskip}{...}`.
+    pub heading_space_before_chapter_twips: Option<i32>,
+    /// Space after chapter-level headings in twips.
+    /// Parsed from `\setlength{\afterchapskip}{...}`.
+    pub heading_space_after_chapter_twips: Option<i32>,
+    /// Space before section headings in twips.
+    /// Parsed from memoir `\setbeforesecskip{...}`.
+    pub heading_space_before_section_twips: Option<i32>,
+    /// Space after section headings in twips.
+    /// Parsed from memoir `\setaftersecskip{...}`.
+    pub heading_space_after_section_twips: Option<i32>,
+    /// Space before subsection headings in twips.
+    /// Parsed from memoir `\setbeforesubsecskip{...}`.
+    pub heading_space_before_subsection_twips: Option<i32>,
+    /// Space after subsection headings in twips.
+    /// Parsed from memoir `\setaftersubsecskip{...}`.
+    pub heading_space_after_subsection_twips: Option<i32>,
+    /// Space before subsubsection headings in twips.
+    /// Parsed from memoir `\setbeforesubsubsecskip{...}`.
+    pub heading_space_before_subsubsection_twips: Option<i32>,
+    /// Space after subsubsection headings in twips.
+    /// Parsed from memoir `\setaftersubsubsecskip{...}`.
+    pub heading_space_after_subsubsection_twips: Option<i32>,
 
     // ── Table of contents formatting ────────────────────────────────────
     /// Extra right margin for TOC title lines in twips.
     /// Parsed from `\setrmarg{...}` when present.
     pub toc_right_margin_twips: Option<i32>,
+    /// TOC depth from `\setcounter{tocdepth}{N}`.
+    ///
+    /// Uses LaTeX semantics (`0` = chapter, `1` = section, `2` = subsection, ...).
+    pub toc_depth: Option<i32>,
     /// Whether TOC page numbers should use dot leaders.
     /// Parsed from `\cft...leader` / `\cftdotfill` customizations.
     pub toc_use_dot_leader: Option<bool>,
@@ -214,6 +260,17 @@ pub struct DocumentLayout {
     /// Caption alignment (e.g. `"center"`, `"left"`, `"both"`).
     /// Parsed from `\captionsetup{justification=centering}`.
     pub caption_alignment: Option<String>,
+    /// Body paragraph alignment (e.g. `"left"`, `"center"`, `"right"`, `"both"`).
+    /// Parsed from global body-alignment directives (for example `\raggedright`).
+    pub body_text_alignment: Option<String>,
+
+    // ── Hyperlinks ────────────────────────────────────────────────────
+    /// Hyperlink text color.
+    /// Parsed from `\hypersetup{linkcolor=...}` or `\hypersetup{allcolors=...}`.
+    pub hyperlink_text_color: Option<String>,
+    /// Whether hyperlink text should be underlined.
+    /// Derived from `\hypersetup{colorlinks=...}` (`false` -> underline fallback).
+    pub hyperlink_underline: Option<bool>,
 
     // ── Source attribution lines ─────────────────────────────────────
     /// Vertical space above `\tablesource` line in twips.
@@ -227,6 +284,9 @@ pub struct DocumentLayout {
     /// Whether to suppress the page number on the first (title) page.
     /// Detected from `\thispagestyle{empty}` inside `\begin{titlingpage}`.
     pub title_page_suppress_number: Option<bool>,
+    /// Page-number alignment (`"left"`, `"center"`, `"right"`).
+    /// Parsed from footer page-style commands (`\lfoot`, `\cfoot`, `\rfoot`, `\makeoddfoot`).
+    pub page_number_alignment: Option<String>,
 
     // ── Graphics paths ───────────────────────────────────────────────
     /// Search paths for included graphics, parsed from `\graphicspath{{./figures/}{./img/}}`.

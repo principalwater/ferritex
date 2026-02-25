@@ -33,6 +33,7 @@ fn caption_prefix_uses_configured_separator() {
 #[test]
 fn caption_paragraph_top_position_sets_after_skip_and_indent() {
     let inlines = vec![Inline::Text("Sample caption".to_string())];
+    let profile = RenderProfile::from_layout(&DocumentLayout::default());
     let para = caption_paragraph(
         "Table",
         Some("1"),
@@ -44,8 +45,10 @@ fn caption_paragraph_top_position_sets_after_skip_and_indent() {
             skip_twips: 60,
             position: CaptionPosition::Top,
             singlelinecheck: false,
+            label_bold: true,
             footnote_font_size_hp: 20,
         },
+        &profile,
         &ReferenceRenderIndex::default(),
     );
     let xml = String::from_utf8(para.build()).expect("paragraph xml should be utf8");
@@ -58,6 +61,7 @@ fn caption_paragraph_top_position_sets_after_skip_and_indent() {
 #[test]
 fn caption_paragraph_bottom_position_sets_before_skip() {
     let inlines = vec![Inline::Text("Sample caption".to_string())];
+    let profile = RenderProfile::from_layout(&DocumentLayout::default());
     let para = caption_paragraph(
         "Figure",
         Some("2"),
@@ -69,8 +73,10 @@ fn caption_paragraph_bottom_position_sets_before_skip() {
             skip_twips: 40,
             position: CaptionPosition::Bottom,
             singlelinecheck: false,
+            label_bold: true,
             footnote_font_size_hp: 20,
         },
+        &profile,
         &ReferenceRenderIndex::default(),
     );
     let xml = String::from_utf8(para.build()).expect("paragraph xml should be utf8");
@@ -81,6 +87,7 @@ fn caption_paragraph_bottom_position_sets_before_skip() {
 #[test]
 fn caption_singlelinecheck_centers_short_caption_only() {
     let short = vec![Inline::Text("Short caption".to_string())];
+    let profile = RenderProfile::from_layout(&DocumentLayout::default());
     let centered = caption_paragraph(
         "Figure",
         Some("1"),
@@ -92,8 +99,10 @@ fn caption_singlelinecheck_centers_short_caption_only() {
             skip_twips: 0,
             position: CaptionPosition::Bottom,
             singlelinecheck: true,
+            label_bold: true,
             footnote_font_size_hp: 20,
         },
+        &profile,
         &ReferenceRenderIndex::default(),
     );
     let centered_xml = String::from_utf8(centered.build()).expect("paragraph xml should be utf8");
@@ -115,8 +124,10 @@ fn caption_singlelinecheck_centers_short_caption_only() {
             skip_twips: 0,
             position: CaptionPosition::Bottom,
             singlelinecheck: true,
+            label_bold: true,
             footnote_font_size_hp: 20,
         },
+        &profile,
         &ReferenceRenderIndex::default(),
     );
     let kept_xml = String::from_utf8(kept.build()).expect("paragraph xml should be utf8");
@@ -143,6 +154,44 @@ fn chapter_prefix_does_not_duplicate_trailing_dot() {
     let xml = String::from_utf8(para.build()).expect("paragraph xml should be utf8");
     assert!(xml.contains("Глава 1. "), "xml: {xml}");
     assert!(!xml.contains("1.."), "xml: {xml}");
+}
+
+#[test]
+fn section_heading_uses_empty_delimiter_by_default() {
+    let profile = RenderProfile::from_layout(&DocumentLayout::default());
+    let para = build_paragraph(
+        &Block::Section {
+            level: 2,
+            number: Some("1.1".to_string()),
+            label: None,
+            title: vec![Inline::Text("Section".to_string())],
+        },
+        &profile,
+        &ReferenceRenderIndex::default(),
+    );
+    let xml = String::from_utf8(para.build()).expect("paragraph xml should be utf8");
+    assert!(xml.contains("1.1 "), "xml: {xml}");
+    assert!(!xml.contains("1.1."), "xml: {xml}");
+}
+
+#[test]
+fn section_heading_uses_latex_driven_section_delimiter() {
+    let profile = RenderProfile::from_layout(&DocumentLayout {
+        heading_number_delimiter_section: Some(".".to_string()),
+        ..DocumentLayout::default()
+    });
+    let para = build_paragraph(
+        &Block::Section {
+            level: 2,
+            number: Some("1.1".to_string()),
+            label: None,
+            title: vec![Inline::Text("Section".to_string())],
+        },
+        &profile,
+        &ReferenceRenderIndex::default(),
+    );
+    let xml = String::from_utf8(para.build()).expect("paragraph xml should be utf8");
+    assert!(xml.contains("1.1. "), "xml: {xml}");
 }
 
 #[test]
@@ -397,8 +446,35 @@ fn toc_entry_uses_latex_chapter_name_prefix_when_configured() {
     assert_eq!(paragraphs.len(), 1);
 
     let xml = String::from_utf8(paragraphs[0].build()).expect("paragraph xml utf8");
-    assert!(xml.contains("ГЛАВА 1. "), "xml: {xml}");
+    assert!(xml.contains("Глава 1. "), "xml: {xml}");
     assert!(!xml.contains("1.."), "xml: {xml}");
+}
+
+#[test]
+fn toc_entry_uses_appendix_prefix_for_appendix_numbering() {
+    let layout = DocumentLayout {
+        toc_chapter_name_prefix: Some("Chapter".to_string()),
+        toc_appendix_name: Some("Appendix".to_string()),
+        ..DocumentLayout::default()
+    };
+    let document = Document {
+        blocks: Vec::new(),
+        layout: layout.clone(),
+        toc_entries: vec![TocEntry {
+            level: 1,
+            number: Some("A.".to_string()),
+            title: "Supplement".to_string(),
+            page: Some("21".to_string()),
+        }],
+    };
+    let profile = RenderProfile::from_layout(&layout);
+    let paragraphs =
+        generated_toc_paragraphs(&document, 0, &profile, &ReferenceRenderIndex::default());
+    assert_eq!(paragraphs.len(), 1);
+
+    let xml = String::from_utf8(paragraphs[0].build()).expect("paragraph xml utf8");
+    assert!(xml.contains("Appendix A. "), "xml: {xml}");
+    assert!(!xml.contains("Chapter A. "), "xml: {xml}");
 }
 
 #[test]
@@ -644,8 +720,7 @@ fn list_label_sep_fallback_scales_with_font_size() {
     let profile = RenderProfile::from_layout(&layout);
     // sep = 120 (0.5em at 12pt), width = 200, item_indent = sep + width = 320
     assert_eq!(
-        profile.list_item_indent_twips,
-        320,
+        profile.list_item_indent_twips, 320,
         "12pt font sep fallback (120) + explicit width (200) should = 320"
     );
 }
@@ -702,4 +777,163 @@ fn title_page_suppress_from_layout() {
     };
     let profile = RenderProfile::from_layout(&layout);
     assert!(profile.title_page_suppress_number);
+}
+
+#[test]
+fn toc_depth_limits_generated_entries() {
+    let layout = DocumentLayout {
+        toc_depth: Some(1),
+        ..DocumentLayout::default()
+    };
+    let document = Document {
+        blocks: Vec::new(),
+        layout: layout.clone(),
+        toc_entries: vec![
+            TocEntry {
+                level: 1,
+                number: Some("1.".to_string()),
+                title: "Chapter".to_string(),
+                page: Some("1".to_string()),
+            },
+            TocEntry {
+                level: 2,
+                number: Some("1.1".to_string()),
+                title: "Section".to_string(),
+                page: Some("2".to_string()),
+            },
+            TocEntry {
+                level: 3,
+                number: Some("1.1.1".to_string()),
+                title: "Subsection".to_string(),
+                page: Some("3".to_string()),
+            },
+        ],
+    };
+    let profile = RenderProfile::from_layout(&layout);
+    let paragraphs =
+        generated_toc_paragraphs(&document, 0, &profile, &ReferenceRenderIndex::default());
+    assert_eq!(paragraphs.len(), 2);
+}
+
+#[test]
+fn toc_chapter_prefix_uppercases_when_heading_uppercase_enabled() {
+    let layout = DocumentLayout {
+        toc_chapter_name_prefix: Some("Глава".to_string()),
+        heading_uppercase: Some(true),
+        ..DocumentLayout::default()
+    };
+    let document = Document {
+        blocks: Vec::new(),
+        layout: layout.clone(),
+        toc_entries: vec![TocEntry {
+            level: 1,
+            number: Some("1.".to_string()),
+            title: "Раздел".to_string(),
+            page: Some("5".to_string()),
+        }],
+    };
+    let profile = RenderProfile::from_layout(&layout);
+    let paragraphs =
+        generated_toc_paragraphs(&document, 0, &profile, &ReferenceRenderIndex::default());
+    assert_eq!(paragraphs.len(), 1);
+    let xml = String::from_utf8(paragraphs[0].build()).expect("xml utf8");
+    assert!(xml.contains("ГЛАВА 1. "), "xml: {xml}");
+}
+
+#[test]
+fn body_alignment_comes_from_layout() {
+    let layout = DocumentLayout {
+        body_text_alignment: Some("left".to_string()),
+        ..DocumentLayout::default()
+    };
+    let profile = RenderProfile::from_layout(&layout);
+    let para = build_default_body_paragraph(
+        &[Inline::Text("Body".to_string())],
+        &profile,
+        &ReferenceRenderIndex::default(),
+    );
+    let xml = String::from_utf8(para.build()).expect("paragraph xml utf8");
+    assert!(xml.contains("w:jc w:val=\"left\""), "xml: {xml}");
+}
+
+#[test]
+fn heading_spacing_comes_from_layout() {
+    let layout = DocumentLayout {
+        heading_space_before_section_twips: Some(120),
+        heading_space_after_section_twips: Some(80),
+        ..DocumentLayout::default()
+    };
+    let profile = RenderProfile::from_layout(&layout);
+    let para = build_paragraph(
+        &Block::Section {
+            level: 2,
+            number: Some("1.1".to_string()),
+            label: None,
+            title: vec![Inline::Text("Section".to_string())],
+        },
+        &profile,
+        &ReferenceRenderIndex::default(),
+    );
+    let xml = String::from_utf8(para.build()).expect("paragraph xml utf8");
+    assert!(xml.contains("w:before=\"120\""), "xml: {xml}");
+    assert!(xml.contains("w:after=\"80\""), "xml: {xml}");
+}
+
+#[test]
+fn page_number_alignment_comes_from_layout() {
+    let layout = DocumentLayout {
+        page_number_alignment: Some("right".to_string()),
+        ..DocumentLayout::default()
+    };
+    let profile = RenderProfile::from_layout(&layout);
+    let xml = String::from_utf8(page_number_header(profile.page_number_alignment).build())
+        .expect("header xml utf8");
+    assert!(xml.contains("w:jc w:val=\"right\""), "xml: {xml}");
+}
+
+#[test]
+fn profile_uses_latex_hyperlink_style() {
+    let layout = DocumentLayout {
+        hyperlink_text_color: Some("red".to_string()),
+        hyperlink_underline: Some(true),
+        ..DocumentLayout::default()
+    };
+    let profile = RenderProfile::from_layout(&layout);
+    let para = build_toc_entry_paragraph(
+        1,
+        Some("1."),
+        &[Inline::Text("Intro".to_string())],
+        None,
+        Some("fxt_sec_1"),
+        &profile,
+        &ReferenceRenderIndex::default(),
+    );
+    let xml = String::from_utf8(para.build()).expect("paragraph xml utf8");
+    assert!(xml.contains("w:color w:val=\"FF0000\""), "xml: {xml}");
+    assert!(xml.contains("w:u w:val=\"single\""), "xml: {xml}");
+}
+
+#[test]
+fn profile_uses_page_gutter_from_layout() {
+    let layout = DocumentLayout {
+        page_gutter_twips: Some(720),
+        ..DocumentLayout::default()
+    };
+    let profile = RenderProfile::from_layout(&layout);
+    assert_eq!(profile.page_gutter_twips, 720);
+}
+
+#[test]
+fn caption_label_bold_defaults_and_override() {
+    let fallback = RenderProfile::from_layout(&DocumentLayout::default());
+    assert!(fallback.caption_label_bold_figure);
+    assert!(fallback.caption_label_bold_table);
+
+    let overridden = RenderProfile::from_layout(&DocumentLayout {
+        caption_label_bold_figure: Some(false),
+        caption_label_bold_table: Some(false),
+        ..DocumentLayout::default()
+    });
+    assert!(!overridden.caption_label_bold_figure);
+    assert!(!overridden.caption_label_bold_table);
 }

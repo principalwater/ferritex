@@ -15,8 +15,9 @@ This directory contains the operational rules for AI/code agents working on ferr
 
 - `plans/v0.9-visual-parity.md` — archival (completed)
 - `plans/v0.9.1-latex-driven-audit.md` — archival (completed)
-- `plans/v0.9.1-docx-manual-qa-followup.md` — active (DOCX parity workstreams)
-- `plans/v0.9.2-remaining-hardcodes.md` — active (next hardcode fixes)
+- `plans/v0.9.1-docx-manual-qa-followup.md` — archival baseline for parity workstreams
+- `plans/v0.9.2-remaining-hardcodes.md` — completed in working tree (pending PR)
+- `plans/v0.9.3-docx-parity-disstyles-wave2.md` — active (manual QA defects from current dissertation parity cycle)
 - `plans/v1.0-multi-backend-foundation.md` — future (PDF/MD backends)
 
 ## Usage

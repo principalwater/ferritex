@@ -65,9 +65,10 @@ categories must all follow this pattern — no exceptions:
 | Font family | `\setmainfont` (incl. `\ifnumequal` conditional), `\setmonofont` | `font_family_body`, `font_family_mono` | "Times New Roman" | ✅ parsed + rendered |
 | Font sizes | `\documentclass[14pt]`, `\SetTblrInner{font=…}`, `\captionsetup{font=…}` | `font_size_body_hp`, `font_size_table_hp`, `font_size_footnote_hp`, `font_size_caption_hp` | 28, 24, 20, 28 (half-points) | ✅ parsed + rendered |
 | Paragraph indent | `\setlength{\parindent}{…}` | `body_first_line_indent_twips` | 709 (1.25 cm) | ✅ parsed + rendered |
-| Heading format | `\chaptername`, `\MakeUppercase`, numbering delimiter, alignment | `chapter_name`, `heading_uppercase`, `heading_alignment`, `heading_number_delimiter` | "", false, Left, "." | ✅ parsed + rendered |
+| Heading format | `\chaptername`, `\MakeUppercase`, numbering delimiter, alignment | `chapter_name`, `heading_uppercase`, `heading_alignment`, `heading_number_delimiter`, `heading_number_delimiter_{section,subsection,subsubsection}` | "", false, Left, chapter `"."`, section/subsection `""` | ✅ parsed + rendered |
 | Heading indents | `\setsecindent`, `\setsubsecindent`, `\setsubsubsecindent` | `heading_indent_section/subsection/subsubsection_twips` | 0 twips | ✅ parsed + rendered |
-| TOC formatting | `\setrmarg`, `\cft...leader`, `\cftchaptername`, `\cftsetindents`, `\setlength{\cft...indent}`, `\setlength{\cft...numwidth}`, `\cftchapterfont`, `\cftchapterpagefont`, `\cft...aftersnum`, `\cftappendixname` | `toc_right_margin_twips`, `toc_use_dot_leader`, `toc_chapter_name_prefix`, `toc_indent_*_twips`, `toc_numwidth_*_twips`, `toc_chapter_entry_bold`, `toc_chapter_page_bold`, `toc_aftersnum_{chapter,section,subsection,subsubsection}`, `toc_appendix_name` | level indents from body indent, no hanging (`numwidth=0`), entry/page bold=true, aftersnum="" | ✅ parsed + rendered |
+| Heading spacing | `\setlength{\beforechapskip}{...}`, `\setlength{\afterchapskip}{...}`, `\setbeforesecskip`, `\setaftersecskip`, `\setbeforesubsecskip`, `\setaftersubsecskip`, `\setbeforesubsubsecskip`, `\setaftersubsubsecskip` | `heading_space_before/after_{chapter,section,subsection,subsubsection}_twips` | 0 twips | ✅ parsed + rendered |
+| TOC formatting | `\setrmarg`, `\cft...leader`, `\cftchaptername`, `\cftsetindents`, `\setlength{\cft...indent}`, `\setlength{\cft...numwidth}`, `\cftchapterfont`, `\cftchapterpagefont`, `\cft...aftersnum`, `\setcounter{headingdelim}{...}`, `\cftappendixname` | `toc_right_margin_twips`, `toc_use_dot_leader`, `toc_chapter_name_prefix`, `toc_indent_*_twips`, `toc_numwidth_*_twips`, `toc_chapter_entry_bold`, `toc_chapter_page_bold`, `toc_aftersnum_{chapter,section,subsection,subsubsection}`, `toc_appendix_name` | level indents from body indent, no hanging (`numwidth=0`), entry/page bold=true, aftersnum="" | ✅ parsed + rendered |
 | Caption labels | `\renewcommand{\figurename}{…}`, `\renewcommand{\tablename}{…}`, `\captionsetup{labelsep=…}`, `\DeclareCaptionLabelSeparator` | `caption_label_figure`, `caption_label_table`, `caption_label_separator_figure`, `caption_label_separator_table` | "Figure", "Table", ". " | ✅ parsed + rendered |
 | Caption layout | `\captionsetup{skip=…, position=…, singlelinecheck=…, indent=…}` (global and `[figure]/[table]`) | `caption_skip_twips_figure/table`, `caption_position_figure/table`, `caption_singlelinecheck_figure/table`, `caption_indent_twips_figure/table` | skip=0 twips, figure position=bottom, table position=top, singlelinecheck=true, indent=0 | ✅ parsed + rendered |
 | List geometry and bullet marker | `\setlist{labelsep=…, labelwidth=…}`, `\renewcommand{\labelitemi}{…}` | `list_left_indent_twips`, `list_hanging_indent_twips`, `list_label_sep_twips`, `list_label_width_twips`, `list_bullet_char` | left=709 twips, hanging=284 twips, bullet="•" | ✅ parsed + rendered |
@@ -77,13 +78,13 @@ categories must all follow this pattern — no exceptions:
 | TOC position marker | `\tableofcontents` | `Block::TableOfContents` | no language text stored — renderer generates TOC from AST | ✅ parsed + rendered |
 | Float block alignment | `\centering`, `\raggedright`, `\raggedleft`, `\flushleft`, `\flushright` inside `table/figure` blocks | `Table.alignment`, `Figure.alignment` | table: left, figure: center | ✅ parsed + rendered |
 | Language | babel/polyglossia main language | `document_language` | None (no language tag) | ✅ parsed + rendered |
-| Hyperlink color | `\hypersetup{linkcolor=…}` | `hyperlink_text_color` | "000000" (black) | ❌ hardcoded — v0.9.2 |
-| Hyperlink underline | `\hypersetup{colorlinks=…}` | `hyperlink_underline` | false (no underline) | ❌ hardcoded — v0.9.2 |
-| Body text alignment | `\raggedright`/`\centering` in body | `body_text_alignment` | "both" (justified) | ❌ hardcoded — v0.9.2 |
-| Page number alignment | `\cfoot`/`\rfoot`/`\makeoddfoot` | `page_number_alignment` | "center" | ❌ hardcoded — v0.9.2 |
-| Caption label bold | `\captionsetup{labelfont=bf}` | `caption_label_bold_figure/table` | true | ❌ hardcoded — v0.9.2 |
-| TOC depth | `\setcounter{tocdepth}{N}` | `toc_depth` | 2 | ❌ hardcoded — v0.9.2 |
-| Page gutter | (rarely expressed in LaTeX) | `page_gutter_twips` | 0 | ❌ hardcoded — v0.9.2 |
+| Hyperlink color | `\hypersetup{linkcolor=…}`, `\hypersetup{allcolors=…}` | `hyperlink_text_color` | "000000" (black) | ✅ parsed + rendered |
+| Hyperlink underline | `\hypersetup{colorlinks=…}`, `\hypersetup{hidelinks}` | `hyperlink_underline` | false (no underline) | ✅ parsed + rendered |
+| Body text alignment | `\raggedright`/`\centering`/`\raggedleft` (body context) | `body_text_alignment` | "both" (justified) | ✅ parsed + rendered |
+| Page number alignment | `\lfoot`/`\cfoot`/`\rfoot`/`\fancyfoot[...]`/`\makeoddfoot`/`\makeevenfoot`/`\makeoddhead`/`\makeevenhead` | `page_number_alignment` | "center" | ✅ parsed + rendered |
+| Caption label bold | `\captionsetup{labelfont=bf}` | `caption_label_bold_figure/table` | true | ✅ parsed + rendered |
+| TOC depth | `\setcounter{tocdepth}{N}` | `toc_depth` | 2 | ✅ parsed + rendered |
+| Page gutter | `\geometry{bindingoffset=...}` | `page_gutter_twips` | 0 | ✅ parsed + rendered |
 
 **Known exception — `apply_known_counter_fallbacks`** (`parser/latex.rs`):
 Contains dissertation-specific Russian counter placeholder templates

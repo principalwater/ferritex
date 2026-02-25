@@ -7,107 +7,165 @@ Copy and use this at the beginning of a new session to restore full project cont
 ```markdown
 ## Role
 
-You are an AI coding agent (Claude Code / OpenAI Codex) working on `ferritex`.
+You are an AI coding agent (Claude Code / OpenAI Codex) working on
+the `ferritex` repository.
 
-Project goal: LaTeX-driven converter (DOCX implemented; PDF/Markdown backends scaffolded)
-that contains **no project-specific hardcodes** and reads all formatting parameters from
-LaTeX source or project config files, remaining reusable for any LaTeX project (academic
-paper, journal article, dissertation, technical report).
+Project goal: a **LaTeX-driven, reusable conversion engine** with a core
+crate (`ferritex-core`) and multiple renderer crates
+(`ferritex-renderer-docx`, `ferritex-renderer-pdf`, `ferritex-renderer-md`, …),
+with **no document-specific hardcoded formatting**.
 
-## Mandatory files to read before doing any work
+---
 
-Read and internalize before changing anything:
+## Mandatory files to read before any work
 
-- `CLAUDE.md` — Claude Code session rules, memory location, rebase traps
-- `AGENTS.md` — agent rules, constraints, quality gates
+Before touching any code, read and internalize:
+
+- `CLAUDE.md` — Claude Code session rules (if present)
+- `AGENTS.md` — non-negotiable constraints, architecture, privacy, policy table
 - `agent_docs/README.md` — index of agent documentation
 - `agent_docs/latex_driven_policy.md` — strict LaTeX-driven policy
 - `agent_docs/coding_conventions.md` — code style rules
 - `agent_docs/git_workflow.md` — branch, commit, PR workflow
 - `agent_docs/memory_policy.md` — how project memory works
 - `agent_docs/session_summary.md` — current state of the project
-- `agent_docs/plans/` — active next-step plans (read all files here)
+- **all** `.md` files in `agent_docs/plans/` — active and archival plans
 - `docs/ARCHITECTURE.md` — ferritex architecture
 - `docs/ROADMAP.md` — development roadmap
 - `docs/SUPPORTED_ELEMENTS.md` — LaTeX elements currently supported
 
-If any of these files is missing, do not invent its content — ask the user or create
-a minimal version following existing conventions.
+If any of these files are missing or clearly outdated, do not invent
+content — ask the user or create/update minimal versions following
+existing conventions.
+
+---
 
 ## Memory policy
 
-- Do not rely on global AI memory/history outside this repository (~/.codex/, ~/.claude/).
-- The only authoritative persistent project memory is the Markdown files inside this repo.
-- Hierarchy of truth:
+- Do NOT rely on any global or external history (`~/.codex/`, `~/.claude/`).
+- The _only_ long-term project memory lives in repository Markdown files.
+- Project source-of-truth hierarchy (in order of authority):
   1. `AGENTS.md`
-  2. `CLAUDE.md`
-  3. `agent_docs/*.md` (including `plans/`)
-  4. `docs/*.md`
-- Treat these files as the single source of truth. Global logs are advisory only.
-- After any session that produces stable decisions, update the relevant files:
-  - Policy/process → `agent_docs/*.md`
-  - Architecture/format contracts → `docs/*.md`
-  - Progress and next steps → `agent_docs/session_summary.md` and `agent_docs/plans/`
-- Plans live in the project repo: `agent_docs/plans/`. Never store plans in `~/.claude/plans/`.
+  2. `agent_docs/*.md` (including `plans/`)
+  3. `docs/*.md`
+- `CLAUDE.md` (if present) is Claude-specific runtime guidance; it is not a replacement
+  for repository project memory listed above.
+- When new stable decisions are made, update:
+  - `agent_docs/*.md` for agent behavior, workflow, policies, plans;
+  - `docs/*.md` for architecture, renderer contracts, supported elements;
+  - `agent_docs/session_summary.md` for progress and next steps.
+- Plans live in `agent_docs/plans/` only. Never store plans in `~/.claude/plans/`.
   After plan mode, copy the plan file into `agent_docs/plans/` immediately.
 
-## Non-negotiable LaTeX-driven constraint
+Scratch / temporary compaction notes go to `agent-docs/compaction/`
+(gitignored, local-only).
 
-- Zero hardcodes in the renderer for project-specific visual matching.
-- All formatting/layout parameters must come from:
-  - LaTeX sources (commands, class/package effects, style files), **or**
-  - explicit project configuration files (YAML/TOML).
-- The pipeline is: LaTeX source → Parser extracts → `DocumentLayout` stores → `RenderProfile::from_layout()` resolves → renderer consumes.
-- `DocumentLayout` fields are all `Option<T>`; `None` means "LaTeX did not express this preference, use fallback default."
-- Constants in `crates/ferritex-renderer-docx/src/lib.rs` are fallback defaults only — not visual tweaks.
-- `ferritex` must work for any LaTeX project without code changes.
+---
 
-When you think a "one-off hardcode" is needed:
-1. Extend the parser to extract the parameter from LaTeX or config.
+## Key constraint: LaTeX-driven, multi-backend core
+
+- No renderer or crate may hardcode layout or styling for a specific
+  document.
+- All formatting (fonts, sizes, margins, spacing, heading styles,
+  list styles, footnote formatting, captions, table layout, math, TOC,
+  numbering, etc.) must come from:
+  - LaTeX sources (classes, packages, style files, commands), and/or
+  - explicit project configuration files, and/or
+  - generic rules described in `agent_docs/latex_driven_policy.md`.
+- The pipeline is:
+  `LaTeX source → Parser → AST + DocumentLayout → RenderProfile::from_layout() → renderer`
+- `DocumentLayout` fields are all `Option<T>`; `None` means "LaTeX did not
+  express this preference, use fallback default."
+- Constants in renderer crates are fallback defaults only — not visual tweaks.
+- `ferritex` must work for any LaTeX project (articles, journals,
+  dissertations, books, reports) without code changes.
+
+If you think a one-off hack is needed:
+
+1. Extend the LaTeX parser in `ferritex-core` to extract the parameter.
 2. Add a field to `DocumentLayout`.
 3. Resolve it in `RenderProfile::from_layout()` with a generic fallback.
 4. Consume it in the renderer.
 5. Add paired tests (present → value, absent → None, renderer fallback).
+6. Document the change in `docs/` and/or `agent_docs/`.
 
-## Technical context
+---
 
-Key source files:
+## Technical layout
+
+Core:
+
 - `crates/ferritex-core/src/parser/latex.rs` — LaTeX parser
-- `crates/ferritex-core/src/model/mod.rs` — `DocumentLayout`, `Block`, `Inline`, etc.
+- `crates/ferritex-core/src/model/mod.rs` — AST, `DocumentLayout`, `Block`, `Inline`
+- `crates/ferritex-core/tests/` — core tests
+
+Renderers:
+
 - `crates/ferritex-renderer-docx/src/lib.rs` — DOCX renderer + `RenderProfile`
-- `src/build/`, `src/cli.rs`, `src/tui.rs`, `src/lib.rs`, `src/main.rs`
+- `crates/ferritex-renderer-pdf/src/` — PDF renderer (stub)
+- `crates/ferritex-renderer-md/src/` — Markdown renderer (stub)
+
+CLI / glue:
+
+- `src/build/mod.rs` — build orchestration
+- `src/renderer/mod.rs` — glue layer
+- `src/cli.rs`, `src/tui.rs`, `src/lib.rs`, `src/main.rs`
+
+Tests:
+
 - `tests/fixtures/*.tex` — minimal test fixtures
-- `tests/` — unit and integration tests
+- `tests/integration_docx.rs`, `tests/integration_pdf.rs`, `tests/integration_md.rs`
+- `tests/integration/*.rs`
+- `tests/common/*`
+- `tests/unit/` — unit test suites
 
-## Session workflow
+When implementing changes: parser-first → model → renderer → tests.
 
-1. Read all mandatory docs listed above.
-2. Summarize current state from `agent_docs/session_summary.md` and `agent_docs/plans/`.
-3. Confirm exact user task for this session (feature, bugfix, refactoring, tests, docs).
-4. Implement changes: parser-first → model → renderer.
-5. Add paired tests for every new `DocumentLayout` field.
-6. Run quality gate: `cargo fmt --all && cargo clippy --workspace --all-targets -- -D warnings && cargo test --workspace`
-7. Commit to a feature branch and open a PR with `bot-merge` label.
-8. Update `agent_docs/session_summary.md` and `agent_docs/plans/` with what was done and next steps.
-
-## Active plans pointer
-
-- **Active — next PR**: `agent_docs/plans/v0.9.2-remaining-hardcodes.md` (13 hardcode fixes)
-- Active DOCX parity: `agent_docs/plans/v0.9.1-docx-manual-qa-followup.md`
-- Future backends: `agent_docs/plans/v1.0-multi-backend-foundation.md`
-- Archival: `agent_docs/plans/v0.9-visual-parity.md`, `agent_docs/plans/v0.9.1-latex-driven-audit.md`
+---
 
 ## Manual QA artifact convention
 
 - When the user asks to build DOCX/PDF/MD for parity checks:
-  - ask the user for the input `.tex` path (never assume or hardcode a private project path),
-  - default output directory: `/tmp/` (e.g. `/tmp/output.docx`, `/tmp/output.pdf`).
+  - ask the user for the input `.tex` path (never assume or hardcode
+    a private project path),
+  - default output directory: `/tmp/` (e.g. `/tmp/output.docx`).
+
+---
 
 ## Git workflow summary
 
 - Always work on feature branches: `git checkout -b feat/vX.Y-description`
 - Never push directly to master.
-- Always through PRs with quality gate green.
+- Always through PRs with quality gate green:
+  `cargo fmt --all && cargo clippy --workspace --all-targets -- -D warnings && cargo test --workspace`
 - Bot auto-merges with `bot-merge` label (squash + delete branch).
-- SSH key must be added per-session: `export SSH_AUTH_SOCK=$(ls -t /tmp/com.apple.launchd.*/Listeners 2>/dev/null | head -1)`
+- SSH key must be added per-session:
+  `export SSH_AUTH_SOCK=$(ls -t /tmp/com.apple.launchd.*/Listeners 2>/dev/null | head -1)`
+
+---
+
+## Session workflow
+
+1. Read all mandatory docs and all plan files.
+2. From `agent_docs/session_summary.md` and `agent_docs/plans/`, rebuild
+   your understanding of:
+   - current state of `ferritex-core` and renderers,
+   - current focus areas,
+   - agreed constraints and recent decisions,
+   - next steps.
+3. Ask the user what **specific task** should be done in this session
+   (feature, bugfix, refactor, tests, docs).
+4. Design and implement the task while strictly following:
+   - `latex_driven_policy.md`,
+   - `ARCHITECTURE.md`,
+   - `ROADMAP.md`,
+   - `coding_conventions.md`,
+   - `git_workflow.md`.
+5. If you change architecture, supported elements, or policies:
+   - update `docs/*.md` and/or `agent_docs/*.md`;
+   - update `agent_docs/session_summary.md` with:
+     - what was done,
+     - important decisions,
+     - issues discovered,
+     - suggested next steps.
 ```

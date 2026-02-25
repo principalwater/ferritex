@@ -75,17 +75,20 @@
 - README.md rewritten with FerriTeX branding (PR #31)
 - Full documentation audit and hardcode inventory
 
-## v0.9.2 (next)
-- Hyperlink color extraction from `\hypersetup{linkcolor=…}` (currently hardcoded black)
-- Hyperlink underline extraction from `\hypersetup{colorlinks=…}` (currently hardcoded none)
-- TOC uppercase gated on `heading_uppercase` (currently unconditional)
+## v0.9.2 ✅
+- Hyperlink style extraction from `\hypersetup`:
+  `linkcolor`/`allcolors` -> text color, `colorlinks`/`hidelinks` -> underline behavior
+- TOC uppercase and chapter prefix casing now gated by `heading_uppercase`
 - TOC depth extraction from `\setcounter{tocdepth}{N}`
-- Body text alignment extraction (currently hardcoded `Both`/justified)
-- Page number alignment extraction (currently hardcoded `Center`)
-- Caption bold extraction from `\captionsetup{labelfont=…}`
-- Plain-text chapter heading detection language-gated (currently Russian-only)
-- Em-to-twips conversion dynamic based on body font size (currently assumes 14pt)
-- Page gutter field or documented fallback (currently hardcoded `0`)
+- Body text alignment extraction from body-context alignment directives
+- Page-number alignment extraction from footer/page-style commands
+- Heading spacing extraction from memoir/disstyles skip commands (`before/afterchapskip`, `setbefore/after...skip`)
+- Heading delimiter extraction by level from memoir/disstyles (`headingdelim`, `setsecnumformat`) and TOC `aftersnum` normalization for conditional style branches
+- Caption label bold extraction from `\captionsetup{labelfont=…}`
+- Plain-text Russian heading detection gated by document language
+- Em-to-twips conversion made dynamic from actual body font size
+- Page gutter extraction from `\geometry{bindingoffset=...}`
+- TOC tab-stop minimum guard documented as DOCX safety constraint
 
 ## v1.0
 - OMML / Word equation rendering (upgrade from plain-text math approximation)

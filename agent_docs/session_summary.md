@@ -18,35 +18,26 @@ LaTeX source -> LayoutProbe + parser extraction
 ## Repository State
 
 - Active branch: `fix/v0.9.3-list-parity`
-- Latest branch commit: `a128b00` (`docs: align architecture and plans with LayoutProbe foundation`)
+- Latest branch commit: `8e0d646` (`docs: sync architecture, plans, and memory for LayoutProbe foundation`)
 - PR status:
   - PR `#35` on this branch is merged.
-  - No currently open PR from this branch.
-- Working tree: dirty (uncommitted `v0.9.5` foundation + toolchain/CI/docs sync).
-  - Core/probe changes:
-    - `crates/ferritex-core/src/layout_probe/*`
-    - `crates/ferritex-core/src/model/mod.rs`
-    - `crates/ferritex-core/src/parser/latex.rs`
-    - `crates/ferritex-core/tests/layout_probe_*`
-  - Infra/toolchain changes:
-    - `rust-toolchain.toml`
-    - `.cargo/config.toml`
-    - `.github/workflows/ci.yml`
-    - workspace/crate `Cargo.toml` + `Cargo.lock`
-  - Docs/memory changes:
-    - `README.md`, `AGENTS.md`, `docs/ARCHITECTURE.md`, `docs/ROADMAP.md`, `docs/SUPPORTED_ELEMENTS.md`
-    - `agent_docs/session_summary.md`
+  - PR `#36` is open: <https://github.com/principalwater/ferritex/pull/36>
+  - `bot-merge` label is applied.
+- Working tree: clean.
 
-## Quality Gate Status (current working tree)
+## Quality Gate Status
 
 - `cargo fmt --all` ✅
 - `cargo clippy --workspace --all-targets --locked -- -D warnings` ✅
 - `cargo test --workspace --locked` ✅
 - `cargo check -p ferritex-core --features layout-probe-tectonic --locked` ✅
+- PR checks (as of 2026-02-25):
+  - `Bot Merge` reported failure before CI checks appeared for this PR.
+  - A follow-up branch update may be needed to trigger fresh PR CI checks.
 
 ## Completed in This Session
 
-1. `v0.9.5` foundation implemented in code (working tree):
+1. `v0.9.5` foundation implemented in code:
    - `LayoutProbeOutput` contract added.
    - embedded `tectonic` probe module added (feature-gated).
    - merge contract implemented and wired into parser entrypoint.
@@ -76,12 +67,19 @@ LaTeX source -> LayoutProbe + parser extraction
    - reproducible environment/toolchain pinning documented.
    - native prerequisites for `layout-probe-tectonic` documented.
 
+6. Working tree was split and committed as two atomic commits:
+   - `2592aac` — code/infrastructure (`LayoutProbe`, toolchain, CI, lockfile, tests).
+   - `8e0d646` — docs/memory synchronization.
+
+7. Branch was pushed and PR opened:
+   - PR `#36`: <https://github.com/principalwater/ferritex/pull/36>
+
 ## Not Done / Known Limitations
 
-1. All above changes are still uncommitted in the current branch.
-2. `v0.9.5` is not fully closed by exit criteria yet:
+1. `v0.9.5` is not fully closed by exit criteria yet:
    - fallback reduction is not yet measured on a representative external multi-file corpus.
    - optional helper-crate stream (`biblatex`, `codebook-tree-sitter-latex`) has not been evaluated in code.
+2. PR `#36` still needs standard CI/merge completion.
 3. `v0.9.3` DOCX parity wave still has unresolved items from manual QA
    (title page, TOC density, math OMML, appendix layout, table typography, counter-driven prose robustness, publications block).
 
@@ -94,10 +92,7 @@ LaTeX source -> LayoutProbe + parser extraction
 
 ## Next Session Steps (ordered)
 
-1. Split current working tree into clean commits:
-   - code/infrastructure (`LayoutProbe` + toolchain/CI),
-   - docs/memory compaction synchronization.
-2. Re-run the full quality gate and probe feature check before commit/PR.
-3. Open PR for current branch updates (with clear scope and risk notes).
-4. After merge, run representative multi-file corpus validation and quantify reduced fallback usage for probe-covered fields.
-5. Continue `v0.9.3` remaining parity stream with parser/probe-first fixes only.
+1. Ensure PR `#36` receives fresh CI checks and reaches green status.
+2. Complete merge flow for PR `#36`.
+3. After merge, run representative multi-file corpus validation and quantify reduced fallback usage for probe-covered fields.
+4. Continue `v0.9.3` remaining parity stream with parser/probe-first fixes only.

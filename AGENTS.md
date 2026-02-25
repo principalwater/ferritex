@@ -97,7 +97,7 @@ categories must all follow this pattern — no exceptions:
 | TOC depth | `\setcounter{tocdepth}{N}` | `toc_depth` | 2 | ✅ parsed + rendered |
 | Page gutter | `\geometry{bindingoffset=...}` | `page_gutter_twips` | 0 | ✅ parsed + rendered |
 
-### LayoutProbe dependency policy (planned implementation baseline)
+### LayoutProbe dependency policy
 
 The following crates are approved for evaluation in the LayoutProbe stream:
 
@@ -113,6 +113,19 @@ Restricted candidates:
 |---|---|---|---|
 | `tex_engine` | `0.1.8` | GPL-3.0-or-later | Not allowed for MIT-licensed ferritex core integration |
 | `rustex_lib` | `0.1.7` | GPL-3.0-or-later | Not allowed for MIT-licensed ferritex core integration |
+
+Implementation baseline (v0.9.5 foundation):
+- `ferritex-core` exposes `LayoutProbeOutput` and merge helper with strict precedence:
+  `probe > parser > renderer fallback`.
+- Embedded probe backend is feature-gated:
+  `ferritex-core` feature `layout-probe-tectonic`.
+- `layout-probe-tectonic` uses `tectonic` driver APIs directly (no external LaTeX subprocess orchestration).
+- Platform note: building `layout-probe-tectonic` may require native libraries/toolchain
+  expected by `tectonic` (for example ICU/harfbuzz/pkg-config on some environments).
+- macOS contributors should use the target-specific defaults in `.cargo/config.toml`
+  (Homebrew `icu4c`/`harfbuzz`/`graphite2` paths) unless local overrides are needed.
+- First probe-covered fields:
+  page geometry, body font size/family, paragraph indent, line spacing, list geometry.
 
 **Known exception — `apply_known_counter_fallbacks`** (`parser/latex.rs`):
 Contains dissertation-specific Russian counter placeholder templates
@@ -148,8 +161,12 @@ Track implementation status in docs/SUPPORTED_ELEMENTS.md.
 
 ## Before every commit
 - cargo fmt --all
-- cargo clippy --workspace --all-targets -- -D warnings
-- cargo test --workspace
+- cargo clippy --workspace --all-targets --locked -- -D warnings
+- cargo test --workspace --locked
+
+## Toolchain lock
+- Rust toolchain is pinned in `rust-toolchain.toml` (`1.93.1`).
+- CI must use the same pinned Rust version.
 
 ## PR automation context
 - CI workflow name is `CI`; bot workflows react to successful CI runs.
@@ -175,7 +192,8 @@ Update this file with: crate name, version pinned, reason for adding.
 | env_logger | 0.11.9 | Env-driven logging implementation |
 | zip | 8.1.0 | ZIP/DOCX container handling |
 | crossterm | 0.29.0 | Terminal events/raw mode for TUI |
-| ratatui | 0.29.0 | TUI rendering/layout |
+| ratatui | 0.30.0 | TUI rendering/layout |
+| tectonic | 0.15.0 | Embedded TeX engine for LayoutProbe (feature-gated in ferritex-core) |
 
 ### Contributor checklist
 - Keep `src/main.rs` as orchestration only.

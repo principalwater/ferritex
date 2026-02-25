@@ -2,6 +2,7 @@
 name = "ferritex-renderer-md"
 version = "0.1.0"
 edition = "2024"
+rust-version = "1.93"
 description = "Markdown renderer backend for ferritex"
 license = "MIT"
 

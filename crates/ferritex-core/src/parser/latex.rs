@@ -4,6 +4,7 @@ use std::{
     process::Command,
 };
 
+use crate::layout_probe::{merge_probe_and_parser_layout, probe_layout};
 use crate::model::{
     Block, Document, DocumentLayout, Figure, Inline, List, ParagraphStyle, Table, TableCell,
     TableRow, TocEntry,
@@ -92,9 +93,11 @@ pub fn parse_latex_file(input_path: &Path) -> anyhow::Result<Document> {
     let root_dir = input_path.parent().unwrap_or_else(|| Path::new("."));
     let mut stack = Vec::new();
     let expanded = expand_inputs_recursive(input_path, root_dir, &mut stack)?;
+    let probe_layout_output = probe_layout(input_path, &expanded).unwrap_or_default();
     let autocite_mode = detect_autocite_mode(&expanded);
     let mut metadata = collect_parse_metadata(&expanded, input_path, root_dir);
     let mut document = parse_latex_with_mode(&expanded, autocite_mode, &metadata, true, true);
+    document.layout = merge_probe_and_parser_layout(&probe_layout_output, document.layout);
     enrich_structural_counters(&mut metadata, &document, &expanded);
     resolve_dynamic_placeholders(&mut document.blocks, &metadata);
     resolve_footnote_citation_placeholders(&mut document.blocks, &metadata.bibliography);

@@ -2,8 +2,14 @@
 name = "ferritex-core"
 version = "0.1.0"
 edition = "2024"
+rust-version = "1.93"
 description = "Core parser/model contracts for ferritex backends"
 license = "MIT"
 
+[features]
+default = []
+layout-probe-tectonic = ["dep:tectonic"]
+
 [dependencies]
 anyhow = { workspace = true }
+tectonic = { version = "0.15.0", optional = true, features = ["external-harfbuzz"] }

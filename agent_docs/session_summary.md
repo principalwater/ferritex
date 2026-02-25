@@ -2,191 +2,97 @@
 
 ## Project Goal
 
-`ferritex` is a generic LaTeX-driven conversion engine with:
-- a shared semantic core (`ferritex-core`),
-- backend renderers (`ferritex-renderer-docx` implemented, `pdf`/`md` scaffolded),
-- no document-specific formatting hardcodes.
+`ferritex` is a generic LaTeX-driven conversion engine with a shared semantic core
+and backend renderers, without corpus-specific formatting hardcodes.
 
 Mandatory pipeline:
 
 ```text
-LaTeX source -> (LayoutProbe + parser extraction) -> AST + DocumentLayout -> RenderProfile::from_layout() -> renderer
+LaTeX source -> LayoutProbe + parser extraction
+             -> merge (probe > parser > fallback)
+             -> DocumentLayout
+             -> RenderProfile::from_layout()
+             -> renderer
 ```
-
-All renderer constants are fallback defaults only.
 
 ## Repository State
 
 - Active branch: `fix/v0.9.3-list-parity`
-- Open PR: `#34` (`fix/v0.9.3-list-parity` -> `master`)
-- Latest branch commit: `499faac` (`fix(v0.9.3): improve list parity extraction and superscript spacing`)
-- Working tree after PR commit: dirty in docs/plans (strategic rewrite toward LayoutProbe architecture in progress)
-- Local quality gate on current tree: green
-  - `cargo fmt --all` ✅
-  - `cargo clippy --workspace --all-targets -- -D warnings` ✅
-  - `cargo test --workspace` ✅
+- Latest branch commit: `8e0d646` (`docs: sync architecture, plans, and memory for LayoutProbe foundation`)
+- PR status:
+  - PR `#35` on this branch is merged.
+  - PR `#36` is open: <https://github.com/principalwater/ferritex/pull/36>
+  - `bot-merge` label is applied.
+- Working tree: clean.
 
-## Incremental Update (2026-02-25, current working tree)
+## Quality Gate Status
 
-- Active implementation branch for current fixes: `fix/v0.9.3-list-parity`
-- Completed in code (not yet committed/PR'ed):
-  1. **Lists parity (wave-2 item #1)**:
-     - DOCX list paragraphs switched from `FirstLine(...)` to proper hanging-indent mapping.
-     - List text indent now resolves as `leftmargin + itemindent` with deterministic fallback behavior.
-     - Parser `\setlist{...}` parameter extraction now prefers the **last** declaration (LaTeX override order), not the first one.
-     - Added parser + renderer unit tests covering override order, hanging-indent XML, and leftmargin/itemindent compensation.
-  2. **Superscript citation spacing (wave-2 item #9)**:
-     - `append_inlines_to_paragraph` now trims trailing spaces before `Inline::Footnote` markers in the main render path.
-     - Added renderer unit test asserting no trailing space before superscript footnote markers.
-  3. **Parser coverage expansion for list geometry extraction**:
-     - `\setlist{...}` parsing now handles:
-       - key/value whitespace forms (`key = value`),
-       - starred key aliases (e.g. `labelsep*`),
-       - top-level comma splitting with nested `{...}` / `[...]` / `(...)` safety,
-       - last-match override order for repeated declarations.
-     - `itemindent` extraction now falls back to `listparindent` when `itemindent` is absent.
-     - `\dimexpr` evaluation for list parameters now accepts length terms (e.g. `-1em+1pt`) in addition to plain integer twips substitutions.
-     - LaTeX length parser now supports additional TeX units and additive glue forms:
-       - units: `pc`, `bp`, `dd`, `cc`, `sp`, `ex` (plus existing `mm`, `cm`, `in`, `em`, `pt`),
-       - forms: `<len> plus <len>`, `<len> minus <len>` (deterministic additive mapping).
-     - Added parser unit tests covering all of the above extraction and conversion paths.
-- Focused validation passed on this tree:
-  - `cargo fmt --all` ✅
-  - `cargo clippy -p ferritex-core -p ferritex-renderer-docx --all-targets -- -D warnings` ✅
-  - `cargo test -p ferritex-renderer-docx -- --nocapture` ✅
-  - `cargo test -p ferritex-core list_ -- --nocapture` ✅
-  - `cargo test --test integration_docx -- --nocapture` ✅
-  - `cargo clippy -p ferritex-core --all-targets -- -D warnings` ✅
-  - `cargo test -p ferritex-core parse_latex_length_supports -- --nocapture` ✅
-
-## Strategic Direction Update (2026-02-25)
-
-Team decision: shift from parser-only extraction to a two-layer extraction model
-to maximize compatibility across diverse real-world LaTeX projects.
-
-Approved architecture target:
-
-```text
-LaTeX source -> LayoutProbe (embedded `tectonic`) + parser static extraction
-             -> merge (`probe > parser > fallback`)
-             -> DocumentLayout
-             -> renderer
-```
-
-Approved/considered dependency direction:
-- Primary probe engine: `tectonic` (`0.15.0`, MIT)
-- Optional helpers:
-  - `codebook-tree-sitter-latex` (`0.6.1`, MIT) for syntax indexing only
-  - `biblatex` (`0.11.0`, MIT/Apache-2.0) for bibliography semantics
-- Excluded for MIT core integration:
-  - `tex_engine`, `rustex_lib` (GPL-3.0-or-later)
-
-## Capability Snapshot
-
-### `ferritex-core` (current)
-
-- Recursive include expansion (`\input`, `\include`)
-- AST coverage for sections/paragraphs/lists/tables/figures/display math/footnotes/TOC marker/bibliography heading
-- `DocumentLayout` as style contract:
-  - geometry/page size/gutter/header/footer
-  - body spacing/font families/font sizes/paragraph indents/alignment
-  - heading alignment/uppercase/indents/spacing/number delimiters (including level-specific delimiters)
-  - TOC depth/indents/numwidth/leaders/chapter prefix/aftersnum/appendix prefix/chapter entry spacing
-  - captions (labels/separators/position/skip/indent/singlelinecheck/labelfont bold)
-  - list geometry and bullet marker
-  - hyperlink styling (`\hypersetup`)
-  - page number alignment
-  - source-line spacing (`\tablesource`, `\figuresource`)
-- Reference and label normalization (internal anchors/placeholders)
-
-### `ferritex-renderer-docx` (current)
-
-- DOCX style system (`BodyText`, `Heading*`, `TOC*`, `Caption`, `FootnoteText`, list/table paragraph styles)
-- TOC generation from AST / `.toc`, with internal hyperlinks
-- Table and figure rendering (caption/source handling, alignment mapping)
-- Native DOCX footnotes and reference markers
-- Parser-driven paragraph/heading/list/table mapping via `RenderProfile::from_layout()`
-- Hyperlink color/underline, body/page-number alignment, heading spacing, TOC depth all driven from `DocumentLayout`
-
-### Not implemented yet (major)
-
-- Native OMML equation generation (math is still text approximation)
-- Image embedding for DOCX
-- Full bibliography entry rendering
-- Production PDF/MD renderers
+- `cargo fmt --all` ✅
+- `cargo clippy --workspace --all-targets --locked -- -D warnings` ✅
+- `cargo test --workspace --locked` ✅
+- `cargo check -p ferritex-core --features layout-probe-tectonic --locked` ✅
+- PR checks (as of 2026-02-25):
+  - `Bot Merge` reported failure before CI checks appeared for this PR.
+  - A follow-up branch update may be needed to trigger fresh PR CI checks.
 
 ## Completed in This Session
 
-Primary goal in this session: continue parity against a large dissertation-style LaTeX project without introducing corpus-specific hardcodes.
+1. `v0.9.5` foundation implemented in code:
+   - `LayoutProbeOutput` contract added.
+   - embedded `tectonic` probe module added (feature-gated).
+   - merge contract implemented and wired into parser entrypoint.
+   - precedence enforced: `probe > parser > fallback`.
+   - high-impact fields covered: page geometry, body font size/family, paragraph indent, line spacing, list geometry.
+   - new unit/integration/property-style tests added for merge behavior and determinism.
 
-Implemented and validated:
+2. `layout-probe-tectonic` environment/build issues in this local macOS setup resolved:
+   - `tectonic` switched to `external-harfbuzz`.
+   - repo-level env defaults for pkg-config/C/C++ flags added in `.cargo/config.toml`.
+   - probe backend error handling and log artifact extraction path fixed for current toolchain.
 
-1. Fixed heading-number delimiter semantics for memoir/disstyles patterns:
-   - added `heading_number_delimiter_{section,subsection,subsubsection}` to `DocumentLayout`
-   - parser extraction now splits chapter delimiter vs section-level delimiter via:
-     - `\setcounter{headingdelim}{...}`
-     - `\setsecnumformat{...}` fallback
-   - DOCX renderer now applies delimiter by heading level instead of one global value
+3. Toolchain/dependency synchronization implemented:
+   - local Rust updated to `1.93.1`.
+   - repository toolchain pinned via `rust-toolchain.toml`.
+   - crate-level `rust-version = "1.93"` added.
+   - `ratatui` updated to latest stable (`0.30.0`).
 
-2. Fixed TOC false positives caused by inactive conditional branches in style files:
-   - `toc_aftersnum_*` is now normalized from `headingdelim` when that counter is present
-   - prevents incorrect TOC numbering like `1.1.` when effective style requires `1.1`
+4. CI synchronized with local environment:
+   - pinned Rust `1.93.1`.
+   - lockfile-safe checks (`--locked`) for clippy/tests.
+   - native deps install step for probe feature.
+   - explicit CI feature check for `layout-probe-tectonic`.
 
-3. Added chapter-prefix override for TOC based on `chapstyle`:
-   - avoids picking `\cftchaptername` from inactive branches when `chapstyle=0`
+5. Documentation synchronized with implemented architecture/policy:
+   - pipeline and precedence docs updated.
+   - reproducible environment/toolchain pinning documented.
+   - native prerequisites for `layout-probe-tectonic` documented.
 
-4. Added/updated parser+renderer unit tests for all changes above.
+6. Working tree was split and committed as two atomic commits:
+   - `2592aac` — code/infrastructure (`LayoutProbe`, toolchain, CI, lockfile, tests).
+   - `8e0d646` — docs/memory synchronization.
 
-5. Rebuilt manual QA artifact:
-   - `/tmp/dissertation.docx` (latest in this session)
+7. Branch was pushed and PR opened:
+   - PR `#36`: <https://github.com/principalwater/ferritex/pull/36>
 
-## Manual QA Gaps Reported by User (Next Priority)
+## Not Done / Known Limitations
 
-The following defects are confirmed as next work batch and must be solved parser-first:
+1. `v0.9.5` is not fully closed by exit criteria yet:
+   - fallback reduction is not yet measured on a representative external multi-file corpus.
+   - optional helper-crate stream (`biblatex`, `codebook-tree-sitter-latex`) has not been evaluated in code.
+2. PR `#36` still needs standard CI/merge completion.
+3. `v0.9.3` DOCX parity wave still has unresolved items from manual QA
+   (title page, TOC density, math OMML, appendix layout, table typography, counter-driven prose robustness, publications block).
 
-1. Numbered and unordered lists:
-   - wrong left indent and width-justification behavior
+## Active Plans
 
-2. Title page fidelity:
-   - header area and central title block differ from LaTeX PDF/manual DOCX
+1. Primary: `agent_docs/plans/v0.9.5-layoutprobe-tectonic-foundation.md`
+2. Secondary: `agent_docs/plans/v0.9.3-docx-parity-disstyles-wave2.md`
+3. Cross-cutting: `agent_docs/plans/v0.9.4-test-organization-and-property-based.md`
+4. Blocked downstream: `agent_docs/plans/v1.0-multi-backend-foundation.md`
 
-3. TOC pagination density:
-   - content that moves to the next page in PDF/manual DOCX still fits on previous page in ferritex DOCX
+## Next Session Steps (ordered)
 
-4. Math support:
-   - formulas still not rendered as proper Word equations
-
-5. Appendices page layout:
-   - mixed portrait/landscape pages and explicit LaTeX page breaks not respected
-
-6. Table fonts:
-   - font sizing/weight behavior remains partially incorrect
-
-7. “Объем и структура работы” counter text mismatch:
-   - rendered text matches canonical PDF text, but resulting DOCX page/figure/table counts differ
-
-8. “Публикации по теме исследования” section rendering:
-   - content rendered incorrectly (unsupported LaTeX constructs/macros in this block)
-
-9. Superscript citation spacing:
-   - footnote superscripts appear visually detached from surrounding text
-
-## Architecture/Policy Decisions Reaffirmed
-
-1. No renderer-side one-off style hacks for this dissertation template.
-2. Every visual fix must map to generic LaTeX semantics and flow through:
-   parser -> `DocumentLayout` -> `RenderProfile` -> renderer.
-3. `ferritex` must remain reusable across articles/journals/dissertations/reports/books without code rewrites.
-4. Repository Markdown files are the persistent multi-agent memory; chat/global memory is not authoritative.
-
-## Immediate Next Steps
-
-1. Execute new foundation plan:
-   - `agent_docs/plans/v0.9.5-layoutprobe-tectonic-foundation.md`
-2. Keep parity stream active for remaining DOCX deltas:
-   - `agent_docs/plans/v0.9.3-docx-parity-disstyles-wave2.md`
-3. Start cross-cutting test modernization stream:
-   - `agent_docs/plans/v0.9.4-test-organization-and-property-based.md`
-   - run comprehensive test organization audit (Rust Book model) and property-based adoption plan
-
-4. Keep `v1.0` backend work (PDF/MD) blocked until LayoutProbe foundation and DOCX parity wave stabilize on quality gate + manual QA.
+1. Ensure PR `#36` receives fresh CI checks and reaches green status.
+2. Complete merge flow for PR `#36`.
+3. After merge, run representative multi-file corpus validation and quantify reduced fallback usage for probe-covered fields.
+4. Continue `v0.9.3` remaining parity stream with parser/probe-first fixes only.

@@ -298,6 +298,130 @@ pub struct DocumentLayout {
     pub document_language: Option<String>,
 }
 
+/// Effective layout/style values extracted by an engine-backed `LayoutProbe`.
+///
+/// This structure intentionally stores only fields where probe output can
+/// provide high-confidence runtime-evaluated values.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct LayoutProbeOutput {
+    // ── Page geometry ──────────────────────────────────────────────────
+    /// Top page margin in twips.
+    pub page_margin_top_twips: Option<i32>,
+    /// Bottom page margin in twips.
+    pub page_margin_bottom_twips: Option<i32>,
+    /// Left page margin in twips.
+    pub page_margin_left_twips: Option<i32>,
+    /// Right page margin in twips.
+    pub page_margin_right_twips: Option<i32>,
+    /// Header distance in twips.
+    pub page_margin_header_twips: Option<i32>,
+    /// Footer distance in twips.
+    pub page_margin_footer_twips: Option<i32>,
+    /// Binding gutter in twips.
+    pub page_gutter_twips: Option<i32>,
+    /// Page width in twips.
+    pub page_width_twips: Option<u32>,
+    /// Page height in twips.
+    pub page_height_twips: Option<u32>,
+
+    // ── Typography ─────────────────────────────────────────────────────
+    /// Main body font family.
+    pub font_family_body: Option<String>,
+    /// Body font size in half-points.
+    pub font_size_body_hp: Option<usize>,
+    /// First-line body paragraph indent in twips.
+    pub body_first_line_indent_twips: Option<i32>,
+    /// Body paragraph line spacing in twips.
+    pub body_line_spacing_twips: Option<i32>,
+
+    // ── List geometry ──────────────────────────────────────────────────
+    /// Left list indent in twips.
+    pub list_left_indent_twips: Option<i32>,
+    /// List hanging indent in twips.
+    pub list_hanging_indent_twips: Option<i32>,
+    /// First-line item indent (`itemindent`) in twips.
+    pub list_item_indent_twips: Option<i32>,
+    /// Label separation (`labelsep`) in twips.
+    pub list_label_sep_twips: Option<i32>,
+    /// Label width (`labelwidth`) in twips.
+    pub list_label_width_twips: Option<i32>,
+}
+
+impl LayoutProbeOutput {
+    /// Merge probe output with parser-extracted layout.
+    ///
+    /// Precedence is strict and deterministic:
+    /// 1. probe value (when present),
+    /// 2. parser value,
+    /// 3. renderer fallback (later in `RenderProfile::from_layout()`).
+    pub fn merge_into_layout(&self, parser_layout: DocumentLayout) -> DocumentLayout {
+        let mut merged = parser_layout;
+        merged.page_margin_top_twips = self.page_margin_top_twips.or(merged.page_margin_top_twips);
+        merged.page_margin_bottom_twips = self
+            .page_margin_bottom_twips
+            .or(merged.page_margin_bottom_twips);
+        merged.page_margin_left_twips = self
+            .page_margin_left_twips
+            .or(merged.page_margin_left_twips);
+        merged.page_margin_right_twips = self
+            .page_margin_right_twips
+            .or(merged.page_margin_right_twips);
+        merged.page_margin_header_twips = self
+            .page_margin_header_twips
+            .or(merged.page_margin_header_twips);
+        merged.page_margin_footer_twips = self
+            .page_margin_footer_twips
+            .or(merged.page_margin_footer_twips);
+        merged.page_gutter_twips = self.page_gutter_twips.or(merged.page_gutter_twips);
+        merged.page_width_twips = self.page_width_twips.or(merged.page_width_twips);
+        merged.page_height_twips = self.page_height_twips.or(merged.page_height_twips);
+        merged.font_family_body = self.font_family_body.clone().or(merged.font_family_body);
+        merged.font_size_body_hp = self.font_size_body_hp.or(merged.font_size_body_hp);
+        merged.body_first_line_indent_twips = self
+            .body_first_line_indent_twips
+            .or(merged.body_first_line_indent_twips);
+        merged.body_line_spacing_twips = self
+            .body_line_spacing_twips
+            .or(merged.body_line_spacing_twips);
+        merged.list_left_indent_twips = self
+            .list_left_indent_twips
+            .or(merged.list_left_indent_twips);
+        merged.list_hanging_indent_twips = self
+            .list_hanging_indent_twips
+            .or(merged.list_hanging_indent_twips);
+        merged.list_item_indent_twips = self
+            .list_item_indent_twips
+            .or(merged.list_item_indent_twips);
+        merged.list_label_sep_twips = self.list_label_sep_twips.or(merged.list_label_sep_twips);
+        merged.list_label_width_twips = self
+            .list_label_width_twips
+            .or(merged.list_label_width_twips);
+        merged
+    }
+
+    /// Returns `true` when the probe did not produce any values.
+    pub fn is_empty(&self) -> bool {
+        self.page_margin_top_twips.is_none()
+            && self.page_margin_bottom_twips.is_none()
+            && self.page_margin_left_twips.is_none()
+            && self.page_margin_right_twips.is_none()
+            && self.page_margin_header_twips.is_none()
+            && self.page_margin_footer_twips.is_none()
+            && self.page_gutter_twips.is_none()
+            && self.page_width_twips.is_none()
+            && self.page_height_twips.is_none()
+            && self.font_family_body.is_none()
+            && self.font_size_body_hp.is_none()
+            && self.body_first_line_indent_twips.is_none()
+            && self.body_line_spacing_twips.is_none()
+            && self.list_left_indent_twips.is_none()
+            && self.list_hanging_indent_twips.is_none()
+            && self.list_item_indent_twips.is_none()
+            && self.list_label_sep_twips.is_none()
+            && self.list_label_width_twips.is_none()
+    }
+}
+
 /// A single table-of-contents entry extracted from LaTeX auxiliary data.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct TocEntry {

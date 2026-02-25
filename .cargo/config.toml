@@ -1,0 +1,4 @@
+[env]
+PKG_CONFIG_PATH = { value = "/opt/homebrew/opt/icu4c/lib/pkgconfig:/opt/homebrew/opt/harfbuzz/lib/pkgconfig:/opt/homebrew/opt/graphite2/lib/pkgconfig:/usr/local/opt/icu4c/lib/pkgconfig:/usr/local/opt/harfbuzz/lib/pkgconfig:/usr/local/opt/graphite2/lib/pkgconfig", force = false }
+CFLAGS = { value = "-I/opt/homebrew/opt/harfbuzz/include -I/usr/local/opt/harfbuzz/include", force = false }
+CXXFLAGS = { value = "-std=c++17 -I/opt/homebrew/opt/harfbuzz/include -I/usr/local/opt/harfbuzz/include", force = false }

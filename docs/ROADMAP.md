@@ -6,11 +6,12 @@
 
 ## Cross-version requirement
 - Preserve a single LaTeX-driven semantic core for all output formats.
-- New formatting features should be implemented as parser/model semantics first, then rendered in DOCX/PDF backends.
+- New formatting features should be implemented as extraction/model semantics first (`LayoutProbe` + parser), then rendered in DOCX/PDF backends.
 - Avoid backend-only visual hacks when source LaTeX intent can be propagated.
 - Keep ferritex output aligned with the effective parameters of the canonical LaTeX build configuration (layout, numbering, headings, page numbers, footnotes/citations).
 - Treat manual QA deltas as extraction/mapping gaps, not as invitations for corpus-specific hardcoded tweaks.
 - Every formatting milestone must explicitly list which LaTeX parameters are now parsed and how they map to renderer settings.
+- Fallback defaults are last-resort only: use them only when both probe and parser extraction are absent.
 
 ## v0.1 ✅
 - Sections and subsections
@@ -89,6 +90,16 @@
 - Em-to-twips conversion made dynamic from actual body font size
 - Page gutter extraction from `\geometry{bindingoffset=...}`
 - TOC tab-stop minimum guard documented as DOCX safety constraint
+
+## v0.9.5 (planned)
+- Introduce `LayoutProbe` stage in `ferritex-core` for engine-evaluated effective layout/style extraction.
+- Primary engine candidate: embedded `tectonic` (`0.15.0`, MIT).
+- Optional helper crates for targeted tasks:
+  - `codebook-tree-sitter-latex` (`0.6.1`, MIT) for syntax indexing only,
+  - `biblatex` (`0.11.0`, MIT/Apache-2.0) for bibliography semantics.
+- License guardrail: avoid GPL-only TeX engine crates (`tex_engine`, `rustex_lib`) in MIT ferritex core.
+- Add sidecar/merge flow: probe output + parser extraction -> `DocumentLayout` with precedence (`probe > parser > fallback`).
+- Add regression/property tests for probe-parser merge determinism and fallback minimization.
 
 ## v1.0
 - OMML / Word equation rendering (upgrade from plain-text math approximation)

@@ -26,6 +26,39 @@ All renderer constants are fallback defaults only.
   - `cargo clippy --workspace --all-targets -- -D warnings` ✅
   - `cargo test --workspace` ✅
 
+## Incremental Update (2026-02-25, current working tree)
+
+- Active implementation branch for current fixes: `fix/v0.9.3-list-parity`
+- Completed in code (not yet committed/PR'ed):
+  1. **Lists parity (wave-2 item #1)**:
+     - DOCX list paragraphs switched from `FirstLine(...)` to proper hanging-indent mapping.
+     - List text indent now resolves as `leftmargin + itemindent` with deterministic fallback behavior.
+     - Parser `\setlist{...}` parameter extraction now prefers the **last** declaration (LaTeX override order), not the first one.
+     - Added parser + renderer unit tests covering override order, hanging-indent XML, and leftmargin/itemindent compensation.
+  2. **Superscript citation spacing (wave-2 item #9)**:
+     - `append_inlines_to_paragraph` now trims trailing spaces before `Inline::Footnote` markers in the main render path.
+     - Added renderer unit test asserting no trailing space before superscript footnote markers.
+  3. **Parser coverage expansion for list geometry extraction**:
+     - `\setlist{...}` parsing now handles:
+       - key/value whitespace forms (`key = value`),
+       - starred key aliases (e.g. `labelsep*`),
+       - top-level comma splitting with nested `{...}` / `[...]` / `(...)` safety,
+       - last-match override order for repeated declarations.
+     - `itemindent` extraction now falls back to `listparindent` when `itemindent` is absent.
+     - `\dimexpr` evaluation for list parameters now accepts length terms (e.g. `-1em+1pt`) in addition to plain integer twips substitutions.
+     - LaTeX length parser now supports additional TeX units and additive glue forms:
+       - units: `pc`, `bp`, `dd`, `cc`, `sp`, `ex` (plus existing `mm`, `cm`, `in`, `em`, `pt`),
+       - forms: `<len> plus <len>`, `<len> minus <len>` (deterministic additive mapping).
+     - Added parser unit tests covering all of the above extraction and conversion paths.
+- Focused validation passed on this tree:
+  - `cargo fmt --all` ✅
+  - `cargo clippy -p ferritex-core -p ferritex-renderer-docx --all-targets -- -D warnings` ✅
+  - `cargo test -p ferritex-renderer-docx -- --nocapture` ✅
+  - `cargo test -p ferritex-core list_ -- --nocapture` ✅
+  - `cargo test --test integration_docx -- --nocapture` ✅
+  - `cargo clippy -p ferritex-core --all-targets -- -D warnings` ✅
+  - `cargo test -p ferritex-core parse_latex_length_supports -- --nocapture` ✅
+
 ## Capability Snapshot
 
 ### `ferritex-core` (current)
@@ -128,9 +161,12 @@ The following defects are confirmed as next work batch and must be solved parser
 
 1. Execute the new active plan:
    - `agent_docs/plans/v0.9.3-docx-parity-disstyles-wave2.md`
+2. Start cross-cutting test modernization stream:
+   - `agent_docs/plans/v0.9.4-test-organization-and-property-based.md`
+   - run comprehensive test organization audit (Rust Book model) and property-based adoption plan
 
-2. Resolve PR conflict hygiene before merge:
+3. Resolve PR conflict hygiene before merge:
    - rebuild branch from `origin/master`
    - cherry-pick only unique commits (exclude duplicate equivalent of merged `c33803e`)
 
-3. Keep `v1.0` backend work (PDF/MD) blocked until this DOCX parity wave stabilizes on quality gate + manual QA.
+4. Keep `v1.0` backend work (PDF/MD) blocked until this DOCX parity wave stabilizes on quality gate + manual QA.

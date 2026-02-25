@@ -40,6 +40,8 @@ const DEFAULT_CAPTION_LABEL_BOLD: bool = true;
 
 const LINE_SPACING_SINGLE_TWIPS: i32 = 240;
 const LINE_SPACING_DEFAULT_BODY_TWIPS: i32 = 360;
+/// DOCX conversion constant: 1 point = 20 twips.
+const DOCX_TWIPS_PER_POINT_F64: f64 = 20.0;
 
 const FIRST_LINE_INDENT_TWIPS: i32 = 709;
 const DEFAULT_CAPTION_LABEL_SEPARATOR: &str = ". ";
@@ -56,6 +58,8 @@ const IMAGE_SAFE_SCALE_DEN: u32 = 100;
 const DEFAULT_LIST_LEFT_TWIPS: i32 = 709;
 /// Default list hanging indent = labelsep + labelwidth ≈ 2 × 0.5em at 14pt ≈ 284 twips.
 const DEFAULT_LIST_HANGING_TWIPS: i32 = 284;
+/// LaTeX default list label separator (enumitem/list geometry baseline): `0.5em`.
+const DEFAULT_LIST_LABEL_SEP_EM: f64 = 0.5;
 /// Default bullet character for unordered lists.
 const DEFAULT_LIST_BULLET: &str = "•";
 /// Default vertical space above `\tablesource` line in twips (4pt).
@@ -184,8 +188,10 @@ struct RenderProfile {
     toc_appendix_name: String,
 
     // ── List formatting ──────────────────────────────────────────────
+    /// Text indent for list paragraphs in twips (where list item text starts).
     list_left_indent_twips: i32,
-    list_item_indent_twips: i32,
+    /// Hanging indent width for list paragraphs in twips (label box + separator span).
+    list_hanging_indent_twips: i32,
     /// Bullet character for unordered list items. Driven by `\renewcommand{\labelitemi}{...}`.
     list_bullet_char: String,
 
@@ -221,21 +227,42 @@ struct RenderProfile {
 
 impl RenderProfile {
     fn from_layout(layout: &DocumentLayout) -> Self {
-        let list_hanging_indent_twips = layout.list_hanging_indent_twips.unwrap_or_else(|| {
-            if layout.list_label_sep_twips.is_none() && layout.list_label_width_twips.is_none() {
-                DEFAULT_LIST_HANGING_TWIPS
+        let derived_list_hanging_indent_twips =
+            layout.list_hanging_indent_twips.unwrap_or_else(|| {
+                if layout.list_label_sep_twips.is_none() && layout.list_label_width_twips.is_none()
+                {
+                    DEFAULT_LIST_HANGING_TWIPS
+                } else {
+                    let sep = layout.list_label_sep_twips.unwrap_or_else(|| {
+                        // Fallback when `labelsep` is not present in LaTeX source.
+                        // Mirrors parser-side em conversion based on current body font size.
+                        em_to_twips(
+                            layout.font_size_body_hp.unwrap_or(FONT_SIZE_BODY_HP),
+                            DEFAULT_LIST_LABEL_SEP_EM,
+                        )
+                    });
+                    let width = layout.list_label_width_twips.unwrap_or(sep); // auto (!) = labelsep
+                    sep + width
+                }
+            });
+        let body_first_line_indent_twips = layout
+            .body_first_line_indent_twips
+            .unwrap_or(DEFAULT_LIST_LEFT_TWIPS);
+        let list_left_margin_twips =
+            sanitize_nonnegative_twips(layout.list_left_indent_twips, body_first_line_indent_twips);
+        let list_hanging_indent_twips = sanitize_nonnegative_twips(
+            layout.list_hanging_indent_twips,
+            derived_list_hanging_indent_twips,
+        );
+        let list_item_indent_twips = sanitize_nonnegative_twips(
+            layout.list_item_indent_twips,
+            if layout.list_left_indent_twips.is_some() {
+                list_hanging_indent_twips
             } else {
-                let sep = layout.list_label_sep_twips.unwrap_or_else(|| {
-                    // 0.5em in twips scaled to the actual body font size.
-                    // Formula mirrors em_twips_for_body_font() in ferritex-core:
-                    //   (body_pt * 20.0 * em).round()
-                    let body_hp = layout.font_size_body_hp.unwrap_or(FONT_SIZE_BODY_HP) as f64;
-                    (body_hp / 2.0 * 20.0 * 0.5).round() as i32
-                });
-                let width = layout.list_label_width_twips.unwrap_or(sep); // auto (!) = labelsep
-                sep + width
-            }
-        });
+                0
+            },
+        );
+        let list_text_indent_twips = list_left_margin_twips.saturating_add(list_item_indent_twips);
         Self {
             page_margin_top_twips: sanitize_twips(
                 layout.page_margin_top_twips,
@@ -473,16 +500,9 @@ impl RenderProfile {
                 .unwrap_or_default(),
             // TOC appendix prefix: empty = no appendix prefix.
             toc_appendix_name: layout.toc_appendix_name.clone().unwrap_or_default(),
-            // List indentation: left = parindent, hanging = labelsep + labelwidth.
-            list_left_indent_twips: layout.list_left_indent_twips.unwrap_or_else(|| {
-                layout
-                    .body_first_line_indent_twips
-                    .unwrap_or(DEFAULT_LIST_LEFT_TWIPS)
-            }),
-            list_item_indent_twips: sanitize_nonnegative_twips(
-                layout.list_item_indent_twips,
-                list_hanging_indent_twips,
-            ),
+            // List indentation: text-left = leftmargin + itemindent, hanging = labelsep + labelwidth.
+            list_left_indent_twips: list_text_indent_twips,
+            list_hanging_indent_twips,
             list_bullet_char: layout
                 .list_bullet_char
                 .clone()
@@ -1471,7 +1491,9 @@ fn register_numbering(docx: Docx, num_id: usize, ordered: bool, profile: &Render
     )
     .indent(
         Some(profile.list_left_indent_twips),
-        Some(SpecialIndentType::FirstLine(0)),
+        Some(SpecialIndentType::Hanging(
+            profile.list_hanging_indent_twips,
+        )),
         None,
         None,
     );
@@ -1495,7 +1517,9 @@ fn build_list_item(
         .line_spacing(line_spacing(profile.body_line_spacing_twips))
         .indent(
             Some(profile.list_left_indent_twips),
-            Some(SpecialIndentType::FirstLine(profile.list_item_indent_twips)),
+            Some(SpecialIndentType::Hanging(
+                profile.list_hanging_indent_twips,
+            )),
             None,
             None,
         )
@@ -2256,9 +2280,14 @@ fn line_spacing_with_spacing(
     spacing
 }
 
+fn em_to_twips(font_size_hp: usize, em: f64) -> i32 {
+    let point_size = font_size_hp as f64 / 2.0;
+    (point_size * DOCX_TWIPS_PER_POINT_F64 * em).round() as i32
+}
+
 fn estimate_toc_prefix_width_twips(prefix: &str, font_size_hp: usize) -> i32 {
     let chars = prefix.chars().count() as f64;
-    let em_twips = (font_size_hp as f64 / 2.0) * 20.0;
+    let em_twips = em_to_twips(font_size_hp, 1.0) as f64;
     let width = (chars * TOC_PREFIX_ESTIMATED_CHAR_WIDTH_EM * em_twips).round();
     if width.is_finite() && width > 0.0 {
         width as i32
@@ -2621,6 +2650,7 @@ fn append_inlines_to_paragraph(
                 }
             }
             Inline::Footnote(content) => {
+                trim_trailing_spaces_from_paragraph_runs(&mut para);
                 let mut footnote_para = Paragraph::new()
                     .style("FootnoteText")
                     .align(profile.body_text_alignment)
@@ -2789,6 +2819,52 @@ fn trim_trailing_spaces_from_text_run(runs: &mut Vec<Run>) {
         }
         break;
     }
+}
+
+fn trim_trailing_spaces_from_paragraph_runs(para: &mut Paragraph) {
+    while let Some(last_child) = para.children.last_mut() {
+        match last_child {
+            docx_rs::ParagraphChild::Run(run) => {
+                if trim_trailing_spaces_from_run(run) {
+                    para.children.pop();
+                    continue;
+                }
+            }
+            docx_rs::ParagraphChild::Hyperlink(link) => {
+                while let Some(last_link_child) = link.children.last_mut() {
+                    if let docx_rs::ParagraphChild::Run(run) = last_link_child
+                        && trim_trailing_spaces_from_run(run)
+                    {
+                        link.children.pop();
+                        continue;
+                    }
+                    break;
+                }
+                if link.children.is_empty() {
+                    para.children.pop();
+                    continue;
+                }
+            }
+            _ => {}
+        }
+        break;
+    }
+}
+
+fn trim_trailing_spaces_from_run(run: &mut Run) -> bool {
+    while let Some(last_child) = run.children.last_mut() {
+        let RunChild::Text(text) = last_child else {
+            break;
+        };
+
+        text.text = text.text.trim_end().to_string();
+        if text.text.is_empty() {
+            run.children.pop();
+            continue;
+        }
+        break;
+    }
+    run.children.is_empty()
 }
 
 fn uppercase_inlines(inlines: &[Inline]) -> Vec<Inline> {

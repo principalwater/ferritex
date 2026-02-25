@@ -34,6 +34,7 @@ Rendering policy:
 | Page-number alignment (`\lfoot`, `\cfoot`, `\rfoot`, `\fancyfoot[...]`, `\makeoddfoot`, `\makeevenfoot`, `\makeoddhead`, `\makeevenhead`) | ✅ v0.9.2 | Parsed into `page_number_alignment`; used by generated DOCX page-number header paragraph. |
 | Page gutter (`\geometry{bindingoffset=...}`) | ✅ v0.9.2 | Parsed into `page_gutter_twips`; mapped to DOCX section gutter with fallback `0`. |
 | Explicit page breaks (`\newpage`, `\clearpage`, `\cleardoublepage`) | ✅ v0.9.3 | Parsed into `Block::PageBreak`; renderer emits DOCX page-break paragraph (`w:br w:type=\"page\"`). |
+| Landscape switch markers (`\begin{landscape}`, `\end{landscape}`, `\landscape`, `\endlandscape`) | 🟨 v0.9.3 | Parsed as structural forced page-break markers (`Block::PageBreak`) to preserve flow boundaries. True DOCX orientation section switching is not implemented yet. |
 | Math (`$…$`) | ✅ v0.4 | Rendered as italic plain-text approximation |
 | Math (`\begin{equation}`, `\begin{equation*}`) | ✅ v0.4 | Rendered as centered italic plain-text approximation |
 | Math (`\[…\]`) | ✅ v0.5 | Rendered as centered italic plain-text approximation |

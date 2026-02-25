@@ -17,13 +17,14 @@ LaTeX source -> LayoutProbe + parser extraction
 
 ## Repository State
 
-- Active branch: `fix/v0.9.3-page-break-block`
-- Latest `master`: `b3376e7` (`fix(v0.9.3): map TOC before-skip spacing for section levels (#37)`)
+- Active branch: `fix/v0.9.3-landscape-switch-pagebreaks`
+- Latest `master`: `0936f24` (`fix(v0.9.3): preserve explicit LaTeX page breaks in DOCX output (#38)`)
 - PR status:
   - PR `#35` merged.
   - PR `#36` merged.
   - PR `#37` merged (TOC non-chapter before-skip propagation).
-- Working tree: dirty on `fix/v0.9.3-page-break-block` (wave-2 item #5 explicit page-break increment).
+- PR `#38` merged (explicit page-break block propagation).
+- Working tree: dirty on `fix/v0.9.3-landscape-switch-pagebreaks` (wave-2 item #5 landscape-switch marker increment).
 
 ## Quality Gate Status
 
@@ -88,6 +89,13 @@ LaTeX source -> LayoutProbe + parser extraction
    - parser/renderer tests added for positive + negative behavior.
    - local quality gate green after this increment (`fmt`, `clippy --locked -D warnings`, `test --workspace --locked`).
 
+9. v0.9.3 wave-2 landscape-switch flow-boundary increment implemented (current branch):
+   - parser no longer drops standalone landscape markers as skippable lines.
+   - standalone `\begin{landscape}`, `\end{landscape}`, `\landscape`, `\endlandscape` are mapped to
+     `Block::PageBreak` as deterministic flow-boundary fallback.
+   - parser tests added for positive + negative behavior.
+   - true portrait/landscape DOCX section orientation switching is still pending.
+
 ## Not Done / Known Limitations
 
 1. `v0.9.5` is not fully closed by exit criteria yet:
@@ -95,7 +103,8 @@ LaTeX source -> LayoutProbe + parser extraction
    - optional helper-crate stream (`biblatex`, `codebook-tree-sitter-latex`) has not been evaluated in code.
 2. `v0.9.3` DOCX parity wave still has unresolved items from manual QA
    (title page, TOC density artifact-level validation, math OMML, appendix orientation sections, table typography, counter-driven prose robustness, publications block).
-3. Newly added TOC spacing + page-break controls need corpus-level visual validation against canonical PDF/manual DOCX.
+3. Newly added TOC spacing + page-break controls (including landscape switch flow-boundary fallback)
+   need corpus-level visual validation against canonical PDF/manual DOCX.
 
 ## Active Plans
 
@@ -106,7 +115,7 @@ LaTeX source -> LayoutProbe + parser extraction
 
 ## Next Session Steps (ordered)
 
-1. Commit and open PR for `fix/v0.9.3-page-break-block` (explicit page-break block propagation).
-2. Run artifact-level manual QA for TOC density/pagination and explicit page breaks on representative multi-file corpus.
-3. Continue `v0.9.3` remaining workstreams (title page, OMML math, appendix orientation sections, table typography) parser/probe-first.
+1. Commit and open PR for `fix/v0.9.3-landscape-switch-pagebreaks` (landscape markers -> flow-boundary page breaks).
+2. Run artifact-level manual QA for TOC density/pagination and appendix landscape fragments on representative multi-file corpus.
+3. Continue `v0.9.3` remaining workstreams (title page, OMML math, true orientation sections, table typography) parser/probe-first.
 4. In parallel, complete `v0.9.5` corpus-level fallback-reduction measurements.

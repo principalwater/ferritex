@@ -31,6 +31,7 @@ any stable recovered decision must be written back into repository docs immediat
 ## Session start requirements (for any agent)
 
 Before making changes, read and follow:
+- `CLAUDE.md` (Claude Code agents) or equivalent agent config
 - `AGENTS.md`
 - `agent_docs/README.md`
 - `agent_docs/latex_driven_policy.md`

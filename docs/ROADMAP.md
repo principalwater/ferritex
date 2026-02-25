@@ -29,23 +29,64 @@
 ## v0.4 ✅
 - Math: inline `$…$` and display `\begin{equation}…\end{equation}` / `\begin{equation*}…\end{equation*}` — rendered as plain-text approximation (italic; display math centered)
 
-## v0.5
+## v0.5 (partial)
 - Footnotes: `\footnote{}` ✅
-- Resolved cross-references (`\ref`, `\cite`) instead of placeholders
 - Display math `\[…\]` ✅
 - `\input{}` file inclusion ✅
 - `\include{}` file inclusion ✅
+- `\autocite{}` style-aware placeholder ✅
+- Resolved cross-references (`\ref`, `\cite`) — still as `[key]` placeholders
 
 ## v0.6 ✅
 - TUI mode on `ratatui` for interactive conversion
 - Explicit CLI subcommands (`convert`, `tui`) with compatibility for `--input/--output`
 
-## v0.7 (in progress)
+## v0.7 ✅
 - Unified build-core orchestrator (`src/build/`)
-- `ferritex build --format docx|pdf|both` CLI entrypoint
+- `ferritex build --format docx|pdf|both|all` CLI entrypoint
 - `convert` and `tui` routed through shared build core
 - Path resolution and artifact naming centralized
 
+## v0.8 ✅
+- Workspace refactor: mono-repo with `ferritex-core`, `ferritex-renderer-docx`, `ferritex-renderer-pdf` (stub), `ferritex-renderer-md` (stub)
+- TOC `cft*` formatting: indent/numwidth, dot leaders, chapter font, page font, aftersnum separators, appendix prefix
+- Caption layout: `captionsetup` extraction (skip, position, singlelinecheck, indent, labelsep)
+- Float alignment: `\centering`, `\raggedright`, etc. inside figure/table blocks
+- Heading format: uppercase, alignment, indents, number delimiter extraction
+- Language extraction: babel/polyglossia main language -> BCP-47 tag
+- Font family/size extraction: `\setmainfont`, `\documentclass[Xpt]`, `\captionsetup{font=...}`
+
+## v0.9 ✅
+- Visual parity batch: list geometry from `\setlist{...}`, bullet marker from `\labelitemi`
+- Source attribution lines: `\tablesource{...}`, `\figuresource{...}` with `\vspace` extraction
+- Title page: `titlepage`/`titlingpage` paragraph style overrides, `\thispagestyle{empty}` page-number suppression
+- Bibliography heading: `\printbibliography`, `\insertbibliofullsorted`, etc. with `title=` extraction
+- Line spacing: memoir/setspace size-aware factors (`\OnehalfSpacing`, `\setstretch`, `\linespread`)
+- Title page block layout: `flushright+tabular`, `\fontsize`, `\vspace` propagation
+
+## v0.9.1 ✅
+- WIP stabilization: all uncommitted parser/renderer/model changes committed (PR #28)
+- LaTeX-driven audit — 4 policy violations fixed (PR #29):
+  1. `Block::TableOfContents` AST node replaces Russian string-matching TOC detection
+  2. List labelsep fallback scaled with actual body font size (em-based)
+  3. Bibliography default title derived from document language (not hardcoded Russian)
+  4. Dissertation counter fallbacks gated on document class containing "disser"
+- CLAUDE.md added for Claude Code session rules (PR #30)
+- README.md rewritten with FerriTeX branding (PR #31)
+- Full documentation audit and update (PR #32)
+
+## v0.9.2 (next)
+- TOC uppercase gated on `heading_uppercase` (currently unconditional)
+- TOC depth extraction from `\setcounter{tocdepth}{N}`
+- Body text alignment extraction (currently hardcoded `Both`/justified)
+- Page number alignment extraction (currently hardcoded `Center`)
+- Caption bold extraction from `\captionsetup{font=...}`
+- Plain-text chapter heading detection language-gated (currently Russian-only)
+
 ## v1.0
-- PDF output via `printpdf` or similar
+- OMML / Word equation rendering (upgrade from plain-text math approximation)
+- Resolved `\ref` / `\cite` cross-reference hyperlinks in body text
+- Bibliography entry list rendering (heading is placed, entries are pending)
 - Image embedding in DOCX
+- PDF output backend (`ferritex-renderer-pdf`)
+- Markdown output backend (`ferritex-renderer-md`)

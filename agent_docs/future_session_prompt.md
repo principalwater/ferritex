@@ -18,6 +18,7 @@ paper, journal article, dissertation, technical report).
 
 Read and internalize before changing anything:
 
+- `CLAUDE.md` — Claude Code session rules, memory location, rebase traps
 - `AGENTS.md` — agent rules, constraints, quality gates
 - `agent_docs/README.md` — index of agent documentation
 - `agent_docs/latex_driven_policy.md` — strict LaTeX-driven policy
@@ -90,15 +91,16 @@ Key source files:
 
 ## Active plans pointer
 
-- Keep `agent_docs/plans/v0.9-visual-parity.md` as archival context.
-- Use `agent_docs/plans/v0.9.1-docx-manual-qa-followup.md` for current DOCX parity stabilization.
-- Use `agent_docs/plans/v1.0-multi-backend-foundation.md` for PDF/MD expansion sequencing.
+- Archival: `agent_docs/plans/v0.9-visual-parity.md`, `agent_docs/plans/v0.9.1-latex-driven-audit.md`
+- Active DOCX parity: `agent_docs/plans/v0.9.1-docx-manual-qa-followup.md`
+- Next hardcode fixes: `agent_docs/plans/v0.9.2-remaining-hardcodes.md`
+- Future backends: `agent_docs/plans/v1.0-multi-backend-foundation.md`
 
 ## Manual QA artifact convention
 
-- When the user asks to build DOCX/PDF/MD for parity checks, use:
-  - input: `/Users/principalwater/Documents/git/phd-eaeu-electricity-market/thesis/dissertation.tex`
-  - output files: `/tmp/dissertation.docx`, `/tmp/dissertation.pdf`, `/tmp/dissertation.md` (by selected format).
+- When the user asks to build DOCX/PDF/MD for parity checks:
+  - ask the user for the input `.tex` path (never assume or hardcode a private project path),
+  - default output directory: `/tmp/` (e.g. `/tmp/output.docx`, `/tmp/output.pdf`).
 
 ## Git workflow summary
 

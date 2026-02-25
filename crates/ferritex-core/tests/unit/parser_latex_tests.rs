@@ -669,6 +669,28 @@ fn test_inline_newpage_command_does_not_emit_page_break_block() {
 }
 
 #[test]
+fn test_landscape_switch_commands_become_page_break_blocks() {
+    let doc =
+        parse_latex("\\begin{landscape}\n\n\\end{landscape}\n\n\\landscape\n\n\\endlandscape");
+    assert_eq!(doc.blocks.len(), 4, "unexpected blocks: {:?}", doc.blocks);
+    for block in doc.blocks {
+        assert!(matches!(block, Block::PageBreak));
+    }
+}
+
+#[test]
+fn test_inline_landscape_command_does_not_emit_page_break_block() {
+    let doc = parse_latex("Before \\landscape content.");
+    assert!(
+        doc.blocks
+            .iter()
+            .all(|block| !matches!(block, Block::PageBreak)),
+        "unexpected page-break block in {:?}",
+        doc.blocks
+    );
+}
+
+#[test]
 fn test_tochelper_like_macro_is_not_expanded_into_body_noise() {
     let src = "\\newcommand*{\\tocheader}{\\ifnumequal{\\value{pgnum}}{1}{\\hbox to \\linewidth{X}\\afterpage{\\tocheader}}{}}\n\\addtocontents{toc}{\\protect\\tocheader}\n\\tableofcontents*";
     let expanded = expand_simple_macros(src);

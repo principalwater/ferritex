@@ -77,6 +77,13 @@ categories must all follow this pattern — no exceptions:
 | TOC position marker | `\tableofcontents` | `Block::TableOfContents` | no language text stored — renderer generates TOC from AST | ✅ parsed + rendered |
 | Float block alignment | `\centering`, `\raggedright`, `\raggedleft`, `\flushleft`, `\flushright` inside `table/figure` blocks | `Table.alignment`, `Figure.alignment` | table: left, figure: center | ✅ parsed + rendered |
 | Language | babel/polyglossia main language | `document_language` | None (no language tag) | ✅ parsed + rendered |
+| Hyperlink color | `\hypersetup{linkcolor=…}` | `hyperlink_text_color` | "000000" (black) | ❌ hardcoded — v0.9.2 |
+| Hyperlink underline | `\hypersetup{colorlinks=…}` | `hyperlink_underline` | false (no underline) | ❌ hardcoded — v0.9.2 |
+| Body text alignment | `\raggedright`/`\centering` in body | `body_text_alignment` | "both" (justified) | ❌ hardcoded — v0.9.2 |
+| Page number alignment | `\cfoot`/`\rfoot`/`\makeoddfoot` | `page_number_alignment` | "center" | ❌ hardcoded — v0.9.2 |
+| Caption label bold | `\captionsetup{labelfont=bf}` | `caption_label_bold_figure/table` | true | ❌ hardcoded — v0.9.2 |
+| TOC depth | `\setcounter{tocdepth}{N}` | `toc_depth` | 2 | ❌ hardcoded — v0.9.2 |
+| Page gutter | (rarely expressed in LaTeX) | `page_gutter_twips` | 0 | ❌ hardcoded — v0.9.2 |
 
 **Known exception — `apply_known_counter_fallbacks`** (`parser/latex.rs`):
 Contains dissertation-specific Russian counter placeholder templates
@@ -169,8 +176,8 @@ dissertation, or private project.
 
 ### Private build artifacts (mandatory)
 - Personal/private corpus sources and generated files must stay outside `ferritex`.
-- Build personal dissertation outputs only to external paths, default:
-  - `/tmp/dissertation.docx`
+- Build personal/private corpus outputs only to external paths, default:
+  - `/tmp/output.docx`
 - Never place personal dissertation outputs under repository paths (tracked or untracked).
 - Transfer workflow example:
   - `scp user@host:/tmp/output.docx ~/Desktop/output.docx`

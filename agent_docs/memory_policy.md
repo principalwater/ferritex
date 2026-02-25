@@ -11,9 +11,10 @@ memory inside this repository.
 These repository Markdown files are the **single source of truth** for project memory.
 Agents must treat them as authoritative, in order:
 
-1. `AGENTS.md`
-2. `agent_docs/*.md` (including `plans/`)
-3. `docs/*.md`
+1. `AGENTS.md` — non-negotiable constraints, architecture rules, privacy rules
+2. `CLAUDE.md` — Claude Code session rules (if present)
+3. `agent_docs/*.md` (including `plans/`) — agent workflow docs, plans, session state
+4. `docs/*.md` — architecture, roadmap, supported elements
 
 Global AI memory outside the repository (`~/.codex/`, `~/.claude/`) is advisory at best and
 must not override local project docs. External logs/history may be used only for recovery, and

@@ -40,8 +40,9 @@ a minimal version following existing conventions.
 - The only authoritative persistent project memory is the Markdown files inside this repo.
 - Hierarchy of truth:
   1. `AGENTS.md`
-  2. `agent_docs/*.md` (including `plans/`)
-  3. `docs/*.md`
+  2. `CLAUDE.md`
+  3. `agent_docs/*.md` (including `plans/`)
+  4. `docs/*.md`
 - Treat these files as the single source of truth. Global logs are advisory only.
 - After any session that produces stable decisions, update the relevant files:
   - Policy/process → `agent_docs/*.md`
@@ -91,10 +92,10 @@ Key source files:
 
 ## Active plans pointer
 
-- Archival: `agent_docs/plans/v0.9-visual-parity.md`, `agent_docs/plans/v0.9.1-latex-driven-audit.md`
+- **Active — next PR**: `agent_docs/plans/v0.9.2-remaining-hardcodes.md` (13 hardcode fixes)
 - Active DOCX parity: `agent_docs/plans/v0.9.1-docx-manual-qa-followup.md`
-- Next hardcode fixes: `agent_docs/plans/v0.9.2-remaining-hardcodes.md`
 - Future backends: `agent_docs/plans/v1.0-multi-backend-foundation.md`
+- Archival: `agent_docs/plans/v0.9-visual-parity.md`, `agent_docs/plans/v0.9.1-latex-driven-audit.md`
 
 ## Manual QA artifact convention
 

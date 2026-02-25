@@ -73,15 +73,19 @@
   4. Dissertation counter fallbacks gated on document class containing "disser"
 - CLAUDE.md added for Claude Code session rules (PR #30)
 - README.md rewritten with FerriTeX branding (PR #31)
-- Full documentation audit and update (PR #32)
+- Full documentation audit and hardcode inventory
 
 ## v0.9.2 (next)
+- Hyperlink color extraction from `\hypersetup{linkcolor=…}` (currently hardcoded black)
+- Hyperlink underline extraction from `\hypersetup{colorlinks=…}` (currently hardcoded none)
 - TOC uppercase gated on `heading_uppercase` (currently unconditional)
 - TOC depth extraction from `\setcounter{tocdepth}{N}`
 - Body text alignment extraction (currently hardcoded `Both`/justified)
 - Page number alignment extraction (currently hardcoded `Center`)
-- Caption bold extraction from `\captionsetup{font=...}`
+- Caption bold extraction from `\captionsetup{labelfont=…}`
 - Plain-text chapter heading detection language-gated (currently Russian-only)
+- Em-to-twips conversion dynamic based on body font size (currently assumes 14pt)
+- Page gutter field or documented fallback (currently hardcoded `0`)
 
 ## v1.0
 - OMML / Word equation rendering (upgrade from plain-text math approximation)

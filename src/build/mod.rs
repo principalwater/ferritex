@@ -121,13 +121,11 @@ impl BuildConfig {
     }
 
     /// Resolve the expected PDF artifact path.
-    #[allow(dead_code)] // Used in tests; will be used by the PDF backend (PR 3).
     pub fn pdf_path(&self) -> PathBuf {
         self.output_dir.join(format!("{}.pdf", self.output_stem))
     }
 
     /// Resolve the expected Markdown artifact path.
-    #[allow(dead_code)] // Used in tests; will be used by the Markdown backend.
     pub fn md_path(&self) -> PathBuf {
         self.output_dir.join(format!("{}.md", self.output_stem))
     }

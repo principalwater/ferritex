@@ -73,15 +73,22 @@
   4. Dissertation counter fallbacks gated on document class containing "disser"
 - CLAUDE.md added for Claude Code session rules (PR #30)
 - README.md rewritten with FerriTeX branding (PR #31)
-- Full documentation audit and update (PR #32)
+- Full documentation audit and hardcode inventory
 
-## v0.9.2 (next)
-- TOC uppercase gated on `heading_uppercase` (currently unconditional)
+## v0.9.2 ✅
+- Hyperlink style extraction from `\hypersetup`:
+  `linkcolor`/`allcolors` -> text color, `colorlinks`/`hidelinks` -> underline behavior
+- TOC uppercase and chapter prefix casing now gated by `heading_uppercase`
 - TOC depth extraction from `\setcounter{tocdepth}{N}`
-- Body text alignment extraction (currently hardcoded `Both`/justified)
-- Page number alignment extraction (currently hardcoded `Center`)
-- Caption bold extraction from `\captionsetup{font=...}`
-- Plain-text chapter heading detection language-gated (currently Russian-only)
+- Body text alignment extraction from body-context alignment directives
+- Page-number alignment extraction from footer/page-style commands
+- Heading spacing extraction from memoir/disstyles skip commands (`before/afterchapskip`, `setbefore/after...skip`)
+- Heading delimiter extraction by level from memoir/disstyles (`headingdelim`, `setsecnumformat`) and TOC `aftersnum` normalization for conditional style branches
+- Caption label bold extraction from `\captionsetup{labelfont=…}`
+- Plain-text Russian heading detection gated by document language
+- Em-to-twips conversion made dynamic from actual body font size
+- Page gutter extraction from `\geometry{bindingoffset=...}`
+- TOC tab-stop minimum guard documented as DOCX safety constraint
 
 ## v1.0
 - OMML / Word equation rendering (upgrade from plain-text math approximation)

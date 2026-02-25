@@ -302,6 +302,18 @@ fn test_extract_toc_chapter_name_prefix_absent_when_undefined() {
 }
 
 #[test]
+fn test_extract_toc_chapter_name_prefix_respects_chapstyle_zero() {
+    let src = "\
+\\setcounter{chapstyle}{0}
+\\ifnumequal{\\value{chapstyle}}{1}{%
+  \\renewcommand*{\\cftchaptername}{\\chaptername\\space}
+}{}
+Body.";
+    let doc = parse_latex(src);
+    assert_eq!(doc.layout.toc_chapter_name_prefix.as_deref(), Some(""));
+}
+
+#[test]
 fn test_extract_toc_indents_from_cftsetindents() {
     let src = "\
 \\cftsetindents{chapter}{0em}{3em}
@@ -2232,6 +2244,38 @@ fn test_extract_heading_number_delimiter_from_headingdelim_counter() {
 }
 
 #[test]
+fn test_extract_heading_number_delimiter_for_level_from_headingdelim_counter() {
+    let src = "\\newcounter{headingdelim}\n\\setcounter{headingdelim}{1}\nBody.";
+    assert_eq!(
+        extract_heading_number_delimiter_for_level(src, 1),
+        Some(".".to_string())
+    );
+    assert_eq!(
+        extract_heading_number_delimiter_for_level(src, 2),
+        Some(String::new())
+    );
+    assert_eq!(
+        extract_heading_number_delimiter_for_level(src, 3),
+        Some(String::new())
+    );
+}
+
+#[test]
+fn test_extract_heading_number_delimiter_for_level_from_setsecnumformat() {
+    let src = "\\setsecnumformat{\\csname the#1\\endcsname.\\space}\nBody.";
+    assert_eq!(
+        extract_heading_number_delimiter_for_level(src, 2),
+        Some(".".to_string())
+    );
+
+    let src_no_dot = "\\setsecnumformat{\\csname the#1\\endcsname\\quad}\nBody.";
+    assert_eq!(
+        extract_heading_number_delimiter_for_level(src_no_dot, 2),
+        Some(String::new())
+    );
+}
+
+#[test]
 fn test_extract_heading_number_delimiter_from_titlelabel() {
     let src = "\\titlelabel{\\thetitle.\\quad}\nBody.";
     assert_eq!(extract_heading_number_delimiter(src), Some(".".to_string()));
@@ -2409,6 +2453,18 @@ Body.";
     assert_eq!(doc.layout.chapter_name.as_deref(), Some("Глава"));
     assert_eq!(doc.layout.heading_alignment.as_deref(), Some("left"));
     assert_eq!(doc.layout.heading_number_delimiter.as_deref(), Some("."));
+    assert_eq!(
+        doc.layout.heading_number_delimiter_section.as_deref(),
+        Some("")
+    );
+    assert_eq!(
+        doc.layout.heading_number_delimiter_subsection.as_deref(),
+        Some("")
+    );
+    assert_eq!(
+        doc.layout.heading_number_delimiter_subsubsection.as_deref(),
+        Some("")
+    );
 }
 
 // ── Task 1: toc_chapter_entry_bold ────────────────────────────────────
@@ -2459,6 +2515,34 @@ fn test_toc_aftersnum_section_present() {
 Body.";
     let doc = parse_latex(src);
     assert_eq!(doc.layout.toc_aftersnum_section.as_deref(), Some(". "));
+}
+
+#[test]
+fn test_toc_aftersnum_respects_headingdelim_counter_one() {
+    let src = r"\setcounter{headingdelim}{1}
+\ifnumgreater{\value{headingdelim}}{1}{%
+  \renewcommand\cftsectionaftersnum{.\space}
+}{}
+Body.";
+    let doc = parse_latex(src);
+    assert_eq!(doc.layout.toc_aftersnum_chapter.as_deref(), Some(". "));
+    assert_eq!(doc.layout.toc_aftersnum_section.as_deref(), Some(""));
+    assert_eq!(doc.layout.toc_aftersnum_subsection.as_deref(), Some(""));
+    assert_eq!(doc.layout.toc_aftersnum_subsubsection.as_deref(), Some(""));
+}
+
+#[test]
+fn test_toc_aftersnum_respects_headingdelim_counter_two() {
+    let src = r"\setcounter{headingdelim}{2}
+Body.";
+    let doc = parse_latex(src);
+    assert_eq!(doc.layout.toc_aftersnum_chapter.as_deref(), Some(". "));
+    assert_eq!(doc.layout.toc_aftersnum_section.as_deref(), Some(". "));
+    assert_eq!(doc.layout.toc_aftersnum_subsection.as_deref(), Some(". "));
+    assert_eq!(
+        doc.layout.toc_aftersnum_subsubsection.as_deref(),
+        Some(". ")
+    );
 }
 
 #[test]
@@ -2529,7 +2613,8 @@ fn test_inline_math_preserves_spaces() {
 #[test]
 fn test_extract_list_settings_labelsep_em() {
     let source = r"\setlist{nosep, labelsep=.5em, labelwidth=!, leftmargin=\dimexpr\parindent-\labelwidth-\labelsep\relax}";
-    let (sep, width, _item_indent, _left_margin, _bullet) = extract_list_settings(source, None);
+    let (sep, width, _item_indent, _left_margin, _bullet) =
+        extract_list_settings_with_body_font(source, None, None);
     // 0.5em at 14pt (280 twips/em) = 140 twips
     let sep = sep.expect("labelsep should be extracted");
     assert!((130..=150).contains(&sep), "expected ~140 twips, got {sep}");
@@ -2539,7 +2624,8 @@ fn test_extract_list_settings_labelsep_em() {
 #[test]
 fn test_extract_list_settings_absent() {
     let source = r"\usepackage{enumitem}";
-    let (sep, width, _item_indent, _left_margin, bullet) = extract_list_settings(source, None);
+    let (sep, width, _item_indent, _left_margin, bullet) =
+        extract_list_settings_with_body_font(source, None, None);
     assert!(sep.is_none());
     assert!(width.is_none());
     assert!(bullet.is_none());
@@ -2548,7 +2634,8 @@ fn test_extract_list_settings_absent() {
 #[test]
 fn test_extract_labelitemi_char_endash() {
     let source = r"\renewcommand{\labelitemi}{\normalfont\bfseries{--}}";
-    let (_sep, _width, _item_indent, _left_margin, bullet) = extract_list_settings(source, None);
+    let (_sep, _width, _item_indent, _left_margin, bullet) =
+        extract_list_settings_with_body_font(source, None, None);
     let bullet = bullet.expect("bullet should be extracted");
     assert_eq!(bullet, "–", "expected en-dash, got {bullet:?}");
 }
@@ -2556,7 +2643,8 @@ fn test_extract_labelitemi_char_endash() {
 #[test]
 fn test_extract_labelitemi_char_absent() {
     let source = r"\usepackage{enumitem}";
-    let (_sep, _width, _item_indent, _left_margin, bullet) = extract_list_settings(source, None);
+    let (_sep, _width, _item_indent, _left_margin, bullet) =
+        extract_list_settings_with_body_font(source, None, None);
     assert!(bullet.is_none());
 }
 
@@ -2565,7 +2653,7 @@ fn test_extract_labelitemi_char_absent() {
 #[test]
 fn test_extract_source_vspace_tablesource() {
     let source = r"\newcommand{\tablesource}[1]{\par\vspace{4pt}{\noindent\raggedright\small\textit{#1}\par}}";
-    let tw = extract_source_vspace_twips(source, "tablesource");
+    let tw = extract_source_vspace_twips_with_body_font(source, "tablesource", None);
     // 4pt = 80 twips
     let tw = tw.expect("vspace should be extracted");
     assert_eq!(tw, 80, "expected 80 twips (4pt), got {tw}");
@@ -2574,7 +2662,7 @@ fn test_extract_source_vspace_tablesource() {
 #[test]
 fn test_extract_source_vspace_figuresource() {
     let source = r"\newcommand{\figuresource}[1]{\par\vspace{2pt}{\noindent\raggedright\small\textit{#1}\par}}";
-    let tw = extract_source_vspace_twips(source, "figuresource");
+    let tw = extract_source_vspace_twips_with_body_font(source, "figuresource", None);
     let tw = tw.expect("vspace should be extracted");
     assert_eq!(tw, 40, "expected 40 twips (2pt), got {tw}");
 }
@@ -2582,7 +2670,7 @@ fn test_extract_source_vspace_figuresource() {
 #[test]
 fn test_extract_source_vspace_absent() {
     let source = r"\usepackage{caption}";
-    assert!(extract_source_vspace_twips(source, "tablesource").is_none());
+    assert!(extract_source_vspace_twips_with_body_font(source, "tablesource", None).is_none());
 }
 
 // ── Title page page number suppression tests ─────────────────────────────
@@ -2804,10 +2892,8 @@ fn test_bibliography_default_title_unknown_language_falls_back_to_references() {
 #[test]
 fn test_bibliography_explicit_title_overrides_language() {
     // Explicit title= wins regardless of language.
-    let block = try_parse_bibliography_command(
-        "\\printbibliography[title=Works Cited]",
-        Some("ru-RU"),
-    );
+    let block =
+        try_parse_bibliography_command("\\printbibliography[title=Works Cited]", Some("ru-RU"));
     match block {
         Some(Block::BibliographyHeading { title }) => {
             assert_eq!(title, "Works Cited");
@@ -2836,5 +2922,195 @@ fn test_counter_fallbacks_skipped_for_non_dissertation_class() {
     assert!(
         found,
         "dissertation placeholder should be preserved unchanged for non-dissertation class"
+    );
+}
+
+// ── v0.9.2 parser extraction tests ─────────────────────────────────────────
+
+#[test]
+fn test_extract_page_gutter_from_geometry_bindingoffset() {
+    let doc = parse_latex("\\geometry{a4paper,bindingoffset=1cm}\nBody.");
+    assert_eq!(doc.layout.page_gutter_twips, Some(567));
+}
+
+#[test]
+fn test_page_gutter_absent() {
+    let doc = parse_latex("Body.");
+    assert_eq!(doc.layout.page_gutter_twips, None);
+}
+
+#[test]
+fn test_extract_toc_depth_from_setcounter() {
+    let doc = parse_latex("\\setcounter{tocdepth}{1}\nBody.");
+    assert_eq!(doc.layout.toc_depth, Some(1));
+}
+
+#[test]
+fn test_toc_depth_absent() {
+    let doc = parse_latex("Body.");
+    assert_eq!(doc.layout.toc_depth, None);
+}
+
+#[test]
+fn test_extract_hypersetup_linkcolor_and_colorlinks() {
+    let doc = parse_latex("\\hypersetup{linkcolor=blue,colorlinks=false}\nBody.");
+    assert_eq!(doc.layout.hyperlink_text_color.as_deref(), Some("blue"));
+    assert_eq!(doc.layout.hyperlink_underline, Some(true));
+}
+
+#[test]
+fn test_extract_hypersetup_allcolors_and_bare_colorlinks_flag() {
+    let doc = parse_latex("\\hypersetup{allcolors=red,colorlinks}\nBody.");
+    assert_eq!(doc.layout.hyperlink_text_color.as_deref(), Some("red"));
+    assert_eq!(doc.layout.hyperlink_underline, Some(false));
+}
+
+#[test]
+fn test_hypersetup_hyperlink_settings_absent() {
+    let doc = parse_latex("Body.");
+    assert_eq!(doc.layout.hyperlink_text_color, None);
+    assert_eq!(doc.layout.hyperlink_underline, None);
+}
+
+#[test]
+fn test_extract_captionsetup_labelfont_bold_with_target_override() {
+    let doc = parse_latex(
+        "\\captionsetup{labelfont=bf}\n\\captionsetup[table]{labelfont=normalfont}\nBody.",
+    );
+    assert_eq!(doc.layout.caption_label_bold_figure, Some(true));
+    assert_eq!(doc.layout.caption_label_bold_table, Some(false));
+}
+
+#[test]
+fn test_captionsetup_labelfont_bold_absent() {
+    let doc = parse_latex("Body.");
+    assert_eq!(doc.layout.caption_label_bold_figure, None);
+    assert_eq!(doc.layout.caption_label_bold_table, None);
+}
+
+#[test]
+fn test_extract_body_text_alignment_from_raggedright() {
+    let doc = parse_latex("\\raggedright\nBody.");
+    assert_eq!(doc.layout.body_text_alignment.as_deref(), Some("left"));
+}
+
+#[test]
+fn test_extract_body_text_alignment_from_atbegindocument() {
+    let doc = parse_latex("\\AtBeginDocument{\\raggedleft}\nBody.");
+    assert_eq!(doc.layout.body_text_alignment.as_deref(), Some("right"));
+}
+
+#[test]
+fn test_body_text_alignment_absent() {
+    let doc = parse_latex("Body.");
+    assert_eq!(doc.layout.body_text_alignment, None);
+}
+
+#[test]
+fn test_body_text_alignment_ignores_macro_local_alignment_commands() {
+    let src = r"
+\newcommand{\hdngalign}{\centering}
+\newcommand{\splitformattext}{\raggedright}
+Body.
+";
+    let doc = parse_latex(src);
+    assert_eq!(doc.layout.body_text_alignment, None);
+}
+
+#[test]
+fn test_extract_page_number_alignment_from_cfoot() {
+    let doc = parse_latex("\\cfoot{\\thepage}\nBody.");
+    assert_eq!(doc.layout.page_number_alignment.as_deref(), Some("center"));
+}
+
+#[test]
+fn test_page_number_alignment_absent() {
+    let doc = parse_latex("Body.");
+    assert_eq!(doc.layout.page_number_alignment, None);
+}
+
+#[test]
+fn test_extract_page_number_alignment_from_makeoddfoot() {
+    let doc = parse_latex("\\makeoddfoot{plain}{}{}{\\thepage}\nBody.");
+    assert_eq!(doc.layout.page_number_alignment.as_deref(), Some("right"));
+}
+
+#[test]
+fn test_extract_page_number_alignment_from_makeoddhead() {
+    let doc = parse_latex("\\makeoddhead{plain}{}{\\thepage}{}\nBody.");
+    assert_eq!(doc.layout.page_number_alignment.as_deref(), Some("center"));
+}
+
+#[test]
+fn test_extract_heading_spacing_from_disstyles_commands() {
+    let src = r"
+\setSpacing{1.5}
+\setlength{\beforechapskip}{0pt}
+\setlength{\afterchapskip}{\onelineskip}
+\setbeforesecskip{0.5\onelineskip}
+\setaftersecskip{0.5\onelineskip}
+\setbeforesubsecskip{0.25\onelineskip}
+\setaftersubsecskip{0.25\onelineskip}
+\setbeforesubsubsecskip{0.1\onelineskip}
+\setaftersubsubsecskip{0.1\onelineskip}
+Body.
+";
+    let doc = parse_latex(src);
+    assert_eq!(doc.layout.heading_space_before_chapter_twips, Some(0));
+    assert_eq!(doc.layout.heading_space_after_chapter_twips, Some(360));
+    assert_eq!(doc.layout.heading_space_before_section_twips, Some(180));
+    assert_eq!(doc.layout.heading_space_after_section_twips, Some(180));
+    assert_eq!(doc.layout.heading_space_before_subsection_twips, Some(90));
+    assert_eq!(doc.layout.heading_space_after_subsection_twips, Some(90));
+    assert_eq!(
+        doc.layout.heading_space_before_subsubsection_twips,
+        Some(36)
+    );
+    assert_eq!(doc.layout.heading_space_after_subsubsection_twips, Some(36));
+}
+
+#[test]
+fn test_heading_spacing_absent() {
+    let doc = parse_latex("Body.");
+    assert_eq!(doc.layout.heading_space_before_chapter_twips, None);
+    assert_eq!(doc.layout.heading_space_after_chapter_twips, None);
+    assert_eq!(doc.layout.heading_space_before_section_twips, None);
+    assert_eq!(doc.layout.heading_space_after_section_twips, None);
+    assert_eq!(doc.layout.heading_space_before_subsection_twips, None);
+    assert_eq!(doc.layout.heading_space_after_subsection_twips, None);
+    assert_eq!(doc.layout.heading_space_before_subsubsection_twips, None);
+    assert_eq!(doc.layout.heading_space_after_subsubsection_twips, None);
+}
+
+#[test]
+fn test_em_length_scales_with_document_font_size() {
+    let doc = parse_latex("\\documentclass[12pt]{article}\n\\setlength{\\parindent}{2.5em}\nBody.");
+    // 2.5em at 12pt = 2.5 * 12 * 20 = 600 twips.
+    assert_eq!(doc.layout.body_first_line_indent_twips, Some(600));
+}
+
+#[test]
+fn test_list_labelsep_em_scales_with_document_font_size() {
+    let doc = parse_latex("\\documentclass[12pt]{article}\n\\setlist{labelsep=.5em}\nBody.");
+    assert_eq!(doc.layout.list_label_sep_twips, Some(120));
+}
+
+#[test]
+fn test_plain_russian_front_matter_heading_is_language_gated_off_for_english() {
+    let doc = parse_latex("\\usepackage[english]{babel}\nОГЛАВЛЕНИЕ");
+    assert!(
+        matches!(doc.blocks.first(), Some(Block::Paragraph(_))),
+        "expected plain paragraph, got {:?}",
+        doc.blocks
+    );
+}
+
+#[test]
+fn test_plain_russian_front_matter_heading_kept_for_russian_language() {
+    let doc = parse_latex("\\usepackage[russian]{babel}\nОГЛАВЛЕНИЕ");
+    assert!(
+        matches!(doc.blocks.first(), Some(Block::Section { level: 1, .. })),
+        "expected section heading, got {:?}",
+        doc.blocks
     );
 }

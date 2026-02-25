@@ -29,9 +29,14 @@ const DEFAULT_PAGE_MARGIN_LEFT_TWIPS: i32 = 1_138;
 const DEFAULT_PAGE_MARGIN_RIGHT_TWIPS: i32 = 288;
 const DEFAULT_PAGE_MARGIN_HEADER_TWIPS: i32 = 342;
 const DEFAULT_PAGE_MARGIN_FOOTER_TWIPS: i32 = 342;
+const DEFAULT_PAGE_GUTTER_TWIPS: i32 = 0;
 const FONT_SIZE_BODY_HP: usize = 28;
 const FONT_SIZE_TABLE_HP: usize = 24;
 const FONT_SIZE_FOOTNOTE_HP: usize = 20;
+const DEFAULT_TOC_DEPTH: i32 = 2;
+const DEFAULT_HYPERLINK_TEXT_COLOR: &str = "000000";
+const DEFAULT_HYPERLINK_UNDERLINE: bool = false;
+const DEFAULT_CAPTION_LABEL_BOLD: bool = true;
 
 const LINE_SPACING_SINGLE_TWIPS: i32 = 240;
 const LINE_SPACING_DEFAULT_BODY_TWIPS: i32 = 360;
@@ -80,6 +85,7 @@ struct CaptionRenderSettings {
     skip_twips: i32,
     position: CaptionPosition,
     singlelinecheck: bool,
+    label_bold: bool,
     footnote_font_size_hp: usize,
 }
 
@@ -96,6 +102,7 @@ struct RenderProfile {
     page_margin_right_twips: i32,
     page_margin_header_twips: i32,
     page_margin_footer_twips: i32,
+    page_gutter_twips: i32,
     body_line_spacing_twips: i32,
 
     // ── Float counter scoping ──────────────────────────────────────────
@@ -117,6 +124,8 @@ struct RenderProfile {
     caption_label_table: String,
     caption_label_separator_figure: String,
     caption_label_separator_table: String,
+    caption_label_bold_figure: bool,
+    caption_label_bold_table: bool,
     caption_skip_twips_figure: i32,
     caption_skip_twips_table: i32,
     caption_position_figure: CaptionPosition,
@@ -131,10 +140,22 @@ struct RenderProfile {
     heading_uppercase: bool,
     heading_alignment: AlignmentType,
     heading_number_delimiter: String,
+    heading_number_delimiter_section: String,
+    heading_number_delimiter_subsection: String,
+    heading_number_delimiter_subsubsection: String,
     heading_indent_section_twips: i32,
     heading_indent_subsection_twips: i32,
     heading_indent_subsubsection_twips: i32,
+    heading_space_before_chapter_twips: i32,
+    heading_space_after_chapter_twips: i32,
+    heading_space_before_section_twips: i32,
+    heading_space_after_section_twips: i32,
+    heading_space_before_subsection_twips: i32,
+    heading_space_after_subsection_twips: i32,
+    heading_space_before_subsubsection_twips: i32,
+    heading_space_after_subsubsection_twips: i32,
     toc_right_margin_twips: i32,
+    toc_depth: i32,
     toc_use_dot_leader: bool,
     toc_chapter_name_prefix: String,
     toc_indent_chapter_twips: i32,
@@ -159,8 +180,7 @@ struct RenderProfile {
     /// Separator after subsubsection number in TOC. Driven by `\cftsubsubsectionaftersnum`.
     toc_aftersnum_subsubsection: String,
     /// Prefix for appendix entries in TOC. Driven by `\cftappendixname`.
-    /// Reserved for future appendix TOC rendering; extracted but not yet applied.
-    #[allow(dead_code)]
+    /// Applied for level-1 entries when chapter numbering looks appendix-like (`A`, `B`, ...).
     toc_appendix_name: String,
 
     // ── List formatting ──────────────────────────────────────────────
@@ -178,9 +198,15 @@ struct RenderProfile {
     // ── Title page ──────────────────────────────────────────────────
     /// Whether to suppress page number on the first page. Driven by `\thispagestyle{empty}`.
     title_page_suppress_number: bool,
+    page_number_alignment: AlignmentType,
 
     // ── Caption alignment ────────────────────────────────────────────
     caption_alignment: AlignmentType,
+    body_text_alignment: AlignmentType,
+
+    // ── Hyperlinks ────────────────────────────────────────────────────
+    hyperlink_text_color: String,
+    hyperlink_underline: bool,
 
     // ── Page size ────────────────────────────────────────────────────
     page_width_twips: u32,
@@ -235,6 +261,10 @@ impl RenderProfile {
                 layout.page_margin_footer_twips,
                 DEFAULT_PAGE_MARGIN_FOOTER_TWIPS,
             ),
+            page_gutter_twips: sanitize_nonnegative_twips(
+                layout.page_gutter_twips,
+                DEFAULT_PAGE_GUTTER_TWIPS,
+            ),
             body_line_spacing_twips: sanitize_twips(
                 layout.body_line_spacing_twips,
                 LINE_SPACING_DEFAULT_BODY_TWIPS,
@@ -274,6 +304,12 @@ impl RenderProfile {
                 .caption_label_separator_table
                 .clone()
                 .unwrap_or_else(|| DEFAULT_CAPTION_LABEL_SEPARATOR.to_string()),
+            caption_label_bold_figure: layout
+                .caption_label_bold_figure
+                .unwrap_or(DEFAULT_CAPTION_LABEL_BOLD),
+            caption_label_bold_table: layout
+                .caption_label_bold_table
+                .unwrap_or(DEFAULT_CAPTION_LABEL_BOLD),
             caption_skip_twips_figure: sanitize_nonnegative_twips(
                 layout.caption_skip_twips_figure,
                 DEFAULT_CAPTION_SKIP_TWIPS,
@@ -310,6 +346,18 @@ impl RenderProfile {
                 .heading_number_delimiter
                 .clone()
                 .unwrap_or_else(|| ".".to_string()),
+            heading_number_delimiter_section: layout
+                .heading_number_delimiter_section
+                .clone()
+                .unwrap_or_default(),
+            heading_number_delimiter_subsection: layout
+                .heading_number_delimiter_subsection
+                .clone()
+                .unwrap_or_default(),
+            heading_number_delimiter_subsubsection: layout
+                .heading_number_delimiter_subsubsection
+                .clone()
+                .unwrap_or_default(),
             heading_indent_section_twips: sanitize_nonnegative_twips(
                 layout.heading_indent_section_twips,
                 0,
@@ -322,10 +370,43 @@ impl RenderProfile {
                 layout.heading_indent_subsubsection_twips,
                 0,
             ),
+            heading_space_before_chapter_twips: sanitize_nonnegative_twips(
+                layout.heading_space_before_chapter_twips,
+                0,
+            ),
+            heading_space_after_chapter_twips: sanitize_nonnegative_twips(
+                layout.heading_space_after_chapter_twips,
+                0,
+            ),
+            heading_space_before_section_twips: sanitize_nonnegative_twips(
+                layout.heading_space_before_section_twips,
+                0,
+            ),
+            heading_space_after_section_twips: sanitize_nonnegative_twips(
+                layout.heading_space_after_section_twips,
+                0,
+            ),
+            heading_space_before_subsection_twips: sanitize_nonnegative_twips(
+                layout.heading_space_before_subsection_twips,
+                0,
+            ),
+            heading_space_after_subsection_twips: sanitize_nonnegative_twips(
+                layout.heading_space_after_subsection_twips,
+                0,
+            ),
+            heading_space_before_subsubsection_twips: sanitize_nonnegative_twips(
+                layout.heading_space_before_subsubsection_twips,
+                0,
+            ),
+            heading_space_after_subsubsection_twips: sanitize_nonnegative_twips(
+                layout.heading_space_after_subsubsection_twips,
+                0,
+            ),
             toc_right_margin_twips: sanitize_nonnegative_twips(
                 layout.toc_right_margin_twips,
                 DEFAULT_TOC_RIGHT_MARGIN_TWIPS,
             ),
+            toc_depth: layout.toc_depth.unwrap_or(DEFAULT_TOC_DEPTH).clamp(-1, 6),
             toc_use_dot_leader: layout.toc_use_dot_leader.unwrap_or(true),
             toc_chapter_name_prefix: layout.toc_chapter_name_prefix.clone().unwrap_or_default(),
             toc_indent_chapter_twips: sanitize_nonnegative_twips(
@@ -415,10 +496,21 @@ impl RenderProfile {
                 .unwrap_or(DEFAULT_SOURCE_VSPACE_FIGURE_TWIPS),
             // Title page: suppress page number when \thispagestyle{empty} detected.
             title_page_suppress_number: layout.title_page_suppress_number.unwrap_or(false),
+            page_number_alignment: parse_page_number_alignment(
+                layout.page_number_alignment.as_deref(),
+            ),
             // Caption alignment: default centred.
             caption_alignment: parse_alignment(
                 layout.caption_alignment.as_deref().unwrap_or("center"),
             ),
+            body_text_alignment: parse_body_alignment(layout.body_text_alignment.as_deref()),
+            hyperlink_text_color: normalize_docx_color(
+                layout.hyperlink_text_color.as_deref(),
+                DEFAULT_HYPERLINK_TEXT_COLOR,
+            ),
+            hyperlink_underline: layout
+                .hyperlink_underline
+                .unwrap_or(DEFAULT_HYPERLINK_UNDERLINE),
             // Page size: default A4.
             page_width_twips: layout.page_width_twips.unwrap_or(PAGE_A4_WIDTH_TWIPS),
             page_height_twips: layout.page_height_twips.unwrap_or(PAGE_A4_HEIGHT_TWIPS),
@@ -448,6 +540,8 @@ impl RenderProfile {
         let text_width_twips = self.page_width_twips.saturating_sub(
             self.page_margin_left_twips.max(0) as u32 + self.page_margin_right_twips.max(0) as u32,
         );
+        // Keep a minimal positive tab-stop even for malformed/degenerate geometry
+        // to avoid emitting invalid TOC paragraph tabs in DOCX.
         let stop_twips = (text_width_twips as i32 - self.toc_right_margin_twips.max(0)).max(1_000);
         stop_twips as usize
     }
@@ -482,6 +576,43 @@ impl RenderProfile {
             3 => self.toc_numwidth_subsection_twips,
             _ => self.toc_numwidth_subsubsection_twips,
         }
+    }
+
+    fn heading_spacing_before_after(&self, level: u8) -> (Option<i32>, Option<i32>) {
+        let (before, after) = match level {
+            1 => (
+                self.heading_space_before_chapter_twips,
+                self.heading_space_after_chapter_twips,
+            ),
+            2 => (
+                self.heading_space_before_section_twips,
+                self.heading_space_after_section_twips,
+            ),
+            3 => (
+                self.heading_space_before_subsection_twips
+                    .max(self.heading_space_before_subsubsection_twips),
+                self.heading_space_after_subsection_twips
+                    .max(self.heading_space_after_subsubsection_twips),
+            ),
+            _ => (
+                self.heading_space_before_subsubsection_twips,
+                self.heading_space_after_subsubsection_twips,
+            ),
+        };
+        ((before > 0).then_some(before), (after > 0).then_some(after))
+    }
+
+    fn heading_number_delimiter_for_level(&self, level: u8) -> &str {
+        match level {
+            1 => &self.heading_number_delimiter,
+            2 => &self.heading_number_delimiter_section,
+            3 => &self.heading_number_delimiter_subsection,
+            _ => &self.heading_number_delimiter_subsubsection,
+        }
+    }
+
+    fn toc_max_level(&self) -> u8 {
+        (self.toc_depth + 1).clamp(0, 6) as u8
     }
 }
 
@@ -722,6 +853,72 @@ fn parse_alignment(s: &str) -> AlignmentType {
     }
 }
 
+fn parse_body_alignment(value: Option<&str>) -> AlignmentType {
+    match value.map(str::to_ascii_lowercase).as_deref() {
+        Some("left") | Some("flushleft") | Some("raggedright") => AlignmentType::Left,
+        Some("center") | Some("centering") => AlignmentType::Center,
+        Some("right") | Some("flushright") | Some("raggedleft") => AlignmentType::Right,
+        Some("both") | Some("justify") | Some("justified") => AlignmentType::Both,
+        _ => AlignmentType::Both,
+    }
+}
+
+fn parse_page_number_alignment(value: Option<&str>) -> AlignmentType {
+    match value.map(str::to_ascii_lowercase).as_deref() {
+        Some("left") => AlignmentType::Left,
+        Some("right") => AlignmentType::Right,
+        Some("center") | Some("centering") => AlignmentType::Center,
+        _ => AlignmentType::Center,
+    }
+}
+
+fn normalize_docx_color(value: Option<&str>, fallback: &str) -> String {
+    let Some(raw) = value else {
+        return fallback.to_string();
+    };
+    let token = raw.trim().trim_matches(['{', '}']).trim();
+    if token.is_empty() {
+        return fallback.to_string();
+    }
+
+    let normalized = token.trim_start_matches('#').to_ascii_lowercase();
+    if normalized.len() == 6 && normalized.chars().all(|c| c.is_ascii_hexdigit()) {
+        return normalized.to_ascii_uppercase();
+    }
+
+    let named = match normalized.as_str() {
+        "black" => Some("000000"),
+        "white" => Some("FFFFFF"),
+        "red" => Some("FF0000"),
+        "green" => Some("008000"),
+        "blue" => Some("0000FF"),
+        "cyan" => Some("00FFFF"),
+        "magenta" => Some("FF00FF"),
+        "yellow" => Some("FFFF00"),
+        "gray" | "grey" => Some("808080"),
+        "darkgray" | "darkgrey" => Some("404040"),
+        "lightgray" | "lightgrey" => Some("C0C0C0"),
+        "brown" => Some("A52A2A"),
+        "orange" => Some("FFA500"),
+        "purple" => Some("800080"),
+        "teal" => Some("008080"),
+        "violet" => Some("EE82EE"),
+        _ => None,
+    };
+
+    named.unwrap_or(fallback).to_string()
+}
+
+fn apply_hyperlink_run_style(run: Run, profile: &RenderProfile) -> Run {
+    let underline = if profile.hyperlink_underline {
+        "single"
+    } else {
+        "none"
+    };
+    run.underline(underline)
+        .color(&profile.hyperlink_text_color)
+}
+
 fn parse_table_alignment(s: Option<&str>) -> TableAlignmentType {
     match s.map(str::to_ascii_lowercase).as_deref() {
         Some("center") | Some("centering") => TableAlignmentType::Center,
@@ -759,6 +956,7 @@ fn table_caption_settings(profile: &RenderProfile) -> CaptionRenderSettings {
         skip_twips: profile.caption_skip_twips_table,
         position: profile.caption_position_table,
         singlelinecheck: profile.caption_singlelinecheck_table,
+        label_bold: profile.caption_label_bold_table,
         footnote_font_size_hp: profile.font_size_footnote_hp,
     }
 }
@@ -770,6 +968,7 @@ fn figure_caption_settings(profile: &RenderProfile) -> CaptionRenderSettings {
         skip_twips: profile.caption_skip_twips_figure,
         position: profile.caption_position_figure,
         singlelinecheck: profile.caption_singlelinecheck_figure,
+        label_bold: profile.caption_label_bold_figure,
         footnote_font_size_hp: profile.font_size_footnote_hp,
     }
 }
@@ -782,7 +981,6 @@ fn figure_caption_settings(profile: &RenderProfile) -> CaptionRenderSettings {
 /// - Section headings use `Heading1` / `Heading2` / `Heading3` styles.
 /// - Bold runs use `Run::bold()`, italic runs use `Run::italic()`.
 /// - No `<w:sectPr>` is inserted inside paragraph properties.
-#[allow(dead_code)]
 pub fn render_docx(document: &Document, output_path: &Path) -> anyhow::Result<()> {
     render_docx_with_context(document, output_path, None)
 }
@@ -881,6 +1079,7 @@ pub fn render_docx_with_context(
                             &profile.caption_label_separator_table,
                             &t.caption,
                             caption_settings,
+                            &profile,
                             &ref_index,
                         ),
                         table_bookmark.as_deref(),
@@ -907,6 +1106,7 @@ pub fn render_docx_with_context(
                             &profile.caption_label_separator_table,
                             &t.caption,
                             caption_settings,
+                            &profile,
                             &ref_index,
                         ),
                         if bookmark_consumed {
@@ -995,7 +1195,7 @@ fn create_styled_docx(profile: &RenderProfile) -> Docx {
         .right(profile.page_margin_right_twips)
         .header(profile.page_margin_header_twips)
         .footer(profile.page_margin_footer_twips)
-        .gutter(0);
+        .gutter(profile.page_gutter_twips);
     let fonts = build_run_fonts(profile);
 
     let mut docx = Docx::new()
@@ -1010,7 +1210,7 @@ fn create_styled_docx(profile: &RenderProfile) -> Docx {
     }
 
     // Default (non-first-page) header carries the page number.
-    docx = docx.header(page_number_header());
+    docx = docx.header(page_number_header(profile.page_number_alignment));
 
     // When the title page has \thispagestyle{empty}, enable different-first-page mode.
     // The first-page header is left empty (Word default), so no number appears on page 1.
@@ -1038,7 +1238,7 @@ fn gost_styles(fonts: RunFonts, profile: &RenderProfile) -> Vec<Style> {
             .next("BodyText")
             .fonts(fonts.clone())
             .size(profile.font_size_body_hp)
-            .align(AlignmentType::Both)
+            .align(profile.body_text_alignment)
             .line_spacing(line_spacing(profile.body_line_spacing_twips))
             .indent(
                 Some(0),
@@ -1099,7 +1299,6 @@ fn gost_styles(fonts: RunFonts, profile: &RenderProfile) -> Vec<Style> {
             .next("BodyText")
             .fonts(fonts.clone())
             .size(profile.font_size_caption_hp)
-            .bold()
             .align(profile.caption_alignment)
             .line_spacing(single_spacing())
             .indent(Some(0), None, None, None),
@@ -1109,7 +1308,7 @@ fn gost_styles(fonts: RunFonts, profile: &RenderProfile) -> Vec<Style> {
             .next("FootnoteText")
             .fonts(fonts.clone())
             .size(profile.font_size_footnote_hp)
-            .align(AlignmentType::Both)
+            .align(profile.body_text_alignment)
             .line_spacing(single_spacing())
             .indent(Some(0), None, None, None),
         Style::new("ListParagraph", StyleType::Paragraph)
@@ -1118,7 +1317,7 @@ fn gost_styles(fonts: RunFonts, profile: &RenderProfile) -> Vec<Style> {
             .next("BodyText")
             .fonts(fonts.clone())
             .size(profile.font_size_body_hp)
-            .align(AlignmentType::Both)
+            .align(profile.body_text_alignment)
             .line_spacing(line_spacing(profile.body_line_spacing_twips))
             .indent(Some(0), None, None, None),
         Style::new("TableParagraph", StyleType::Paragraph)
@@ -1142,6 +1341,7 @@ fn heading_style_definition(
     profile: &RenderProfile,
 ) -> Style {
     let level = (outline_level + 1) as u8;
+    let (space_before, space_after) = profile.heading_spacing_before_after(level);
     Style::new(style_id, StyleType::Paragraph)
         .name(style_name)
         .based_on("Normal")
@@ -1150,7 +1350,11 @@ fn heading_style_definition(
         .size(profile.font_size_body_hp)
         .bold()
         .align(profile.heading_alignment)
-        .line_spacing(line_spacing(profile.body_line_spacing_twips))
+        .line_spacing(line_spacing_with_spacing(
+            profile.body_line_spacing_twips,
+            space_before,
+            space_after,
+        ))
         .indent(
             Some(0),
             Some(SpecialIndentType::FirstLine(heading_left_indent_twips(
@@ -1195,10 +1399,10 @@ fn heading_left_indent_twips(level: u8, profile: &RenderProfile) -> i32 {
     }
 }
 
-fn page_number_header() -> Header {
+fn page_number_header(alignment: AlignmentType) -> Header {
     Header::new().add_paragraph(
         Paragraph::new()
-            .align(AlignmentType::Center)
+            .align(alignment)
             .line_spacing(single_spacing())
             .indent(Some(0), None, None, None)
             .add_page_num(PageNum::new()),
@@ -1287,7 +1491,7 @@ fn build_list_item(
 ) -> Paragraph {
     let para = Paragraph::new()
         .style("ListParagraph")
-        .align(AlignmentType::Both)
+        .align(profile.body_text_alignment)
         .line_spacing(line_spacing(profile.body_line_spacing_twips))
         .indent(
             Some(profile.list_left_indent_twips),
@@ -1306,6 +1510,7 @@ fn build_list_item(
             footnote_hp: profile.font_size_footnote_hp,
         },
         refs,
+        profile,
     )
 }
 
@@ -1337,6 +1542,7 @@ fn build_table(table: &Table, profile: &RenderProfile, refs: &ReferenceRenderInd
                             footnote_hp: profile.font_size_footnote_hp,
                         },
                         refs,
+                        profile,
                     );
                     DocxCell::new()
                         .add_paragraph(resize_paragraph_runs(para, profile.font_size_table_hp))
@@ -1365,6 +1571,7 @@ fn caption_paragraph(
     separator: &str,
     inlines: &[Inline],
     settings: CaptionRenderSettings,
+    profile: &RenderProfile,
     refs: &ReferenceRenderIndex,
 ) -> Paragraph {
     let alignment = effective_caption_alignment(
@@ -1380,19 +1587,25 @@ fn caption_paragraph(
 
     let prefixed = caption_is_prefixed(kind, inlines);
     if !prefixed && let Some(prefix) = caption_prefix_text(kind, number, separator) {
-        para = para.add_run(Run::new().add_text(prefix).bold());
+        let run = if settings.label_bold {
+            Run::new().add_text(prefix).bold()
+        } else {
+            Run::new().add_text(prefix)
+        };
+        para = para.add_run(run);
     }
 
     append_inlines_to_paragraph(
         para,
         inlines,
         InlineRenderState {
-            bold: true,
+            bold: false,
             italic: false,
             force_italic: false,
             footnote_hp: settings.footnote_font_size_hp,
         },
         refs,
+        profile,
     )
 }
 
@@ -1530,6 +1743,7 @@ fn source_paragraph(
             footnote_hp: profile.font_size_footnote_hp,
         },
         refs,
+        profile,
     );
     resize_paragraph_runs(para, profile.font_size_footnote_hp)
 }
@@ -1543,9 +1757,15 @@ fn build_bibliography_heading(title: &str, profile: &RenderProfile) -> Paragraph
     } else {
         title.to_string()
     };
+    let (space_before, space_after) = profile.heading_spacing_before_after(1);
     Paragraph::new()
         .style("Heading1")
         .align(profile.heading_alignment)
+        .line_spacing(line_spacing_with_spacing(
+            profile.body_line_spacing_twips,
+            space_before,
+            space_after,
+        ))
         .indent(Some(0), Some(SpecialIndentType::FirstLine(0)), None, None)
         .add_run(Run::new().add_text(text))
 }
@@ -1657,6 +1877,7 @@ fn render_figure_block(
                 &profile.caption_label_separator_figure,
                 &figure.caption,
                 caption_settings,
+                profile,
                 refs,
             ),
             figure_bookmark.as_deref(),
@@ -1715,6 +1936,7 @@ fn render_figure_block(
                 &profile.caption_label_separator_figure,
                 &figure.caption,
                 caption_settings,
+                profile,
                 refs,
             ),
             if bookmark_consumed {
@@ -1864,10 +2086,15 @@ fn build_paragraph(
         } => {
             let style = heading_style(*level);
             let heading_indent = heading_left_indent_twips(*level, profile);
+            let (space_before, space_after) = profile.heading_spacing_before_after(*level);
             let mut para = Paragraph::new()
                 .style(style)
                 .align(profile.heading_alignment)
-                .line_spacing(line_spacing(profile.body_line_spacing_twips))
+                .line_spacing(line_spacing_with_spacing(
+                    profile.body_line_spacing_twips,
+                    space_before,
+                    space_after,
+                ))
                 .indent(
                     Some(0),
                     Some(SpecialIndentType::FirstLine(heading_indent)),
@@ -1880,7 +2107,7 @@ fn build_paragraph(
                 title.to_vec()
             };
             if let Some(number) = number {
-                let delim = &profile.heading_number_delimiter;
+                let delim = profile.heading_number_delimiter_for_level(*level);
                 let number = number.trim();
                 let number_core = number.trim_end_matches('.');
                 let mut prefix = if *level == 1 && !profile.chapter_name.is_empty() {
@@ -1908,6 +2135,7 @@ fn build_paragraph(
                     footnote_hp: profile.font_size_footnote_hp,
                 },
                 refs,
+                profile,
             )
         }
         Block::Paragraph(inlines) => build_default_body_paragraph(inlines, profile, refs),
@@ -1934,7 +2162,7 @@ fn build_default_body_paragraph(
 ) -> Paragraph {
     let para = Paragraph::new()
         .style("BodyText")
-        .align(AlignmentType::Both)
+        .align(profile.body_text_alignment)
         .line_spacing(line_spacing(profile.body_line_spacing_twips))
         .indent(
             Some(0),
@@ -1954,6 +2182,7 @@ fn build_default_body_paragraph(
             footnote_hp: profile.font_size_footnote_hp,
         },
         refs,
+        profile,
     )
 }
 
@@ -1967,7 +2196,7 @@ fn build_styled_body_paragraph(
         .alignment
         .as_deref()
         .map(parse_alignment)
-        .unwrap_or(AlignmentType::Both);
+        .unwrap_or(profile.body_text_alignment);
     let left_indent = style.left_indent_twips.unwrap_or(0).max(0);
     let line_twips = style
         .line_spacing_twips
@@ -1999,6 +2228,7 @@ fn build_styled_body_paragraph(
             footnote_hp: profile.font_size_footnote_hp,
         },
         refs,
+        profile,
     );
     if let Some(size_hp) = style.font_size_hp {
         resize_paragraph_runs(para, size_hp)
@@ -2069,7 +2299,7 @@ fn generated_toc_paragraphs(
             continue;
         };
 
-        if *level == 0 || *level > 2 {
+        if *level == 0 || *level > profile.toc_max_level() {
             continue;
         }
 
@@ -2102,7 +2332,7 @@ fn generated_toc_paragraphs_from_entries(
             }
             continue;
         }
-        if entry.level > 6 {
+        if entry.level > profile.toc_max_level() {
             continue;
         }
         let title_inlines = vec![Inline::Text(entry.title.clone())];
@@ -2131,6 +2361,29 @@ fn build_toc_page_header_paragraph(text: &str, profile: &RenderProfile) -> Parag
         para = para.add_run(run);
     }
     para
+}
+
+fn is_appendix_like_chapter_number(number: &str) -> bool {
+    let core = number.trim().trim_end_matches('.');
+    core.chars().next().is_some_and(char::is_alphabetic)
+}
+
+fn toc_level_one_name_prefix(profile: &RenderProfile, number: &str) -> Option<String> {
+    let raw_prefix = if is_appendix_like_chapter_number(number)
+        && !profile.toc_appendix_name.trim().is_empty()
+    {
+        profile.toc_appendix_name.trim()
+    } else {
+        profile.toc_chapter_name_prefix.trim()
+    };
+    if raw_prefix.is_empty() {
+        return None;
+    }
+    if profile.heading_uppercase {
+        Some(raw_prefix.to_uppercase())
+    } else {
+        Some(raw_prefix.to_string())
+    }
 }
 
 fn build_toc_entry_paragraph(
@@ -2163,15 +2416,17 @@ fn build_toc_entry_paragraph(
     }
     let toc_indent = profile.toc_level_indent_twips(level);
     let mut toc_numwidth = profile.toc_level_numwidth_twips(level);
-    if level == 1 {
-        let chapter_prefix = profile.toc_chapter_name_prefix.trim();
-        if !chapter_prefix.is_empty() {
-            let prefix = format!("{} ", chapter_prefix.to_uppercase());
-            toc_numwidth = toc_numwidth.saturating_add(estimate_toc_prefix_width_twips(
-                &prefix,
-                profile.font_size_body_hp,
-            ));
-        }
+    let level_one_name_prefix = if level == 1 {
+        number.and_then(|value| toc_level_one_name_prefix(profile, value))
+    } else {
+        None
+    };
+    if let Some(name_prefix) = level_one_name_prefix.as_deref() {
+        let prefix = format!("{name_prefix} ");
+        toc_numwidth = toc_numwidth.saturating_add(estimate_toc_prefix_width_twips(
+            &prefix,
+            profile.font_size_body_hp,
+        ));
     }
 
     if let Some(number) = number {
@@ -2187,9 +2442,8 @@ fn build_toc_entry_paragraph(
         let aftersnum = profile.toc_level_aftersnum(level);
         let mut prefix = String::new();
         if level == 1 {
-            let chapter_prefix = profile.toc_chapter_name_prefix.trim();
-            if !chapter_prefix.is_empty() {
-                prefix.push_str(&chapter_prefix.to_uppercase());
+            if let Some(name_prefix) = level_one_name_prefix.as_deref() {
+                prefix.push_str(name_prefix);
                 prefix.push(' ');
             }
             let number_core = number.trim_end_matches('.');
@@ -2198,7 +2452,7 @@ fn build_toc_entry_paragraph(
             if !aftersnum.is_empty() {
                 prefix.push_str(aftersnum);
             } else {
-                prefix.push_str(&profile.heading_number_delimiter);
+                prefix.push_str(profile.heading_number_delimiter_for_level(1));
             }
         } else {
             prefix.push_str(number);
@@ -2217,7 +2471,7 @@ fn build_toc_entry_paragraph(
         }
     }
 
-    let title = if level == 1 {
+    let title = if level == 1 && profile.heading_uppercase {
         uppercase_inlines(title)
     } else {
         title.to_vec()
@@ -2229,11 +2483,11 @@ fn build_toc_entry_paragraph(
         let mut link = Hyperlink::new(anchor, HyperlinkType::Anchor);
         if level == 1 && !profile.toc_chapter_entry_bold {
             for run in title_runs {
-                link = link.add_run(run.disable_bold().underline("none").color("000000"));
+                link = link.add_run(apply_hyperlink_run_style(run.disable_bold(), profile));
             }
         } else {
             for run in title_runs {
-                link = link.add_run(run.underline("none").color("000000"));
+                link = link.add_run(apply_hyperlink_run_style(run, profile));
             }
         }
         para = para.add_hyperlink(link);
@@ -2297,6 +2551,7 @@ fn append_inlines_to_paragraph(
     inlines: &[Inline],
     state: InlineRenderState,
     refs: &ReferenceRenderIndex,
+    profile: &RenderProfile,
 ) -> Paragraph {
     for inline in inlines {
         match inline {
@@ -2322,6 +2577,7 @@ fn append_inlines_to_paragraph(
                         ..state
                     },
                     refs,
+                    profile,
                 );
             }
             Inline::Italic(children) => {
@@ -2333,6 +2589,7 @@ fn append_inlines_to_paragraph(
                         ..state
                     },
                     refs,
+                    profile,
                 );
             }
             Inline::InlineMath(src) => {
@@ -2357,7 +2614,7 @@ fn append_inlines_to_paragraph(
                 }
                 if let Some(anchor) = anchor {
                     let link = Hyperlink::new(anchor, HyperlinkType::Anchor)
-                        .add_run(run.underline("none").color("000000"));
+                        .add_run(apply_hyperlink_run_style(run, profile));
                     para = para.add_hyperlink(link);
                 } else {
                     para = para.add_run(run);
@@ -2366,7 +2623,7 @@ fn append_inlines_to_paragraph(
             Inline::Footnote(content) => {
                 let mut footnote_para = Paragraph::new()
                     .style("FootnoteText")
-                    .align(AlignmentType::Both)
+                    .align(profile.body_text_alignment)
                     .line_spacing(single_spacing())
                     .indent(Some(0), None, None, None)
                     .keep_lines(true);
@@ -2380,6 +2637,7 @@ fn append_inlines_to_paragraph(
                         footnote_hp: state.footnote_hp,
                     },
                     refs,
+                    profile,
                 );
                 // Apply footnote-sized runs recursively.
                 footnote_para = resize_paragraph_runs(footnote_para, state.footnote_hp);

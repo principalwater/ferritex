@@ -34,6 +34,9 @@ const DEFAULT_PAGE_WIDTH_TWIPS: i32 = 11_906;
 const DEFAULT_PAGE_MARGIN_LEFT_TWIPS: i32 = 1_138;
 const DEFAULT_PAGE_MARGIN_RIGHT_TWIPS: i32 = 288;
 const DEFAULT_BODY_FONT_SIZE_HP: usize = 28;
+const DEFAULT_BODY_LINE_SPACING_TWIPS: i32 = 360;
+/// DOCX auto line-spacing unit: `240` represents single spacing.
+const DOCX_AUTO_LINE_SPACING_UNIT_TWIPS: f64 = 240.0;
 /// Approximate average glyph width for serif text, in `em`.
 ///
 /// Used only for mapping `flushright + tabular{l}` blocks to a fixed-width
@@ -57,7 +60,6 @@ const ESTIMATED_AVERAGE_CHAR_WIDTH_EM: f64 = 0.49;
 /// - `\tablesource{…}` / `\figuresource{…}` — stored as source attribution
 /// - Preamble directives (`\documentclass`, `\usepackage`, `\begin{document}`,
 ///   `\end{document}`) are silently skipped.
-#[allow(dead_code)]
 pub fn parse_latex(source: &str) -> Document {
     let autocite_mode = detect_autocite_mode(source);
     parse_latex_with_mode(
@@ -319,6 +321,7 @@ fn parse_latex_with_mode(
                         heading_candidate,
                         autocite_mode,
                         metadata,
+                        layout.document_language.as_deref(),
                         preserve_dynamic_markers,
                     ) {
                         blocks.push(block);
@@ -521,24 +524,40 @@ fn extract_layout_settings(source: &str) -> DocumentLayout {
     let documentclass_name = extract_documentclass_name(source);
 
     if let Some(options) = extract_last_macro_braced_argument(source, "\\geometry") {
-        layout.page_margin_top_twips = extract_latex_option_value(&options, "top")
-            .and_then(|value| parse_latex_length_to_twips(&value));
-        layout.page_margin_bottom_twips = extract_latex_option_value(&options, "bottom")
-            .and_then(|value| parse_latex_length_to_twips(&value));
-        layout.page_margin_left_twips = extract_latex_option_value(&options, "left")
-            .and_then(|value| parse_latex_length_to_twips(&value));
-        layout.page_margin_right_twips = extract_latex_option_value(&options, "right")
-            .and_then(|value| parse_latex_length_to_twips(&value));
+        layout.page_margin_top_twips =
+            extract_latex_option_value(&options, "top").and_then(|value| {
+                parse_latex_length_to_twips_with_body_font(&value, layout.font_size_body_hp)
+            });
+        layout.page_margin_bottom_twips =
+            extract_latex_option_value(&options, "bottom").and_then(|value| {
+                parse_latex_length_to_twips_with_body_font(&value, layout.font_size_body_hp)
+            });
+        layout.page_margin_left_twips =
+            extract_latex_option_value(&options, "left").and_then(|value| {
+                parse_latex_length_to_twips_with_body_font(&value, layout.font_size_body_hp)
+            });
+        layout.page_margin_right_twips =
+            extract_latex_option_value(&options, "right").and_then(|value| {
+                parse_latex_length_to_twips_with_body_font(&value, layout.font_size_body_hp)
+            });
+        layout.page_gutter_twips =
+            extract_latex_option_value(&options, "bindingoffset").and_then(|value| {
+                parse_latex_length_to_twips_with_body_font(&value, layout.font_size_body_hp)
+            });
     }
 
     if let Some(factor) = extract_last_spacing_factor(preamble, layout.font_size_body_hp) {
         layout.body_line_spacing_twips = spacing_factor_to_twips(factor);
     }
 
-    if let Some(header_twips) = extract_setlength_value_twips(source, "headsep") {
+    if let Some(header_twips) =
+        extract_setlength_value_twips_with_body_font(source, "headsep", layout.font_size_body_hp)
+    {
         layout.page_margin_header_twips = Some(header_twips);
     }
-    if let Some(footer_twips) = extract_setlength_value_twips(source, "footskip") {
+    if let Some(footer_twips) =
+        extract_setlength_value_twips_with_body_font(source, "footskip", layout.font_size_body_hp)
+    {
         layout.page_margin_footer_twips = Some(footer_twips);
     }
 
@@ -593,7 +612,9 @@ fn extract_layout_settings(source: &str) -> DocumentLayout {
     }
 
     // ── Paragraph indent ───────────────────────────────────────────────
-    if let Some(indent_twips) = extract_setlength_value_twips(source, "parindent") {
+    if let Some(indent_twips) =
+        extract_setlength_value_twips_with_body_font(source, "parindent", layout.font_size_body_hp)
+    {
         layout.body_first_line_indent_twips = Some(indent_twips);
     }
 
@@ -608,14 +629,23 @@ fn extract_layout_settings(source: &str) -> DocumentLayout {
     }
     layout.caption_label_separator_figure = extract_captionsetup_label_separator(source, "figure");
     layout.caption_label_separator_table = extract_captionsetup_label_separator(source, "table");
-    layout.caption_skip_twips_figure = extract_captionsetup_skip_twips(source, "figure");
-    layout.caption_skip_twips_table = extract_captionsetup_skip_twips(source, "table");
+    layout.caption_label_bold_figure = extract_captionsetup_labelfont_bold(source, "figure");
+    layout.caption_label_bold_table = extract_captionsetup_labelfont_bold(source, "table");
+    layout.caption_skip_twips_figure =
+        extract_captionsetup_skip_twips_with_body_font(source, "figure", layout.font_size_body_hp);
+    layout.caption_skip_twips_table =
+        extract_captionsetup_skip_twips_with_body_font(source, "table", layout.font_size_body_hp);
     layout.caption_position_figure = extract_captionsetup_position(source, "figure");
     layout.caption_position_table = extract_captionsetup_position(source, "table");
     layout.caption_singlelinecheck_figure = extract_captionsetup_singlelinecheck(source, "figure");
     layout.caption_singlelinecheck_table = extract_captionsetup_singlelinecheck(source, "table");
-    layout.caption_indent_twips_figure = extract_captionsetup_indent_twips(source, "figure");
-    layout.caption_indent_twips_table = extract_captionsetup_indent_twips(source, "table");
+    layout.caption_indent_twips_figure = extract_captionsetup_indent_twips_with_body_font(
+        source,
+        "figure",
+        layout.font_size_body_hp,
+    );
+    layout.caption_indent_twips_table =
+        extract_captionsetup_indent_twips_with_body_font(source, "table", layout.font_size_body_hp);
 
     // ── Chapter name prefix ────────────────────────────────────────────
     // \renewcommand{\chaptername}{Глава}
@@ -636,12 +666,12 @@ fn extract_layout_settings(source: &str) -> DocumentLayout {
     // \geometry{paperwidth=210mm, paperheight=297mm}
     if let Some(options) = extract_last_macro_braced_argument(source, "\\geometry") {
         if let Some(w) = extract_latex_option_value(&options, "paperwidth")
-            .and_then(|v| parse_latex_length_to_twips(&v))
+            .and_then(|v| parse_latex_length_to_twips_with_body_font(&v, layout.font_size_body_hp))
         {
             layout.page_width_twips = Some(w as u32);
         }
         if let Some(h) = extract_latex_option_value(&options, "paperheight")
-            .and_then(|v| parse_latex_length_to_twips(&v))
+            .and_then(|v| parse_latex_length_to_twips_with_body_font(&v, layout.font_size_body_hp))
         {
             layout.page_height_twips = Some(h as u32);
         }
@@ -674,27 +704,89 @@ fn extract_layout_settings(source: &str) -> DocumentLayout {
     // ── Heading number delimiter ─────────────────────────────────────
     // \renewcommand{\thechapter}{\arabic{chapter}.} or similar
     layout.heading_number_delimiter = extract_heading_number_delimiter(source);
-    layout.heading_indent_section_twips = extract_heading_indent_twips(
+    layout.heading_number_delimiter_section = extract_heading_number_delimiter_for_level(source, 2);
+    layout.heading_number_delimiter_subsection =
+        extract_heading_number_delimiter_for_level(source, 3);
+    layout.heading_number_delimiter_subsubsection =
+        extract_heading_number_delimiter_for_level(source, 4);
+    layout.heading_indent_section_twips = extract_heading_indent_twips_with_body_font(
         source,
         "\\setsecindent",
         layout.body_first_line_indent_twips,
+        layout.font_size_body_hp,
     );
-    layout.heading_indent_subsection_twips = extract_heading_indent_twips(
+    layout.heading_indent_subsection_twips = extract_heading_indent_twips_with_body_font(
         source,
         "\\setsubsecindent",
         layout.body_first_line_indent_twips,
+        layout.font_size_body_hp,
     );
-    layout.heading_indent_subsubsection_twips = extract_heading_indent_twips(
+    layout.heading_indent_subsubsection_twips = extract_heading_indent_twips_with_body_font(
         source,
         "\\setsubsubsecindent",
         layout.body_first_line_indent_twips,
+        layout.font_size_body_hp,
     );
-    layout.toc_right_margin_twips = extract_toc_right_margin_twips(source);
+    layout.heading_space_before_chapter_twips = extract_setlength_heading_skip_twips(
+        source,
+        "beforechapskip",
+        layout.body_line_spacing_twips,
+        layout.font_size_body_hp,
+    );
+    layout.heading_space_after_chapter_twips = extract_setlength_heading_skip_twips(
+        source,
+        "afterchapskip",
+        layout.body_line_spacing_twips,
+        layout.font_size_body_hp,
+    );
+    layout.heading_space_before_section_twips = extract_heading_skip_macro_twips(
+        source,
+        "\\setbeforesecskip",
+        layout.body_line_spacing_twips,
+        layout.font_size_body_hp,
+    );
+    layout.heading_space_after_section_twips = extract_heading_skip_macro_twips(
+        source,
+        "\\setaftersecskip",
+        layout.body_line_spacing_twips,
+        layout.font_size_body_hp,
+    );
+    layout.heading_space_before_subsection_twips = extract_heading_skip_macro_twips(
+        source,
+        "\\setbeforesubsecskip",
+        layout.body_line_spacing_twips,
+        layout.font_size_body_hp,
+    );
+    layout.heading_space_after_subsection_twips = extract_heading_skip_macro_twips(
+        source,
+        "\\setaftersubsecskip",
+        layout.body_line_spacing_twips,
+        layout.font_size_body_hp,
+    );
+    layout.heading_space_before_subsubsection_twips = extract_heading_skip_macro_twips(
+        source,
+        "\\setbeforesubsubsecskip",
+        layout.body_line_spacing_twips,
+        layout.font_size_body_hp,
+    );
+    layout.heading_space_after_subsubsection_twips = extract_heading_skip_macro_twips(
+        source,
+        "\\setaftersubsubsecskip",
+        layout.body_line_spacing_twips,
+        layout.font_size_body_hp,
+    );
+    layout.toc_right_margin_twips =
+        extract_toc_right_margin_twips_with_body_font(source, layout.font_size_body_hp);
+    layout.toc_depth = extract_toc_depth(source);
     layout.toc_use_dot_leader = extract_toc_dot_leader(source);
 
     // ── List formatting ──────────────────────────────────────────────
     let (list_label_sep, list_label_width, list_item_indent, list_left_margin, list_bullet) =
-        extract_list_settings(source, layout.body_first_line_indent_twips);
+        extract_list_settings_with_body_font(
+            source,
+            layout.body_first_line_indent_twips,
+            layout.font_size_body_hp,
+        );
     layout.list_label_sep_twips = list_label_sep;
     layout.list_label_width_twips = list_label_width;
     layout.list_item_indent_twips = list_item_indent;
@@ -706,8 +798,13 @@ fn extract_layout_settings(source: &str) -> DocumentLayout {
     }
 
     // ── Source attribution spacing ────────────────────────────────────
-    layout.source_vspace_table_twips = extract_source_vspace_twips(source, "tablesource");
-    layout.source_vspace_figure_twips = extract_source_vspace_twips(source, "figuresource");
+    layout.source_vspace_table_twips =
+        extract_source_vspace_twips_with_body_font(source, "tablesource", layout.font_size_body_hp);
+    layout.source_vspace_figure_twips = extract_source_vspace_twips_with_body_font(
+        source,
+        "figuresource",
+        layout.font_size_body_hp,
+    );
 
     // ── Title page page number suppression ────────────────────────────
     layout.title_page_suppress_number = extract_title_page_suppress_number(source);
@@ -715,6 +812,10 @@ fn extract_layout_settings(source: &str) -> DocumentLayout {
     // ── Caption alignment ────────────────────────────────────────────
     // \captionsetup{justification=centering}
     layout.caption_alignment = extract_captionsetup_justification(source);
+    layout.body_text_alignment = extract_body_text_alignment(preamble);
+    layout.page_number_alignment = extract_page_number_alignment(source);
+    layout.hyperlink_text_color = extract_hypersetup_link_color(source);
+    layout.hyperlink_underline = extract_hypersetup_link_underline(source);
 
     // ── Graphics search paths ────────────────────────────────────────
     // \graphicspath{{./figures/}{./img/}}
@@ -733,15 +834,21 @@ fn extract_layout_settings(source: &str) -> DocumentLayout {
     }
     layout.toc_chapter_name_prefix =
         extract_toc_chapter_name_prefix(source, layout.chapter_name.as_deref());
+    apply_chapstyle_toc_prefix_override(source, &mut layout);
     layout.toc_chapter_entry_bold = extract_toc_chapter_entry_bold(source);
     layout.toc_chapter_page_bold = extract_toc_chapter_page_bold(source);
     layout.toc_aftersnum_chapter = extract_toc_aftersnum(source, "chapter");
     layout.toc_aftersnum_section = extract_toc_aftersnum(source, "section");
     layout.toc_aftersnum_subsection = extract_toc_aftersnum(source, "subsection");
     layout.toc_aftersnum_subsubsection = extract_toc_aftersnum(source, "subsubsection");
+    apply_headingdelim_toc_aftersnum_overrides(source, &mut layout);
     layout.toc_appendix_name = extract_toc_appendix_name(source);
     let (toc_chapter_indent, toc_chapter_numwidth) =
-        extract_toc_indent_numwidth_twips(source, "chapter");
+        extract_toc_indent_numwidth_twips_with_body_font(
+            source,
+            "chapter",
+            layout.font_size_body_hp,
+        );
     layout.toc_indent_chapter_twips = toc_chapter_indent;
     layout.toc_numwidth_chapter_twips = toc_chapter_numwidth;
     layout.toc_chapter_space_before_twips = extract_toc_chapter_before_skip_twips(
@@ -750,15 +857,27 @@ fn extract_layout_settings(source: &str) -> DocumentLayout {
         documentclass_name.as_deref(),
     );
     let (toc_section_indent, toc_section_numwidth) =
-        extract_toc_indent_numwidth_twips(source, "section");
+        extract_toc_indent_numwidth_twips_with_body_font(
+            source,
+            "section",
+            layout.font_size_body_hp,
+        );
     layout.toc_indent_section_twips = toc_section_indent;
     layout.toc_numwidth_section_twips = toc_section_numwidth;
     let (toc_subsection_indent, toc_subsection_numwidth) =
-        extract_toc_indent_numwidth_twips(source, "subsection");
+        extract_toc_indent_numwidth_twips_with_body_font(
+            source,
+            "subsection",
+            layout.font_size_body_hp,
+        );
     layout.toc_indent_subsection_twips = toc_subsection_indent;
     layout.toc_numwidth_subsection_twips = toc_subsection_numwidth;
     let (toc_subsubsection_indent, toc_subsubsection_numwidth) =
-        extract_toc_indent_numwidth_twips(source, "subsubsection");
+        extract_toc_indent_numwidth_twips_with_body_font(
+            source,
+            "subsubsection",
+            layout.font_size_body_hp,
+        );
     layout.toc_indent_subsubsection_twips = toc_subsubsection_indent;
     layout.toc_numwidth_subsubsection_twips = toc_subsubsection_numwidth;
     apply_memoir_toc_indent_numwidth_defaults(&mut layout, documentclass_name.as_deref());
@@ -1377,6 +1496,34 @@ fn extract_heading_number_delimiter(source: &str) -> Option<String> {
     last
 }
 
+fn extract_heading_number_delimiter_for_level(source: &str, level: u8) -> Option<String> {
+    if level <= 1 {
+        return extract_heading_number_delimiter(source);
+    }
+
+    // dissertation/memoir template convention:
+    // headingdelim:
+    //   0 => no dot for chapter/section/subsection;
+    //   1 => chapter has dot, section/subsection do not;
+    //   2 => chapter and section/subsection have dot.
+    if source.contains("headingdelim")
+        && let Some(value) = extract_last_setcounter_value(source, "headingdelim")
+    {
+        return Some(if value > 1 {
+            ".".to_string()
+        } else {
+            String::new()
+        });
+    }
+
+    extract_section_number_delimiter(source)
+}
+
+fn extract_section_number_delimiter(source: &str) -> Option<String> {
+    let raw = extract_last_macro_braced_argument(source, "\\setsecnumformat")?;
+    extract_section_number_delimiter_from_expr(&raw)
+}
+
 /// Extract caption alignment from `\captionsetup{justification=...}`.
 ///
 /// Canonical return values: `"left"`, `"center"`, `"right"`, `"both"`.
@@ -1395,11 +1542,14 @@ fn extract_captionsetup_label_separator(source: &str, target: &str) -> Option<St
     resolve_caption_label_separator(&raw, &declarations, source)
 }
 
-/// Extract caption skip for `target` (`"figure"` or `"table"`) in twips.
-fn extract_captionsetup_skip_twips(source: &str, target: &str) -> Option<i32> {
+fn extract_captionsetup_skip_twips_with_body_font(
+    source: &str,
+    target: &str,
+    body_font_size_hp: Option<usize>,
+) -> Option<i32> {
     let raw = extract_captionsetup_option(source, Some(target), "skip")?;
     let resolved = resolve_captionsetup_option_value(&raw, source)?;
-    parse_latex_length_to_twips_or_zero(&resolved)
+    parse_latex_length_to_twips_or_zero_with_body_font(&resolved, body_font_size_hp)
 }
 
 /// Extract caption position for `target` (`"figure"` or `"table"`).
@@ -1418,11 +1568,33 @@ fn extract_captionsetup_singlelinecheck(source: &str, target: &str) -> Option<bo
     parse_caption_bool(&resolved)
 }
 
-/// Extract caption indent for `target` (`"figure"` or `"table"`) in twips.
-fn extract_captionsetup_indent_twips(source: &str, target: &str) -> Option<i32> {
+fn extract_captionsetup_indent_twips_with_body_font(
+    source: &str,
+    target: &str,
+    body_font_size_hp: Option<usize>,
+) -> Option<i32> {
     let raw = extract_captionsetup_option(source, Some(target), "indent")?;
     let resolved = resolve_captionsetup_option_value(&raw, source)?;
-    parse_latex_length_to_twips_or_zero(&resolved)
+    parse_latex_length_to_twips_or_zero_with_body_font(&resolved, body_font_size_hp)
+}
+
+fn extract_captionsetup_labelfont_bold(source: &str, target: &str) -> Option<bool> {
+    let raw = extract_captionsetup_option(source, Some(target), "labelfont")?;
+    let resolved = resolve_captionsetup_option_value(&raw, source)?;
+    let normalized = resolved
+        .trim()
+        .trim_matches(['{', '}'])
+        .to_ascii_lowercase();
+    if normalized.is_empty() {
+        return None;
+    }
+    if normalized.contains("bf") || normalized.contains("bold") {
+        return Some(true);
+    }
+    if normalized.contains("normalfont") || normalized.contains("mdseries") {
+        return Some(false);
+    }
+    None
 }
 
 /// Resolve `\captionsetup{...}` option value if it references a macro.
@@ -1480,18 +1652,22 @@ fn normalize_caption_position(raw: &str) -> Option<&'static str> {
     }
 }
 
-fn parse_latex_length_to_twips_or_zero(raw: &str) -> Option<i32> {
+fn parse_latex_length_to_twips_or_zero_with_body_font(
+    raw: &str,
+    body_font_size_hp: Option<usize>,
+) -> Option<i32> {
     let trimmed = raw.trim().trim_matches(['{', '}']).trim();
     if trimmed == "0" {
         return Some(0);
     }
-    parse_latex_length_to_twips(trimmed)
+    parse_latex_length_to_twips_with_body_font(trimmed, body_font_size_hp)
 }
 
-fn extract_heading_indent_twips(
+fn extract_heading_indent_twips_with_body_font(
     source: &str,
     macro_name: &str,
     parindent_fallback: Option<i32>,
+    body_font_size_hp: Option<usize>,
 ) -> Option<i32> {
     let raw = extract_last_macro_braced_argument(source, macro_name)?;
     let trimmed = raw.trim().trim_matches(['{', '}']).trim();
@@ -1501,16 +1677,74 @@ fn extract_heading_indent_twips(
     if trimmed == "\\parindent" || trimmed.contains("\\parindent") {
         return parindent_fallback;
     }
-    parse_latex_length_to_twips(trimmed)
+    parse_latex_length_to_twips_with_body_font(trimmed, body_font_size_hp)
 }
 
-/// Extract TOC right margin from memoir `\setrmarg{...}` in twips.
-///
-/// Accepts glue expressions like `2.55em plus1fil` by parsing the leading
-/// length component only.
-fn extract_toc_right_margin_twips(source: &str) -> Option<i32> {
+fn extract_toc_right_margin_twips_with_body_font(
+    source: &str,
+    body_font_size_hp: Option<usize>,
+) -> Option<i32> {
     let raw = extract_last_macro_braced_argument(source, "\\setrmarg")?;
-    parse_latex_length_prefix_to_twips(&raw)
+    parse_latex_length_prefix_to_twips_with_body_font(&raw, body_font_size_hp)
+}
+
+fn extract_setlength_heading_skip_twips(
+    source: &str,
+    name: &str,
+    body_line_spacing_twips: Option<i32>,
+    body_font_size_hp: Option<usize>,
+) -> Option<i32> {
+    let raw = extract_setlength_value_raw(source, name)?;
+    parse_heading_skip_to_twips(&raw, body_line_spacing_twips, body_font_size_hp)
+}
+
+fn extract_heading_skip_macro_twips(
+    source: &str,
+    macro_name: &str,
+    body_line_spacing_twips: Option<i32>,
+    body_font_size_hp: Option<usize>,
+) -> Option<i32> {
+    let raw = extract_last_macro_braced_argument(source, macro_name)?;
+    parse_heading_skip_to_twips(&raw, body_line_spacing_twips, body_font_size_hp)
+}
+
+fn parse_heading_skip_to_twips(
+    raw: &str,
+    body_line_spacing_twips: Option<i32>,
+    body_font_size_hp: Option<usize>,
+) -> Option<i32> {
+    let trimmed = raw.trim().trim_matches(['{', '}']).trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+    if trimmed == "0" || trimmed == "0pt" {
+        return Some(0);
+    }
+
+    let compact: String = trimmed.chars().filter(|ch| !ch.is_whitespace()).collect();
+    for marker in ["\\onelineskip", "\\baselineskip"] {
+        if let Some(idx) = compact.find(marker) {
+            let factor_raw = compact[..idx].trim();
+            let factor = if factor_raw.is_empty() {
+                1.0
+            } else {
+                parse_spacing_factor(factor_raw)?
+            };
+            let base = body_line_spacing_twips.unwrap_or(DEFAULT_BODY_LINE_SPACING_TWIPS) as f64;
+            let twips = (base * factor).round();
+            if twips.is_finite() && twips >= 0.0 {
+                return Some(twips as i32);
+            }
+            return None;
+        }
+    }
+
+    parse_latex_length_to_twips_with_body_font(trimmed, body_font_size_hp)
+        .or_else(|| parse_latex_length_prefix_to_twips_with_body_font(trimmed, body_font_size_hp))
+}
+
+fn extract_toc_depth(source: &str) -> Option<i32> {
+    extract_last_setcounter_value(source, "tocdepth").map(|value| value as i32)
 }
 
 /// Detect whether TOC page numbers should use dot leaders.
@@ -1679,6 +1913,56 @@ fn extract_toc_aftersnum(source: &str, level: &str) -> Option<String> {
     Some(normalize_whitespace(&plain))
 }
 
+fn apply_headingdelim_toc_aftersnum_overrides(source: &str, layout: &mut DocumentLayout) {
+    // dissertation/memoir template convention:
+    // headingdelim:
+    //   0 => no separator after chapter/section numbers in TOC
+    //   1 => chapter ". ", section/subsection empty
+    //   2 => chapter/section/subsection ". "
+    if !source.contains("headingdelim") {
+        return;
+    }
+    let Some(value) = extract_last_setcounter_value(source, "headingdelim") else {
+        return;
+    };
+    layout.toc_aftersnum_chapter = Some(if value > 0 {
+        ". ".to_string()
+    } else {
+        String::new()
+    });
+    let section_delim = if value > 1 {
+        ". ".to_string()
+    } else {
+        String::new()
+    };
+    layout.toc_aftersnum_section = Some(section_delim.clone());
+    layout.toc_aftersnum_subsection = Some(section_delim.clone());
+    layout.toc_aftersnum_subsubsection = Some(section_delim);
+}
+
+fn apply_chapstyle_toc_prefix_override(source: &str, layout: &mut DocumentLayout) {
+    // dissertation/memoir template convention:
+    // chapstyle:
+    //   0 => chapter titles without chapter-name prefix in TOC
+    //   1 => chapter-name prefix enabled (e.g. "ГЛАВА 1")
+    if !source.contains("chapstyle") {
+        return;
+    }
+    let Some(value) = extract_last_setcounter_value(source, "chapstyle") else {
+        return;
+    };
+    if value == 0 {
+        layout.toc_chapter_name_prefix = Some(String::new());
+        return;
+    }
+    if value > 0
+        && layout.toc_chapter_name_prefix.is_none()
+        && let Some(chapter_name) = layout.chapter_name.as_deref()
+    {
+        layout.toc_chapter_name_prefix = Some(chapter_name.trim().to_string());
+    }
+}
+
 /// Extract the TOC appendix prefix from `\renewcommand{\cftappendixname}{...}`.
 ///
 /// Any `\appendixname` reference is substituted with the value extracted from
@@ -1706,14 +1990,17 @@ fn extract_toc_chapter_before_skip_twips(
     body_font_size_hp: Option<usize>,
     documentclass_name: Option<&str>,
 ) -> Option<i32> {
-    if let Some((twips, _)) =
-        extract_last_setlength_value_twips_with_pos(source, "cftbeforechapterskip")
-    {
+    if let Some((twips, _)) = extract_last_setlength_value_twips_with_pos(
+        source,
+        "cftbeforechapterskip",
+        body_font_size_hp,
+    ) {
         return Some(twips);
     }
 
     if let Some(raw) = extract_renewcommand_value(source, "cftbeforechapterskip")
-        && let Some(twips) = parse_latex_length_prefix_to_twips(&raw)
+        && let Some(twips) =
+            parse_latex_length_prefix_to_twips_with_body_font(&raw, body_font_size_hp)
     {
         return Some(twips);
     }
@@ -1745,13 +2032,29 @@ type ListSettings = (
     Option<String>,
 );
 
-fn extract_list_settings(source: &str, body_parindent_twips: Option<i32>) -> ListSettings {
-    let sep = extract_setlist_param_twips(source, "labelsep", None, None, None);
-    let width = extract_setlist_labelwidth_twips(source);
-    let itemindent =
-        extract_setlist_param_twips(source, "itemindent", sep, width, body_parindent_twips);
-    let leftmargin =
-        extract_setlist_param_twips(source, "leftmargin", sep, width, body_parindent_twips);
+fn extract_list_settings_with_body_font(
+    source: &str,
+    body_parindent_twips: Option<i32>,
+    body_font_size_hp: Option<usize>,
+) -> ListSettings {
+    let sep = extract_setlist_param_twips(source, "labelsep", None, None, None, body_font_size_hp);
+    let width = extract_setlist_labelwidth_twips_with_body_font(source, body_font_size_hp);
+    let itemindent = extract_setlist_param_twips(
+        source,
+        "itemindent",
+        sep,
+        width,
+        body_parindent_twips,
+        body_font_size_hp,
+    );
+    let leftmargin = extract_setlist_param_twips(
+        source,
+        "leftmargin",
+        sep,
+        width,
+        body_parindent_twips,
+        body_font_size_hp,
+    );
     let bullet = extract_labelitemi_char(source);
     (sep, width, itemindent, leftmargin, bullet)
 }
@@ -1766,12 +2069,14 @@ fn extract_setlist_param_twips(
     label_sep_twips: Option<i32>,
     label_width_twips: Option<i32>,
     body_parindent_twips: Option<i32>,
+    body_font_size_hp: Option<usize>,
 ) -> Option<i32> {
     let raw = extract_setlist_param_raw(source, param)?;
     if raw.is_empty() {
         return None;
     }
-    if let Some(twips) = parse_latex_length_to_twips(raw.as_str()) {
+    if let Some(twips) = parse_latex_length_to_twips_with_body_font(raw.as_str(), body_font_size_hp)
+    {
         return Some(twips);
     }
     evaluate_setlist_dimexpr_twips(
@@ -1872,15 +2177,15 @@ fn evaluate_setlist_dimexpr_twips(
     Some(total)
 }
 
-/// Extract `labelwidth` from `\setlist{..., labelwidth=<dim-or-!>, ...}`.
-///
-/// Returns `None` for `labelwidth=!` (auto-width).
-fn extract_setlist_labelwidth_twips(source: &str) -> Option<i32> {
+fn extract_setlist_labelwidth_twips_with_body_font(
+    source: &str,
+    body_font_size_hp: Option<usize>,
+) -> Option<i32> {
     let raw = extract_setlist_param_raw(source, "labelwidth")?;
     if raw.starts_with('!') {
         return None;
     }
-    parse_latex_length_to_twips(raw.trim())
+    parse_latex_length_to_twips_with_body_font(raw.trim(), body_font_size_hp)
 }
 
 /// Extract the bullet character from `\renewcommand{\labelitemi}{...}`.
@@ -1912,12 +2217,11 @@ fn extract_labelitemi_char(source: &str) -> Option<String> {
 
 // ── Source vspace extraction ─────────────────────────────────────────────────
 
-/// Extract the vertical space (in twips) specified before the content in a
-/// `\newcommand{\<macro_name>}[1]{\par\vspace{<dim>}...}` definition.
-///
-/// Strategy: find the definition marker, then look for the first `\vspace{<dim>}`
-/// within 200 characters — reliable for the common `\par\vspace{4pt}{...}` pattern.
-fn extract_source_vspace_twips(source: &str, macro_name: &str) -> Option<i32> {
+fn extract_source_vspace_twips_with_body_font(
+    source: &str,
+    macro_name: &str,
+    body_font_size_hp: Option<usize>,
+) -> Option<i32> {
     let def_marker_new = format!("\\newcommand{{\\{macro_name}}}");
     let def_marker_renew = format!("\\renewcommand{{\\{macro_name}}}");
     let def_pos = source
@@ -1929,7 +2233,7 @@ fn extract_source_vspace_twips(source: &str, macro_name: &str) -> Option<i32> {
     let after_v = &window[vspace_rel + "\\vspace{".len()..];
     let close = after_v.find('}')?;
     let dim = after_v[..close].trim();
-    parse_latex_length_to_twips(dim)
+    parse_latex_length_to_twips_with_body_font(dim, body_font_size_hp)
 }
 
 // ── Title page page number suppression ──────────────────────────────────────
@@ -1988,23 +2292,21 @@ fn extract_printbibliography_title(args: &str) -> Option<String> {
     }
 }
 
-/// Extract TOC entry indent and number-width settings for a given entry kind
-/// (`chapter`, `section`, `subsection`, `subsubsection`) in twips.
-///
-/// Supported LaTeX sources:
-/// - `\setlength{\cft<kind>indent}{...}` + `\setlength{\cft<kind>numwidth}{...}`
-/// - `\cftsetindents{<kind>}{<indent>}{<numwidth>}`
-///
-/// When both forms are present, the later occurrence in source order wins.
-fn extract_toc_indent_numwidth_twips(source: &str, kind: &str) -> (Option<i32>, Option<i32>) {
+fn extract_toc_indent_numwidth_twips_with_body_font(
+    source: &str,
+    kind: &str,
+    body_font_size_hp: Option<usize>,
+) -> (Option<i32>, Option<i32>) {
     let indent_name = format!("cft{kind}indent");
     let numwidth_name = format!("cft{kind}numwidth");
 
-    let mut indent = extract_last_setlength_value_twips_with_pos(source, &indent_name);
-    let mut numwidth = extract_last_setlength_value_twips_with_pos(source, &numwidth_name);
+    let mut indent =
+        extract_last_setlength_value_twips_with_pos(source, &indent_name, body_font_size_hp);
+    let mut numwidth =
+        extract_last_setlength_value_twips_with_pos(source, &numwidth_name, body_font_size_hp);
 
     if let Some((cft_indent, cft_numwidth, cft_pos)) =
-        extract_last_cftsetindents_twips_with_pos(source, kind)
+        extract_last_cftsetindents_twips_with_pos(source, kind, body_font_size_hp)
     {
         if let Some(v) = cft_indent
             && indent.is_none_or(|(_, set_pos)| cft_pos >= set_pos)
@@ -2021,7 +2323,11 @@ fn extract_toc_indent_numwidth_twips(source: &str, kind: &str) -> (Option<i32>, 
     (indent.map(|(v, _)| v), numwidth.map(|(v, _)| v))
 }
 
-fn extract_last_setlength_value_twips_with_pos(source: &str, name: &str) -> Option<(i32, usize)> {
+fn extract_last_setlength_value_twips_with_pos(
+    source: &str,
+    name: &str,
+    body_font_size_hp: Option<usize>,
+) -> Option<(i32, usize)> {
     let mut pos = 0usize;
     let mut last = None;
 
@@ -2049,7 +2355,8 @@ fn extract_last_setlength_value_twips_with_pos(source: &str, name: &str) -> Opti
         let raw_value = source[cur + 1..cur + value_len - 1].trim();
         let end_pos = cur + value_len;
         if raw_name == name
-            && let Some(twips) = parse_latex_length_prefix_to_twips(raw_value)
+            && let Some(twips) =
+                parse_latex_length_prefix_to_twips_with_body_font(raw_value, body_font_size_hp)
         {
             last = Some((twips, end_pos));
         }
@@ -2062,6 +2369,7 @@ fn extract_last_setlength_value_twips_with_pos(source: &str, name: &str) -> Opti
 fn extract_last_cftsetindents_twips_with_pos(
     source: &str,
     kind: &str,
+    body_font_size_hp: Option<usize>,
 ) -> Option<(Option<i32>, Option<i32>, usize)> {
     let mut pos = 0usize;
     let mut last = None;
@@ -2104,8 +2412,8 @@ fn extract_last_cftsetindents_twips_with_pos(
 
         if raw_kind == kind {
             last = Some((
-                parse_latex_length_prefix_to_twips(raw_indent),
-                parse_latex_length_prefix_to_twips(raw_numwidth),
+                parse_latex_length_prefix_to_twips_with_body_font(raw_indent, body_font_size_hp),
+                parse_latex_length_prefix_to_twips_with_body_font(raw_numwidth, body_font_size_hp),
                 end_pos,
             ));
         }
@@ -2285,6 +2593,353 @@ fn find_top_level_char(src: &str, needle: char) -> Option<usize> {
     }
 
     None
+}
+
+fn extract_hypersetup_option(source: &str, key: &str) -> Option<String> {
+    let needle = "\\hypersetup";
+    let mut pos = 0usize;
+    let mut last = None;
+    let key = key.to_ascii_lowercase();
+
+    while let Some(rel) = source[pos..].find(needle) {
+        let start = pos + rel + needle.len();
+        let mut cur = start;
+        while cur < source.len() && source.as_bytes()[cur].is_ascii_whitespace() {
+            cur += 1;
+        }
+        let Some(body_len) = braced_len(&source[cur..]) else {
+            pos = start;
+            continue;
+        };
+        let body = &source[cur + 1..cur + body_len - 1];
+        if let Some(value) = extract_top_level_kv_option_value(body, &key) {
+            last = Some(value);
+        }
+        pos = cur + body_len;
+    }
+
+    last
+}
+
+fn hypersetup_has_flag(source: &str, flag: &str) -> bool {
+    let needle = "\\hypersetup";
+    let mut pos = 0usize;
+    let target = flag.to_ascii_lowercase();
+
+    while let Some(rel) = source[pos..].find(needle) {
+        let start = pos + rel + needle.len();
+        let mut cur = start;
+        while cur < source.len() && source.as_bytes()[cur].is_ascii_whitespace() {
+            cur += 1;
+        }
+        let Some(body_len) = braced_len(&source[cur..]) else {
+            pos = start;
+            continue;
+        };
+        let body = &source[cur + 1..cur + body_len - 1];
+        if split_top_level_by_comma(body)
+            .iter()
+            .map(|entry| entry.trim().to_ascii_lowercase())
+            .any(|entry| entry == target)
+        {
+            return true;
+        }
+        pos = cur + body_len;
+    }
+
+    false
+}
+
+fn extract_hypersetup_link_color(source: &str) -> Option<String> {
+    let raw = extract_hypersetup_option(source, "linkcolor")
+        .or_else(|| extract_hypersetup_option(source, "allcolors"))?;
+    normalize_hypersetup_color(&raw)
+}
+
+fn normalize_hypersetup_color(raw: &str) -> Option<String> {
+    let value = raw
+        .trim()
+        .trim_matches(['{', '}'])
+        .trim()
+        .trim_matches('"')
+        .trim();
+    if value.is_empty() {
+        None
+    } else {
+        Some(value.trim_start_matches('\\').to_string())
+    }
+}
+
+fn extract_hypersetup_link_underline(source: &str) -> Option<bool> {
+    if hypersetup_has_flag(source, "hidelinks") {
+        return Some(false);
+    }
+
+    if let Some(value) = extract_hypersetup_option(source, "colorlinks")
+        && let Some(colorlinks) = parse_caption_bool(&value)
+    {
+        // hyperref `colorlinks=true` renders colored text without boxes.
+        // Use no underline in this mode and underline when links are not color-only.
+        return Some(!colorlinks);
+    }
+
+    if hypersetup_has_flag(source, "colorlinks") {
+        return Some(false);
+    }
+
+    None
+}
+
+fn extract_body_text_alignment(preamble: &str) -> Option<String> {
+    let mut last = None;
+
+    // Global body alignment is often wrapped in \AtBeginDocument{...}.
+    let mut pos = 0usize;
+    while let Some(rel) = preamble[pos..].find("\\AtBeginDocument") {
+        let start = pos + rel + "\\AtBeginDocument".len();
+        let mut cur = start;
+        while cur < preamble.len() && preamble.as_bytes()[cur].is_ascii_whitespace() {
+            cur += 1;
+        }
+        let Some(arg_len) = braced_len(&preamble[cur..]) else {
+            pos = start;
+            continue;
+        };
+        let body = &preamble[cur + 1..cur + arg_len - 1];
+        if let Some(value) = detect_alignment_directive_top_level(body) {
+            last = Some(value.to_string());
+        }
+        pos = cur + arg_len;
+    }
+
+    if let Some(value) = detect_alignment_directive_top_level(preamble) {
+        last = Some(value.to_string());
+    }
+
+    last
+}
+
+fn detect_alignment_directive_top_level(src: &str) -> Option<&'static str> {
+    let mut last = None;
+    let mut depth = 0usize;
+    let bytes = src.as_bytes();
+    let mut i = 0usize;
+
+    while i < bytes.len() {
+        let b = bytes[i];
+        if b == b'%' && (i == 0 || bytes[i - 1] != b'\\') {
+            // Skip comments till end of line.
+            while i < bytes.len() && bytes[i] != b'\n' {
+                i += 1;
+            }
+            continue;
+        }
+        if b == b'{' {
+            depth = depth.saturating_add(1);
+            i += 1;
+            continue;
+        }
+        if b == b'}' {
+            depth = depth.saturating_sub(1);
+            i += 1;
+            continue;
+        }
+        if b == b'\\' {
+            let mut j = i + 1;
+            while j < bytes.len() {
+                let ch = bytes[j];
+                if ch.is_ascii_alphabetic() || ch == b'@' {
+                    j += 1;
+                } else {
+                    break;
+                }
+            }
+            if depth == 0 {
+                let cmd = src[i + 1..j].to_ascii_lowercase();
+                match cmd.as_str() {
+                    "centering" | "filcenter" => last = Some("center"),
+                    "raggedright" | "flushleft" => last = Some("left"),
+                    "raggedleft" | "flushright" => last = Some("right"),
+                    "justifying" | "justified" => last = Some("both"),
+                    _ => {}
+                }
+            }
+            i = if j > i + 1 { j } else { i + 1 };
+            continue;
+        }
+        i += 1;
+    }
+
+    last
+}
+
+fn extract_page_number_alignment(source: &str) -> Option<String> {
+    let mut last: Option<(usize, String)> = None;
+
+    capture_footer_alignment_by_command(source, "\\lfoot", "left", &mut last);
+    capture_footer_alignment_by_command(source, "\\cfoot", "center", &mut last);
+    capture_footer_alignment_by_command(source, "\\rfoot", "right", &mut last);
+    capture_fancyfoot_alignment(source, &mut last);
+    capture_memoir_foot_alignment(source, "\\makeoddfoot", &mut last);
+    capture_memoir_foot_alignment(source, "\\makeevenfoot", &mut last);
+    capture_memoir_foot_alignment(source, "\\makeoddhead", &mut last);
+    capture_memoir_foot_alignment(source, "\\makeevenhead", &mut last);
+
+    last.map(|(_, value)| value)
+}
+
+fn capture_footer_alignment_by_command(
+    source: &str,
+    command: &str,
+    alignment: &str,
+    last: &mut Option<(usize, String)>,
+) {
+    let mut pos = 0usize;
+    while let Some(rel) = source[pos..].find(command) {
+        let start = pos + rel;
+        let mut cur = start + command.len();
+        while cur < source.len() && source.as_bytes()[cur].is_ascii_whitespace() {
+            cur += 1;
+        }
+        if cur < source.len()
+            && source.as_bytes()[cur] == b'['
+            && let Some(scope_len) = bracketed_len(&source[cur..])
+        {
+            cur += scope_len;
+            while cur < source.len() && source.as_bytes()[cur].is_ascii_whitespace() {
+                cur += 1;
+            }
+        }
+        if cur < source.len()
+            && source.as_bytes()[cur] == b'{'
+            && let Some(arg_len) = braced_len(&source[cur..])
+        {
+            let body = &source[cur + 1..cur + arg_len - 1];
+            if body.contains("\\thepage") {
+                let end_pos = cur + arg_len;
+                if last.as_ref().is_none_or(|(prev, _)| end_pos >= *prev) {
+                    *last = Some((end_pos, alignment.to_string()));
+                }
+            }
+            pos = cur + arg_len;
+            continue;
+        }
+        pos = cur;
+    }
+}
+
+fn capture_fancyfoot_alignment(source: &str, last: &mut Option<(usize, String)>) {
+    let command = "\\fancyfoot";
+    let mut pos = 0usize;
+    while let Some(rel) = source[pos..].find(command) {
+        let start = pos + rel;
+        let mut cur = start + command.len();
+        while cur < source.len() && source.as_bytes()[cur].is_ascii_whitespace() {
+            cur += 1;
+        }
+        let mut scope: Option<String> = None;
+        if cur < source.len()
+            && source.as_bytes()[cur] == b'['
+            && let Some(scope_len) = bracketed_len(&source[cur..])
+        {
+            scope = Some(source[cur + 1..cur + scope_len - 1].to_ascii_uppercase());
+            cur += scope_len;
+            while cur < source.len() && source.as_bytes()[cur].is_ascii_whitespace() {
+                cur += 1;
+            }
+        }
+        if cur < source.len()
+            && source.as_bytes()[cur] == b'{'
+            && let Some(arg_len) = braced_len(&source[cur..])
+        {
+            let body = &source[cur + 1..cur + arg_len - 1];
+            if body.contains("\\thepage") {
+                let alignment = scope
+                    .as_deref()
+                    .and_then(|value| {
+                        if value.contains('C') {
+                            Some("center")
+                        } else if value.contains('R') {
+                            Some("right")
+                        } else if value.contains('L') {
+                            Some("left")
+                        } else {
+                            None
+                        }
+                    })
+                    .unwrap_or("center");
+                let end_pos = cur + arg_len;
+                if last.as_ref().is_none_or(|(prev, _)| end_pos >= *prev) {
+                    *last = Some((end_pos, alignment.to_string()));
+                }
+            }
+            pos = cur + arg_len;
+            continue;
+        }
+        pos = cur;
+    }
+}
+
+fn capture_memoir_foot_alignment(source: &str, command: &str, last: &mut Option<(usize, String)>) {
+    let mut pos = 0usize;
+    while let Some(rel) = source[pos..].find(command) {
+        let start = pos + rel;
+        let mut cur = start + command.len();
+        while cur < source.len() && source.as_bytes()[cur].is_ascii_whitespace() {
+            cur += 1;
+        }
+
+        let Some(style_len) = braced_len(&source[cur..]) else {
+            pos = cur;
+            continue;
+        };
+        cur += style_len;
+        while cur < source.len() && source.as_bytes()[cur].is_ascii_whitespace() {
+            cur += 1;
+        }
+        let Some(left_len) = braced_len(&source[cur..]) else {
+            pos = cur;
+            continue;
+        };
+        let left = source[cur + 1..cur + left_len - 1].to_string();
+        cur += left_len;
+        while cur < source.len() && source.as_bytes()[cur].is_ascii_whitespace() {
+            cur += 1;
+        }
+        let Some(center_len) = braced_len(&source[cur..]) else {
+            pos = cur;
+            continue;
+        };
+        let center = source[cur + 1..cur + center_len - 1].to_string();
+        cur += center_len;
+        while cur < source.len() && source.as_bytes()[cur].is_ascii_whitespace() {
+            cur += 1;
+        }
+        let Some(right_len) = braced_len(&source[cur..]) else {
+            pos = cur;
+            continue;
+        };
+        let right = source[cur + 1..cur + right_len - 1].to_string();
+        let end_pos = cur + right_len;
+
+        let alignment = if center.contains("\\thepage") {
+            Some("center")
+        } else if right.contains("\\thepage") {
+            Some("right")
+        } else if left.contains("\\thepage") {
+            Some("left")
+        } else {
+            None
+        };
+
+        if let Some(alignment) = alignment
+            && last.as_ref().is_none_or(|(prev, _)| end_pos >= *prev)
+        {
+            *last = Some((end_pos, alignment.to_string()));
+        }
+
+        pos = end_pos;
+    }
 }
 
 fn resolve_caption_label_separator(
@@ -2541,6 +3196,17 @@ fn extract_heading_number_delimiter_from_expr(expr: &str) -> Option<String> {
         "\\Alph{chapter}",
         "\\alph{chapter}",
     ];
+    for token in tokens {
+        if let Some(idx) = expr.rfind(token) {
+            let suffix = &expr[idx + token.len()..];
+            return Some(normalize_delimiter_suffix(suffix));
+        }
+    }
+    None
+}
+
+fn extract_section_number_delimiter_from_expr(expr: &str) -> Option<String> {
+    let tokens = ["\\csname the#1\\endcsname", "\\the#1"];
     for token in tokens {
         if let Some(idx) = expr.rfind(token) {
             let suffix = &expr[idx + token.len()..];
@@ -2875,7 +3541,7 @@ fn extract_last_spacing_factor(source: &str, body_font_size_hp: Option<usize>) -
 }
 
 fn spacing_factor_to_twips(factor: f64) -> Option<i32> {
-    let twips = (240.0 * factor).round();
+    let twips = (DOCX_AUTO_LINE_SPACING_UNIT_TWIPS * factor).round();
     if twips.is_finite() && twips > 0.0 {
         Some(twips as i32)
     } else {
@@ -2935,7 +3601,11 @@ fn parse_spacing_factor(raw: &str) -> Option<f64> {
         .filter(|factor| factor.is_finite() && *factor > 0.0)
 }
 
-fn extract_setlength_value_twips(source: &str, name: &str) -> Option<i32> {
+fn extract_setlength_value_twips_with_body_font(
+    source: &str,
+    name: &str,
+    body_font_size_hp: Option<usize>,
+) -> Option<i32> {
     let mut pos = 0usize;
     let mut last = None;
 
@@ -2962,7 +3632,7 @@ fn extract_setlength_value_twips(source: &str, name: &str) -> Option<i32> {
         };
         let raw_value = source[cur + 1..cur + value_len - 1].trim();
         if raw_name == name {
-            last = parse_latex_length_to_twips(raw_value);
+            last = parse_latex_length_to_twips_with_body_font(raw_value, body_font_size_hp);
         }
         pos = cur + value_len;
     }
@@ -2970,7 +3640,44 @@ fn extract_setlength_value_twips(source: &str, name: &str) -> Option<i32> {
     last
 }
 
-fn parse_latex_length_to_twips(raw: &str) -> Option<i32> {
+fn extract_setlength_value_raw(source: &str, name: &str) -> Option<String> {
+    let mut pos = 0usize;
+    let mut last = None;
+
+    while let Some(rel) = source[pos..].find("\\setlength") {
+        let cmd_start = pos + rel;
+        let mut cur = cmd_start + "\\setlength".len();
+        while cur < source.len() && source.as_bytes()[cur].is_ascii_whitespace() {
+            cur += 1;
+        }
+        let Some(name_len) = braced_len(&source[cur..]) else {
+            pos = cur;
+            continue;
+        };
+        let raw_name = source[cur + 1..cur + name_len - 1]
+            .trim()
+            .trim_start_matches('\\');
+        cur += name_len;
+        while cur < source.len() && source.as_bytes()[cur].is_ascii_whitespace() {
+            cur += 1;
+        }
+        let Some(value_len) = braced_len(&source[cur..]) else {
+            pos = cur;
+            continue;
+        };
+        if raw_name == name {
+            last = Some(source[cur + 1..cur + value_len - 1].trim().to_string());
+        }
+        pos = cur + value_len;
+    }
+
+    last
+}
+
+fn parse_latex_length_to_twips_with_body_font(
+    raw: &str,
+    body_font_size_hp: Option<usize>,
+) -> Option<i32> {
     let normalized = raw
         .trim()
         .trim_matches(['{', '}'])
@@ -2981,14 +3688,14 @@ fn parse_latex_length_to_twips(raw: &str) -> Option<i32> {
         return None;
     }
 
-    // `em` is relative — 1 em equals the body font size.  We assume the
-    // standard LaTeX base of 14pt (which gives 1em = 280 twips) unless the
-    // caller parses a different font size (handled downstream).
+    // `em` is relative — 1 em equals the body font size.
+    let em_twips =
+        em_twips_for_body_font(body_font_size_hp.or(Some(DEFAULT_BODY_FONT_SIZE_HP)), 1.0) as f64;
     for (unit, twips_per_unit) in [
         ("mm", 56.692_913_f64),
         ("cm", 566.929_133_f64),
         ("in", 1440.0_f64),
-        ("em", 280.0_f64),
+        ("em", em_twips),
         ("pt", 20.0_f64),
     ] {
         if let Some(number) = normalized.strip_suffix(unit) {
@@ -3007,9 +3714,10 @@ fn parse_latex_length_to_twips(raw: &str) -> Option<i32> {
     None
 }
 
-/// Parse a leading LaTeX length expression (e.g. `2.55em` from
-/// `2.55em plus1fil`) into twips.
-fn parse_latex_length_prefix_to_twips(raw: &str) -> Option<i32> {
+fn parse_latex_length_prefix_to_twips_with_body_font(
+    raw: &str,
+    body_font_size_hp: Option<usize>,
+) -> Option<i32> {
     let compact = raw
         .trim()
         .trim_matches(['{', '}'])
@@ -3043,7 +3751,7 @@ fn parse_latex_length_prefix_to_twips(raw: &str) -> Option<i32> {
     for unit in ["mm", "cm", "in", "em", "pt"] {
         if unit_tail.starts_with(unit) {
             let candidate = format!("{}{}", &compact[..end], unit);
-            return parse_latex_length_to_twips(&candidate);
+            return parse_latex_length_to_twips_with_body_font(&candidate, body_font_size_hp);
         }
     }
     None
@@ -5448,11 +6156,12 @@ fn prepare_text_chunk(
         state.current_line_spacing_twips = Some(line_spacing_twips.max(1));
     }
 
-    if let Some(vspace_twips) = parse_vspace_only_chunk_twips(chunk) {
+    if let Some(vspace_twips) = parse_vspace_only_chunk_twips(chunk, layout.font_size_body_hp) {
         state.pending_space_before_twips = Some(vspace_twips.max(0));
         return None;
     }
-    let leading_vspace_twips = extract_leading_vspace_twips(chunk).map(|twips| twips.max(0));
+    let leading_vspace_twips =
+        extract_leading_vspace_twips(chunk, layout.font_size_body_hp).map(|twips| twips.max(0));
 
     let leading_hfill = chunk.trim_start().starts_with("\\hfill");
     let mut style = ParagraphStyle::default();
@@ -5634,7 +6343,7 @@ fn push_plain_with_linebreaks(inlines: &[Inline], out: &mut String) {
     }
 }
 
-fn parse_vspace_only_chunk_twips(chunk: &str) -> Option<i32> {
+fn parse_vspace_only_chunk_twips(chunk: &str, body_font_size_hp: Option<usize>) -> Option<i32> {
     let mut rest = chunk.trim();
     let mut saw_vspace = false;
     let mut last_twips = None;
@@ -5650,7 +6359,8 @@ fn parse_vspace_only_chunk_twips(chunk: &str) -> Option<i32> {
         let after_cmd = after_cmd.trim_start();
         let arg_len = braced_len(after_cmd)?;
         let payload = &after_cmd[1..arg_len - 1];
-        if let Some(twips) = parse_latex_length_to_twips(payload) {
+        if let Some(twips) = parse_latex_length_to_twips_with_body_font(payload, body_font_size_hp)
+        {
             last_twips = Some(twips);
         }
         saw_vspace = true;
@@ -5664,7 +6374,7 @@ fn parse_vspace_only_chunk_twips(chunk: &str) -> Option<i32> {
     }
 }
 
-fn extract_leading_vspace_twips(chunk: &str) -> Option<i32> {
+fn extract_leading_vspace_twips(chunk: &str, body_font_size_hp: Option<usize>) -> Option<i32> {
     let mut rest = chunk.trim_start();
     let mut last_twips = None;
 
@@ -5687,7 +6397,7 @@ fn extract_leading_vspace_twips(chunk: &str) -> Option<i32> {
             continue;
         }
 
-        if let Some((twips, after)) = consume_vspace_command(rest) {
+        if let Some((twips, after)) = consume_vspace_command(rest, body_font_size_hp) {
             if let Some(twips) = twips {
                 last_twips = Some(twips);
             }
@@ -5764,7 +6474,10 @@ fn consume_control_with_braced_arg<'a>(src: &'a str, command: &str) -> Option<&'
     Some(&rest[arg_len..])
 }
 
-fn consume_vspace_command(src: &str) -> Option<(Option<i32>, &str)> {
+fn consume_vspace_command(
+    src: &str,
+    body_font_size_hp: Option<usize>,
+) -> Option<(Option<i32>, &str)> {
     let after_cmd = if let Some(value) = consume_control_word(src, "\\vspace*") {
         value
     } else {
@@ -5776,7 +6489,10 @@ fn consume_vspace_command(src: &str) -> Option<(Option<i32>, &str)> {
     }
     let arg_len = braced_len(after_cmd)?;
     let payload = &after_cmd[1..arg_len - 1];
-    Some((parse_latex_length_to_twips(payload), &after_cmd[arg_len..]))
+    Some((
+        parse_latex_length_to_twips_with_body_font(payload, body_font_size_hp),
+        &after_cmd[arg_len..],
+    ))
 }
 
 fn extract_spacing_directive_twips(chunk: &str, body_font_size_hp: Option<usize>) -> Option<i32> {
@@ -5826,7 +6542,7 @@ fn extract_fontsize_settings(src: &str) -> (Option<usize>, Option<i32>) {
 }
 
 fn parse_fontsize_line_spacing_twips(raw: &str, font_size_hp: Option<usize>) -> Option<i32> {
-    if let Some(twips) = parse_latex_length_to_twips(raw) {
+    if let Some(twips) = parse_latex_length_to_twips_with_body_font(raw, font_size_hp) {
         if let Some(size_hp) = font_size_hp {
             let font_pt = size_hp as f64 / 2.0;
             if font_pt > 0.0 {
@@ -5835,7 +6551,7 @@ fn parse_fontsize_line_spacing_twips(raw: &str, font_size_hp: Option<usize>) -> 
                 let baseline_pt = twips as f64 / 20.0;
                 let factor = baseline_pt / font_pt;
                 if factor.is_finite() && factor > 0.0 {
-                    return Some((factor * 240.0).round() as i32);
+                    return Some((factor * DOCX_AUTO_LINE_SPACING_UNIT_TWIPS).round() as i32);
                 }
             }
         }
@@ -5854,7 +6570,7 @@ fn parse_fontsize_line_spacing_twips(raw: &str, font_size_hp: Option<usize>) -> 
         if font_pt > 0.0 {
             let factor = numeric / font_pt;
             if factor.is_finite() && factor > 0.0 {
-                return Some((factor * 240.0).round() as i32);
+                return Some((factor * DOCX_AUTO_LINE_SPACING_UNIT_TWIPS).round() as i32);
             }
         }
     }
@@ -6235,8 +6951,13 @@ fn try_parse_plain_heading(
     chunk: &str,
     autocite_mode: AutociteMode,
     metadata: &ParseMetadata,
+    document_language: Option<&str>,
     preserve_dynamic_markers: bool,
 ) -> Option<Block> {
+    if !supports_plain_cyrillic_heading_detection(document_language) {
+        return None;
+    }
+
     let mut chunk = strip_leading_layout_markers(chunk);
     if chunk.is_empty() {
         return None;
@@ -6364,6 +7085,8 @@ fn try_parse_bibliography_command(chunk: &str, language: Option<&str>) -> Option
 ///
 /// These strings are Russian-specific because they match a known corpus where
 /// front-matter sections are sometimes written as plain text without LaTeX commands.
+/// Detection is language-gated and enabled only for Cyrillic document languages
+/// (`ru-RU`, `uk-UA`, `be-BY`).
 ///
 /// **Known limitation**: non-Russian plain-text documents that use this path will
 /// need their own patterns. This function is NOT called for `\tableofcontents` —
@@ -6383,6 +7106,10 @@ fn is_plain_front_matter_heading(lower: &str) -> bool {
             | "библиографический список"
             | "список литературы"
     ) || trimmed.starts_with("приложение")
+}
+
+fn supports_plain_cyrillic_heading_detection(language: Option<&str>) -> bool {
+    matches!(language, Some("ru-RU" | "uk-UA" | "be-BY"))
 }
 
 fn parse_plain_chapter_heading(chunk: &str) -> Option<(usize, &str)> {

@@ -2,7 +2,6 @@ use thiserror::Error;
 
 /// Application-level errors for ferritex.
 // TODO: integrate into parser/renderer error paths in v0.2+
-#[allow(dead_code)]
 #[derive(Debug, Error)]
 pub enum FerritexError {
     /// Wrapper around I/O failures.

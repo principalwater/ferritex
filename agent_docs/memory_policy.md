@@ -8,16 +8,18 @@ memory inside this repository.
 
 ## Source of truth hierarchy
 
-These repository Markdown files are the **single source of truth** for project memory.
-Agents must treat them as authoritative, in order:
+The **only authoritative project memory** is repository Markdown:
 
-1. `AGENTS.md`
-2. `agent_docs/*.md` (including `plans/`)
-3. `docs/*.md`
+1. `AGENTS.md` — non-negotiable constraints, architecture rules, privacy rules
+2. `agent_docs/*.md` (including `plans/`) — workflow docs, plans, session state
+3. `docs/*.md` — architecture, roadmap, supported elements
 
-Global AI memory outside the repository (`~/.codex/`, `~/.claude/`) is advisory at best and
-must not override local project docs. External logs/history may be used only for recovery, and
-any stable recovered decision must be written back into repository docs immediately.
+`CLAUDE.md` (when present) is a Claude-specific runtime instruction profile.
+It must be read by Claude clients, but it is not a substitute for project memory in the files above.
+
+Global AI memory outside the repository (`~/.codex/`, `~/.claude/`) is not reliable and must not
+override repository docs. If external history is used for recovery, stable decisions must be
+written back into repository Markdown immediately.
 
 ## Plans storage
 
@@ -31,7 +33,6 @@ any stable recovered decision must be written back into repository docs immediat
 ## Session start requirements (for any agent)
 
 Before making changes, read and follow:
-- `CLAUDE.md` (Claude Code agents) or equivalent agent config
 - `AGENTS.md`
 - `agent_docs/README.md`
 - `agent_docs/latex_driven_policy.md`
@@ -45,6 +46,9 @@ Before making changes, read and follow:
 - `docs/ROADMAP.md`
 - `docs/SUPPORTED_ELEMENTS.md`
 
+Additional client-specific rule:
+- Claude Code agents must also read `CLAUDE.md` when present.
+
 ## Update policy
 
 When a session produces stable decisions, update repository docs **before** the session ends:
@@ -54,6 +58,7 @@ When a session produces stable decisions, update repository docs **before** the 
 
 Do not leave critical context only in chat transcripts.
 Do not leave stable context only in global AI memory.
+Every new stable decision must be persisted in repository Markdown before session end.
 
 ## What belongs in session_summary.md
 

@@ -2,6 +2,7 @@
 name = "ferritex-renderer-docx"
 version = "0.1.0"
 edition = "2024"
+rust-version = "1.93"
 description = "DOCX renderer backend for ferritex"
 license = "MIT"
 

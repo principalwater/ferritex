@@ -1,42 +1,51 @@
 name: CI
 
 on:
-  push:
-    branches: ["master"]
-  pull_request:
-    branches: ["master"]
+    push:
+        branches: ["master"]
+    pull_request:
+        branches: ["master"]
 
 env:
-  CARGO_TERM_COLOR: always
+    CARGO_TERM_COLOR: always
 
 jobs:
-  check:
-    name: Build, lint, test
-    runs-on: ubuntu-latest
+    check:
+        name: Build, lint, test
+        runs-on: ubuntu-latest
 
-    steps:
-      - uses: actions/checkout@v4
+        steps:
+            - uses: actions/checkout@v4
 
-      - name: Install stable toolchain
-        uses: dtolnay/rust-toolchain@stable
-        with:
-          components: rustfmt, clippy
+            - name: Install stable toolchain
+              uses: dtolnay/rust-toolchain@stable
+              with:
+                  toolchain: 1.93.1
+                  components: rustfmt, clippy
 
-      - name: Cache cargo registry
-        uses: actions/cache@v4
-        with:
-          path: |
-            ~/.cargo/registry
-            ~/.cargo/git
-            target
-          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
-          restore-keys: ${{ runner.os }}-cargo-
+            - name: Install native deps for layout-probe-tectonic
+              run: |
+                  sudo apt-get update
+                  sudo apt-get install -y pkg-config libicu-dev libharfbuzz-dev libgraphite2-dev
 
-      - name: Check formatting
-        run: cargo fmt --all -- --check
+            - name: Cache cargo registry
+              uses: actions/cache@v4
+              with:
+                  path: |
+                      ~/.cargo/registry
+                      ~/.cargo/git
+                      target
+                  key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+                  restore-keys: ${{ runner.os }}-cargo-
 
-      - name: Clippy (deny warnings)
-        run: cargo clippy -- -D warnings
+            - name: Check formatting
+              run: cargo fmt --all -- --check
 
-      - name: Run tests
-        run: cargo test --verbose
+            - name: Clippy (deny warnings)
+              run: cargo clippy --workspace --all-targets --locked -- -D warnings
+
+            - name: Run tests
+              run: cargo test --workspace --locked --verbose
+
+            - name: Check layout probe feature build
+              run: cargo check -p ferritex-core --features layout-probe-tectonic --locked

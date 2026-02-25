@@ -425,6 +425,90 @@ fn generated_toc_adds_before_spacing_for_unnumbered_level1_entries() {
 }
 
 #[test]
+fn generated_toc_adds_before_spacing_for_nonchapter_levels() {
+    let layout = DocumentLayout {
+        body_line_spacing_twips: Some(332),
+        toc_depth: Some(3),
+        toc_section_space_before_twips: Some(160),
+        toc_subsection_space_before_twips: Some(80),
+        toc_subsubsection_space_before_twips: Some(40),
+        ..DocumentLayout::default()
+    };
+    let document = Document {
+        blocks: Vec::new(),
+        layout: layout.clone(),
+        toc_entries: vec![
+            TocEntry {
+                level: 2,
+                number: Some("1.1".to_string()),
+                title: "Section".to_string(),
+                page: Some("5".to_string()),
+            },
+            TocEntry {
+                level: 3,
+                number: Some("1.1.1".to_string()),
+                title: "Subsection".to_string(),
+                page: Some("6".to_string()),
+            },
+            TocEntry {
+                level: 4,
+                number: Some("1.1.1.1".to_string()),
+                title: "Subsubsection".to_string(),
+                page: Some("7".to_string()),
+            },
+        ],
+    };
+    let profile = RenderProfile::from_layout(&layout);
+    let paragraphs =
+        generated_toc_paragraphs(&document, 0, &profile, &ReferenceRenderIndex::default());
+    assert_eq!(paragraphs.len(), 3);
+
+    let section_xml = String::from_utf8(paragraphs[0].build()).expect("section xml utf8");
+    let subsection_xml = String::from_utf8(paragraphs[1].build()).expect("subsection xml utf8");
+    let subsubsection_xml =
+        String::from_utf8(paragraphs[2].build()).expect("subsubsection xml utf8");
+
+    assert!(
+        section_xml.contains("w:before=\"160\""),
+        "xml: {section_xml}"
+    );
+    assert!(
+        subsection_xml.contains("w:before=\"80\""),
+        "xml: {subsection_xml}"
+    );
+    assert!(
+        subsubsection_xml.contains("w:before=\"40\""),
+        "xml: {subsubsection_xml}"
+    );
+}
+
+#[test]
+fn generated_toc_nonchapter_before_spacing_defaults_to_zero() {
+    let layout = DocumentLayout {
+        body_line_spacing_twips: Some(332),
+        ..DocumentLayout::default()
+    };
+    let document = Document {
+        blocks: Vec::new(),
+        layout: layout.clone(),
+        toc_entries: vec![TocEntry {
+            level: 2,
+            number: Some("1.1".to_string()),
+            title: "Section".to_string(),
+            page: Some("5".to_string()),
+        }],
+    };
+    let profile = RenderProfile::from_layout(&layout);
+    let paragraphs =
+        generated_toc_paragraphs(&document, 0, &profile, &ReferenceRenderIndex::default());
+    assert_eq!(paragraphs.len(), 1);
+
+    let xml = String::from_utf8(paragraphs[0].build()).expect("paragraph xml utf8");
+    assert!(!xml.contains("w:before=\""), "xml: {xml}");
+    assert!(xml.contains("w:line=\"332\""), "xml: {xml}");
+}
+
+#[test]
 fn toc_entry_uses_latex_chapter_name_prefix_when_configured() {
     let layout = DocumentLayout {
         toc_chapter_name_prefix: Some("Глава".to_string()),
@@ -610,6 +694,9 @@ fn toc_fallback_defaults_new_fields() {
     assert_eq!(profile.toc_aftersnum_section, "");
     assert_eq!(profile.toc_aftersnum_subsection, "");
     assert_eq!(profile.toc_aftersnum_subsubsection, "");
+    assert_eq!(profile.toc_section_space_before_twips, 0);
+    assert_eq!(profile.toc_subsection_space_before_twips, 0);
+    assert_eq!(profile.toc_subsubsection_space_before_twips, 0);
 }
 
 #[test]

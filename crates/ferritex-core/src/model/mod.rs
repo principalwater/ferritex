@@ -202,6 +202,15 @@ pub struct DocumentLayout {
     /// Vertical space before numbered chapter entries in TOC.
     /// Parsed from `\setlength{\cftbeforechapterskip}{...}` (memoir default when absent).
     pub toc_chapter_space_before_twips: Option<i32>,
+    /// Vertical space before section entries in TOC.
+    /// Parsed from `\setlength{\cftbeforesectionskip}{...}`.
+    pub toc_section_space_before_twips: Option<i32>,
+    /// Vertical space before subsection entries in TOC.
+    /// Parsed from `\setlength{\cftbeforesubsectionskip}{...}`.
+    pub toc_subsection_space_before_twips: Option<i32>,
+    /// Vertical space before subsubsection entries in TOC.
+    /// Parsed from `\setlength{\cftbeforesubsubsectionskip}{...}`.
+    pub toc_subsubsection_space_before_twips: Option<i32>,
     /// TOC section entry left indent in twips.
     /// Parsed from `\setlength{\cftsectionindent}{...}` or `\cftsetindents{section}{...}{...}`.
     pub toc_indent_section_twips: Option<i32>,

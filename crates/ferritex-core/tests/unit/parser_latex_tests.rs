@@ -286,6 +286,27 @@ fn test_extract_toc_chapter_before_skip_uses_memoir_default() {
 }
 
 #[test]
+fn test_extract_toc_before_skip_nonchapter_levels_from_setlength() {
+    let src = "\
+\\setlength{\\cftbeforesectionskip}{12pt}
+\\setlength{\\cftbeforesubsectionskip}{6pt}
+\\setlength{\\cftbeforesubsubsectionskip}{3pt}
+Body.";
+    let doc = parse_latex(src);
+    assert_eq!(doc.layout.toc_section_space_before_twips, Some(240));
+    assert_eq!(doc.layout.toc_subsection_space_before_twips, Some(120));
+    assert_eq!(doc.layout.toc_subsubsection_space_before_twips, Some(60));
+}
+
+#[test]
+fn test_extract_toc_before_skip_nonchapter_levels_absent() {
+    let doc = parse_latex("Body.");
+    assert_eq!(doc.layout.toc_section_space_before_twips, None);
+    assert_eq!(doc.layout.toc_subsection_space_before_twips, None);
+    assert_eq!(doc.layout.toc_subsubsection_space_before_twips, None);
+}
+
+#[test]
 fn test_extract_toc_chapter_name_prefix_from_cftchaptername() {
     let src = "\
 \\renewcommand{\\chaptername}{Глава}

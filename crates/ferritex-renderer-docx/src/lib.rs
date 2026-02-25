@@ -165,6 +165,9 @@ struct RenderProfile {
     toc_indent_chapter_twips: i32,
     toc_numwidth_chapter_twips: i32,
     toc_chapter_space_before_twips: i32,
+    toc_section_space_before_twips: i32,
+    toc_subsection_space_before_twips: i32,
+    toc_subsubsection_space_before_twips: i32,
     toc_indent_section_twips: i32,
     toc_numwidth_section_twips: i32,
     toc_indent_subsection_twips: i32,
@@ -448,6 +451,18 @@ impl RenderProfile {
                 layout.toc_chapter_space_before_twips,
                 0,
             ),
+            toc_section_space_before_twips: sanitize_nonnegative_twips(
+                layout.toc_section_space_before_twips,
+                0,
+            ),
+            toc_subsection_space_before_twips: sanitize_nonnegative_twips(
+                layout.toc_subsection_space_before_twips,
+                0,
+            ),
+            toc_subsubsection_space_before_twips: sanitize_nonnegative_twips(
+                layout.toc_subsubsection_space_before_twips,
+                0,
+            ),
             toc_indent_section_twips: sanitize_nonnegative_twips(
                 layout.toc_indent_section_twips,
                 layout
@@ -595,6 +610,15 @@ impl RenderProfile {
             2 => self.toc_numwidth_section_twips,
             3 => self.toc_numwidth_subsection_twips,
             _ => self.toc_numwidth_subsubsection_twips,
+        }
+    }
+
+    fn toc_level_space_before_twips(&self, level: u8) -> i32 {
+        match level {
+            1 => self.toc_chapter_space_before_twips,
+            2 => self.toc_section_space_before_twips,
+            3 => self.toc_subsection_space_before_twips,
+            _ => self.toc_subsubsection_space_before_twips,
         }
     }
 
@@ -2436,10 +2460,11 @@ fn build_toc_entry_paragraph(
         .style(style)
         .align(AlignmentType::Left)
         .line_spacing(line_spacing(profile.body_line_spacing_twips));
-    if level == 1 && profile.toc_chapter_space_before_twips > 0 {
+    let toc_space_before = profile.toc_level_space_before_twips(level);
+    if toc_space_before > 0 {
         para = para.line_spacing(line_spacing_with_spacing(
             profile.body_line_spacing_twips,
-            Some(profile.toc_chapter_space_before_twips),
+            Some(toc_space_before),
             None,
         ));
     }

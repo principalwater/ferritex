@@ -873,6 +873,15 @@ fn extract_layout_settings(source: &str) -> DocumentLayout {
         layout.font_size_body_hp,
         documentclass_name.as_deref(),
     );
+    layout.toc_section_space_before_twips =
+        extract_toc_before_skip_twips(source, "cftbeforesectionskip", layout.font_size_body_hp);
+    layout.toc_subsection_space_before_twips =
+        extract_toc_before_skip_twips(source, "cftbeforesubsectionskip", layout.font_size_body_hp);
+    layout.toc_subsubsection_space_before_twips = extract_toc_before_skip_twips(
+        source,
+        "cftbeforesubsubsectionskip",
+        layout.font_size_body_hp,
+    );
     let (toc_section_indent, toc_section_numwidth) =
         extract_toc_indent_numwidth_twips_with_body_font(
             source,
@@ -2007,17 +2016,8 @@ fn extract_toc_chapter_before_skip_twips(
     body_font_size_hp: Option<usize>,
     documentclass_name: Option<&str>,
 ) -> Option<i32> {
-    if let Some((twips, _)) = extract_last_setlength_value_twips_with_pos(
-        source,
-        "cftbeforechapterskip",
-        body_font_size_hp,
-    ) {
-        return Some(twips);
-    }
-
-    if let Some(raw) = extract_renewcommand_value(source, "cftbeforechapterskip")
-        && let Some(twips) =
-            parse_latex_length_prefix_to_twips_with_body_font(&raw, body_font_size_hp)
+    if let Some(twips) =
+        extract_toc_before_skip_twips(source, "cftbeforechapterskip", body_font_size_hp)
     {
         return Some(twips);
     }
@@ -2026,6 +2026,32 @@ fn extract_toc_chapter_before_skip_twips(
         let em_twips = em_twips_for_body_font(body_font_size_hp, 1.0);
         // memoir default: `1.0em plus 1pt`; map glue to a deterministic nominal value.
         return Some(em_twips.saturating_add(20));
+    }
+
+    None
+}
+
+/// Extract vertical spacing before TOC entries for the given `\cftbefore...skip` command.
+///
+/// Supported forms:
+/// - `\setlength{\<command>}{...}`
+/// - `\renewcommand*{\<command>}{...}`
+fn extract_toc_before_skip_twips(
+    source: &str,
+    command: &str,
+    body_font_size_hp: Option<usize>,
+) -> Option<i32> {
+    if let Some((twips, _)) =
+        extract_last_setlength_value_twips_with_pos(source, command, body_font_size_hp)
+    {
+        return Some(twips);
+    }
+
+    if let Some(raw) = extract_renewcommand_value(source, command)
+        && let Some(twips) =
+            parse_latex_length_prefix_to_twips_with_body_font(&raw, body_font_size_hp)
+    {
+        return Some(twips);
     }
 
     None

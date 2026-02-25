@@ -16,7 +16,12 @@ declares. Backend constants are used only as fallback defaults when the source d
 not express a preference.
 
 ```
-LaTeX source → parser → AST + DocumentLayout → renderer → DOCX / PDF / Markdown
+LaTeX source
+  → LayoutProbe + parser extraction
+  → merge (probe > parser > fallback)
+  → AST + DocumentLayout
+  → renderer
+  → DOCX / PDF / Markdown
 ```
 
 All output formats consume the same intermediate representation, so adding a new
@@ -76,6 +81,45 @@ FerriTeX follows a strict **LaTeX-driven rendering policy**:
 
 ```bash
 cargo install --path .
+```
+
+## Reproducible environment
+
+- Rust toolchain is pinned in `rust-toolchain.toml` (`1.93.1`).
+- CI uses the same pinned Rust version and runs with `--locked`.
+- Dependency versions are locked by `Cargo.lock`; update them intentionally via
+  `cargo update` only when planned.
+
+Recommended local workflow:
+
+```bash
+rustup show active-toolchain
+cargo fmt --all
+cargo clippy --workspace --all-targets --locked -- -D warnings
+cargo test --workspace --locked
+```
+
+### `layout-probe-tectonic` native prerequisites
+
+The embedded `tectonic` probe requires native libraries.
+
+macOS (Homebrew):
+
+```bash
+brew install pkg-config icu4c harfbuzz graphite2
+```
+
+Ubuntu/Debian:
+
+```bash
+sudo apt-get update
+sudo apt-get install -y pkg-config libicu-dev libharfbuzz-dev libgraphite2-dev
+```
+
+Feature check:
+
+```bash
+cargo check -p ferritex-core --features layout-probe-tectonic --locked
 ```
 
 ## Usage

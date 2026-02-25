@@ -91,15 +91,19 @@
 - Page gutter extraction from `\geometry{bindingoffset=...}`
 - TOC tab-stop minimum guard documented as DOCX safety constraint
 
-## v0.9.5 (planned)
-- Introduce `LayoutProbe` stage in `ferritex-core` for engine-evaluated effective layout/style extraction.
-- Primary engine candidate: embedded `tectonic` (`0.15.0`, MIT).
+## v0.9.5 (foundation in progress)
+- `LayoutProbeOutput` contract added to `ferritex-core`.
+- Feature-gated embedded backend added: `ferritex-core` feature `layout-probe-tectonic` with `tectonic` (`0.15.0`, MIT).
+- Parser entrypoint (`parse_latex_file`) now applies deterministic merge:
+  `LayoutProbe + parser -> DocumentLayout` with precedence `probe > parser`.
+- First probe-covered fields:
+  page geometry, body font size/family, paragraph indent, line spacing, list geometry.
 - Optional helper crates for targeted tasks:
   - `codebook-tree-sitter-latex` (`0.6.1`, MIT) for syntax indexing only,
   - `biblatex` (`0.11.0`, MIT/Apache-2.0) for bibliography semantics.
 - License guardrail: avoid GPL-only TeX engine crates (`tex_engine`, `rustex_lib`) in MIT ferritex core.
-- Add sidecar/merge flow: probe output + parser extraction -> `DocumentLayout` with precedence (`probe > parser > fallback`).
-- Add regression/property tests for probe-parser merge determinism and fallback minimization.
+- Regression coverage added for merge precedence, absent-probe fallback behavior,
+  multi-file integration, and property-style determinism/conversion invariants.
 
 ## v1.0
 - OMML / Word equation rendering (upgrade from plain-text math approximation)

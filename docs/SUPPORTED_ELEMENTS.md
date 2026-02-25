@@ -5,7 +5,7 @@ Rendering policy:
 - DOCX/PDF backends should produce equivalent structure from the same AST.
 - Effective LaTeX build parameters are the source of truth for layout and style decisions; backend constants are fallback-only.
 - New visual fixes must be implemented as generic parameter mapping, not hardcoded values for a specific project.
-- Target extraction architecture: `LayoutProbe` (engine-evaluated values, planned) + parser static extraction, merged before rendering.
+- Target extraction architecture: `LayoutProbe` (engine-evaluated values, feature-gated) + parser static extraction, merged before rendering.
 
 | Element | Status | Notes |
 |---|---|---|
@@ -42,7 +42,8 @@ Rendering policy:
 | Title page first-page number suppression (`\thispagestyle{empty}` in `titlepage`/`titlingpage`) | ✅ v0.9 | Maps to DOCX different-first-page mode (`titlePg`) so page 1 number is hidden |
 | Cross-references (`\ref`, resolved) | ⬜ v0.5 | Currently emitted as placeholder |
 | File inclusion (`\input{}`, `\include{}`) | ✅ v0.5 | Recursive expansion from entry `.tex` file |
-| LayoutProbe sidecar (`probe > parser > fallback` precedence) | 🟨 planned v0.9.5 | Planned embedded TeX-engine probe for effective layout/style values before renderer mapping. |
+| LayoutProbe merge contract (`probe > parser > fallback`) | ✅ v0.9.5 foundation | `LayoutProbeOutput` + deterministic merge helper implemented in `ferritex-core`; `parse_latex_file` applies merge before renderer mapping. |
+| LayoutProbe embedded backend (`layout-probe-tectonic`) | 🟨 v0.9.5 foundation | Feature-gated `tectonic` backend extracts first high-impact fields: page geometry, body font size/family, paragraph indent, line spacing, list geometry. |
 | PDF output | ⬜ v1.0 | |
 
 ## TOC `cft*` coverage

@@ -8,7 +8,7 @@ Core extraction produces two output-neutral contracts:
 ```text
 LaTeX source
     ↓
-LayoutProbe (engine-evaluated effective style values; planned)
+LayoutProbe (engine-evaluated effective style values; `layout-probe-tectonic` feature)
     ↓
 Parser static extraction (source-level semantics)
     ↓
@@ -22,7 +22,7 @@ renderer  renderer    renderer
 
 | Crate | Purpose |
 |-------|---------|
-| `ferritex-core` | LaTeX extraction core: parser + (planned) LayoutProbe + AST model (`Block`, `Inline`) + `DocumentLayout` (StyleMap) |
+| `ferritex-core` | LaTeX extraction core: parser + `LayoutProbe` contract (`LayoutProbeOutput`) + merge (`probe > parser`) + AST model (`Block`, `Inline`) + `DocumentLayout` (StyleMap) |
 | `ferritex-renderer-docx` | DOCX renderer + `RenderProfile::from_layout()` — **fully implemented** |
 | `ferritex-renderer-pdf` | PDF renderer — **stub** |
 | `ferritex-renderer-md` | Markdown renderer — **stub** |
@@ -35,7 +35,7 @@ Fallbacks are valid only when both probe and parser layers did not provide a val
 ## Stage responsibilities
 
 1. **Build core** (`src/build/`): resolves paths, selects output format(s), orchestrates pipeline execution.
-2. **LayoutProbe** (`ferritex-core`, planned): evaluates effective layout/style values using embedded Rust TeX engine execution.
+2. **LayoutProbe** (`crates/ferritex-core/src/layout_probe/`): feature-gated embedded probe backend (`tectonic`) for effective layout extraction.
 3. **Parse** (`crates/ferritex-core/src/parser/`): reads LaTeX (including recursive includes), extracts static semantics and style parameters.
 4. **Model** (`crates/ferritex-core/src/model/`): defines AST + StyleMap as the only parser/probe↔renderer contract.
 5. **Render** (`crates/ferritex-renderer-*/src/`): maps AST + StyleMap to backend primitives (`docx`, `pdf`, `md` backends are crate-isolated).
@@ -63,7 +63,7 @@ Output formats are selected via `OutputFormat`
 Extraction layers are responsible for style-relevant intent from LaTeX
 sources (geometry, heading/TOC formatting, counters, labels, bibliography and
 citation behavior, include graph, block-local directives):
-- `LayoutProbe`: effective engine-evaluated values (planned).
+- `LayoutProbe`: effective engine-evaluated values (feature-gated `tectonic` backend).
 - Parser: static source-level extraction and normalization.
 
 Renderers must consume this intent through AST + StyleMap rather than adding
@@ -94,3 +94,9 @@ For every visual/formatting issue discovered during QA:
 
 Do not patch renderer output with project-tailored constants when the same
 effect can be achieved by propagating LaTeX semantics.
+
+## Toolchain and dependency pinning
+
+- Rust version is pinned in `rust-toolchain.toml` (`1.93.1`).
+- CI installs the same Rust toolchain and runs checks with `--locked`.
+- `Cargo.lock` is the canonical dependency snapshot for reproducible builds.

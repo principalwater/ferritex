@@ -25,10 +25,12 @@ written back into repository Markdown immediately.
 
 **Plans live in the project repository only.**
 
-- Active plans: `agent_docs/plans/` (all `.md` files here)
+- Active plans: `agent_docs/plans/`
+- Completed plans archive: `agent_docs/archive/plans/`
 - Never store plans in `~/.claude/plans/`, `~/.codex/plans/`, or any global path.
 - After plan mode ends, immediately copy the plan file to `agent_docs/plans/<descriptive-name>.md`.
-- Completed plans should be marked (e.g. add `## Status: DONE` header) but not deleted, so history is preserved.
+- Completed plans should be moved from `agent_docs/plans/` to `agent_docs/archive/plans/`
+  so active planning context stays small while preserving history.
 
 ## Session start requirements (for any agent)
 
@@ -41,7 +43,7 @@ Before making changes, read and follow:
 - `agent_docs/session_summary.md`
 - `agent_docs/memory_policy.md` (this file)
 - `agent_docs/future_session_prompt.md`
-- all files in `agent_docs/plans/`
+- all active files in `agent_docs/plans/`
 - `docs/ARCHITECTURE.md`
 - `docs/ROADMAP.md`
 - `docs/SUPPORTED_ELEMENTS.md`
@@ -67,6 +69,8 @@ Every new stable decision must be persisted in repository Markdown before sessio
 - What was implemented and what is not yet done
 - Deferred items
 - Key files changed
+- For LayoutProbe-related tasks: explicit run mode (`probe-enabled` vs `parser-only`)
+  used for validation conclusions.
 
 ## What belongs in agent_docs/plans/
 
@@ -75,6 +79,11 @@ Every new stable decision must be persisted in repository Markdown before sessio
 - Critical files to modify
 - Verification steps
 - Git workflow for this specific feature
+
+## What belongs in agent_docs/archive/plans/
+
+- Completed plans retained for traceability
+- Historical implementation rationale that no longer requires active execution
 
 ## Compaction
 

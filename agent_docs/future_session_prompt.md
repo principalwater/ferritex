@@ -34,9 +34,10 @@
 3. `agent_docs/README.md`.
 4. `agent_docs/memory_policy.md`.
 5. `agent_docs/session_summary.md`.
-6. `agent_docs/plans/*.md`.
-7. `agent_docs/coding_conventions.md`, `agent_docs/git_workflow.md`, профильные policy-файлы.
-8. `docs/ARCHITECTURE.md`, `docs/ROADMAP.md`, `docs/SUPPORTED_ELEMENTS.md` (или проектные аналоги).
+6. `agent_docs/plans/*.md` (active plans).
+7. `agent_docs/archive/plans/*.md` only if historical context is needed.
+8. `agent_docs/coding_conventions.md`, `agent_docs/git_workflow.md`, профильные policy-файлы.
+9. `docs/ARCHITECTURE.md`, `docs/ROADMAP.md`, `docs/SUPPORTED_ELEMENTS.md` (или проектные аналоги).
 
 Если каких-то файлов нет:
 - пропусти их,
@@ -51,7 +52,7 @@
 - Источник истины — только файлы в репозитории.
 - Приоритет источников:
   1. `AGENTS.md` (или эквивалент верхнего уровня)
-  2. `agent_docs/*.md` и `agent_docs/plans/*.md`
+  2. `agent_docs/*.md`, `agent_docs/plans/*.md`, `agent_docs/archive/plans/*.md` (по необходимости)
   3. `docs/*.md`
 - Стабильные решения всегда записывай обратно в репозиторий:
   - процесс/правила -> `agent_docs/*`
@@ -95,6 +96,9 @@
 1. Найди и используй официальный quality gate проекта (из `AGENTS.md`, CI workflow, `Makefile`/`justfile`, README).
 2. Если gate явно не описан, используй стандарт проекта/языка (для Rust обычно: `fmt`, `clippy`, `test`).
 3. Запускай команды в lock/reproducible режиме, если это принятый стандарт проекта (`--locked`, lockfile policy и т.п.).
+4. Если задача зависит от `LayoutProbe`/`tectonic`, явно фиксируй режим запуска:
+   - probe-enabled build или parser-only build,
+   - и подтверждай это в `session_summary.md` до визуальных выводов по parity.
 
 ---
 

@@ -91,11 +91,25 @@
 - Page gutter extraction from `\geometry{bindingoffset=...}`
 - TOC tab-stop minimum guard documented as DOCX safety constraint
 
+## v0.9.3 (in progress)
+- Explicit page breaks (`\newpage`, `\clearpage`, `\cleardoublepage`) are parsed and rendered as DOCX page-break paragraphs.
+- Landscape markers (`\begin{landscape}`, `\end{landscape}`, `\landscape`, `\endlandscape`) now map to `Block::PageOrientationSwitch`.
+- DOCX renderer now emits ordered section breaks with `w:type="nextPage"` and correct portrait/landscape section geometry.
+- Parser consumes leading structural commands inside mixed text chunks, preserving orientation/page-break semantics before headings/paragraphs.
+
 ## v0.9.5 (foundation in progress)
 - `LayoutProbeOutput` contract added to `ferritex-core`.
 - Feature-gated embedded backend added: `ferritex-core` feature `layout-probe-tectonic` with `tectonic` (`0.15.0`, MIT).
+- Root CLI crate now enables `layout-probe-tectonic` by default (`ferritex` feature wiring),
+  so standard build/convert/tui flows are probe-enabled unless `--no-default-features` is used.
 - Parser entrypoint (`parse_latex_file`) now applies deterministic merge:
   `LayoutProbe + parser -> DocumentLayout` with precedence `probe > parser`.
+- Build start logs active probe mode (`tectonic` vs parser-only), and probe failures
+  are reported before deterministic parser fallback is applied.
+- Degraded probe mode now applies a field-level confidence model for
+  typography-sensitive fields (`font_size_body_hp`, `body_line_spacing_twips`)
+  when TeX error traces are detected in probe logs, avoiding incorrect DOCX-wide
+  line-spacing regressions while retaining geometry/list probe signals.
 - First probe-covered fields:
   page geometry, body font size/family, paragraph indent, line spacing, list geometry.
 - Optional helper crates for targeted tasks:

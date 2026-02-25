@@ -967,7 +967,6 @@ dependencies = [
  "ferritex-renderer-pdf",
  "log",
  "ratatui",
- "thiserror 2.0.18",
  "zip 8.1.0",
 ]
 
@@ -976,6 +975,7 @@ name = "ferritex-core"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "log",
  "tectonic",
 ]
 

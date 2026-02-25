@@ -120,6 +120,9 @@ Implementation baseline (v0.9.5 foundation):
 - Embedded probe backend is feature-gated:
   `ferritex-core` feature `layout-probe-tectonic`.
 - `layout-probe-tectonic` uses `tectonic` driver APIs directly (no external LaTeX subprocess orchestration).
+- Probe degraded-mode policy: when TeX error traces are detected in probe logs,
+  typography-sensitive probe fields (`font_size_body_hp`, `body_line_spacing_twips`)
+  must be treated as unreliable and deferred to parser extraction.
 - Platform note: building `layout-probe-tectonic` may require native libraries/toolchain
   expected by `tectonic` (for example ICU/harfbuzz/pkg-config on some environments).
 - macOS contributors should use the target-specific defaults in `.cargo/config.toml`
@@ -182,12 +185,7 @@ Update this file with: crate name, version pinned, reason for adding.
 |---|---|---|
 | clap | 4.5.60 | CLI argument parsing |
 | anyhow | 1.0.102 | Error propagation |
-| thiserror | 2.0.18 | Error type definitions |
 | docx-rs | 0.4.19 | DOCX generation |
-| quick-xml | 0.39.2 | Low-level XML manipulation |
-| serde | 1.0.228 | Serialization traits |
-| serde_json | 1.0.149 | JSON support |
-| walkdir | 2.5.0 | Recursive filesystem traversal |
 | log | 0.4.29 | Logging facade |
 | env_logger | 0.11.9 | Env-driven logging implementation |
 | zip | 8.1.0 | ZIP/DOCX container handling |

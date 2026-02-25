@@ -103,6 +103,10 @@ cargo test --workspace --locked
 
 The embedded `tectonic` probe requires native libraries.
 
+`ferritex` enables `layout-probe-tectonic` by default in the root CLI crate,
+so standard `cargo run -- ...` / `cargo test` paths use probe-enabled builds
+unless explicitly disabled with `--no-default-features`.
+
 macOS (Homebrew):
 
 ```bash
@@ -120,6 +124,9 @@ Feature check:
 
 ```bash
 cargo check -p ferritex-core --features layout-probe-tectonic --locked
+
+# Optional parser-only build (debugging fallback path)
+cargo check --workspace --no-default-features --locked
 ```
 
 ## Usage

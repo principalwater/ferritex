@@ -34,7 +34,7 @@ Rendering policy:
 | Page-number alignment (`\lfoot`, `\cfoot`, `\rfoot`, `\fancyfoot[...]`, `\makeoddfoot`, `\makeevenfoot`, `\makeoddhead`, `\makeevenhead`) | ✅ v0.9.2 | Parsed into `page_number_alignment`; used by generated DOCX page-number header paragraph. |
 | Page gutter (`\geometry{bindingoffset=...}`) | ✅ v0.9.2 | Parsed into `page_gutter_twips`; mapped to DOCX section gutter with fallback `0`. |
 | Explicit page breaks (`\newpage`, `\clearpage`, `\cleardoublepage`) | ✅ v0.9.3 | Parsed into `Block::PageBreak`; renderer emits DOCX page-break paragraph (`w:br w:type=\"page\"`). |
-| Landscape switch markers (`\begin{landscape}`, `\end{landscape}`, `\landscape`, `\endlandscape`) | 🟨 v0.9.3 | Parsed as structural forced page-break markers (`Block::PageBreak`) to preserve flow boundaries. True DOCX orientation section switching is not implemented yet. |
+| Landscape switch markers (`\begin{landscape}`, `\end{landscape}`, `\landscape`, `\endlandscape`) | ✅ v0.9.3 | Parsed into `Block::PageOrientationSwitch` (including leading command chains in mixed chunks); DOCX renderer emits section breaks with `w:type="nextPage"` and portrait/landscape `w:pgSz` transitions. |
 | Math (`$…$`) | ✅ v0.4 | Rendered as italic plain-text approximation |
 | Math (`\begin{equation}`, `\begin{equation*}`) | ✅ v0.4 | Rendered as centered italic plain-text approximation |
 | Math (`\[…\]`) | ✅ v0.5 | Rendered as centered italic plain-text approximation |
@@ -45,7 +45,7 @@ Rendering policy:
 | Cross-references (`\ref`, resolved) | ⬜ v0.5 | Currently emitted as placeholder |
 | File inclusion (`\input{}`, `\include{}`) | ✅ v0.5 | Recursive expansion from entry `.tex` file |
 | LayoutProbe merge contract (`probe > parser > fallback`) | ✅ v0.9.5 foundation | `LayoutProbeOutput` + deterministic merge helper implemented in `ferritex-core`; `parse_latex_file` applies merge before renderer mapping. |
-| LayoutProbe embedded backend (`layout-probe-tectonic`) | 🟨 v0.9.5 foundation | Feature-gated `tectonic` backend extracts first high-impact fields: page geometry, body font size/family, paragraph indent, line spacing, list geometry. |
+| LayoutProbe embedded backend (`layout-probe-tectonic`) | 🟨 v0.9.5 foundation | Feature-gated `tectonic` backend extracts first high-impact fields: page geometry, body font size/family, paragraph indent, line spacing, list geometry. In degraded probe runs (TeX error traces), a field-level confidence model downgrades typography-sensitive fields (`font_size_body_hp`, `body_line_spacing_twips`) so parser values remain authoritative while geometry/list probe fields are retained. |
 | PDF output | ⬜ v1.0 | |
 
 ## TOC `cft*` coverage

@@ -795,6 +795,7 @@ fn build_reference_render_index(
             Block::Paragraph(_)
             | Block::StyledParagraph { .. }
             | Block::List(_)
+            | Block::PageBreak
             | Block::BibliographyHeading { .. }
             | Block::TableOfContents => {}
         }
@@ -1069,9 +1070,7 @@ pub fn render_docx_with_context(
                     }
                 }
                 if *level == 1 && rendered_any_block {
-                    docx = docx.add_paragraph(
-                        Paragraph::new().add_run(Run::new().add_break(BreakType::Page)),
-                    );
+                    docx = docx.add_paragraph(page_break_paragraph());
                 }
                 let section_bookmark = ref_index.section_bookmark_by_index.get(&index).cloned();
                 let para = attach_bookmark_to_paragraph(
@@ -1088,6 +1087,10 @@ pub fn render_docx_with_context(
                 {
                     docx = docx.add_paragraph(toc_para);
                 }
+                rendered_any_block = true;
+            }
+            Block::PageBreak => {
+                docx = docx.add_paragraph(page_break_paragraph());
                 rendered_any_block = true;
             }
             Block::Paragraph(_) => {
@@ -2190,17 +2193,22 @@ fn build_paragraph(
         Block::StyledParagraph { inlines, style } => {
             build_styled_body_paragraph(inlines, style, profile, refs)
         }
-        // Table, Figure, List, DisplayMath, BibliographyHeading, TableOfContents
+        // Table, Figure, List, DisplayMath, PageBreak, BibliographyHeading, TableOfContents
         // are handled separately in the render loop — unreachable here.
         Block::Table(_)
         | Block::Figure(_)
         | Block::List(_)
         | Block::DisplayMath(_)
+        | Block::PageBreak
         | Block::BibliographyHeading { .. }
         | Block::TableOfContents => {
             unreachable!()
         }
     }
+}
+
+fn page_break_paragraph() -> Paragraph {
+    Paragraph::new().add_run(Run::new().add_break(BreakType::Page))
 }
 
 fn build_default_body_paragraph(

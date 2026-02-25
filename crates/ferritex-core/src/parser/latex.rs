@@ -4528,7 +4528,10 @@ fn resolve_dynamic_placeholders(blocks: &mut [Block], metadata: &ParseMetadata) 
                     resolve_inline_placeholders(item, metadata);
                 }
             }
-            Block::DisplayMath(_) | Block::BibliographyHeading { .. } | Block::TableOfContents => {}
+            Block::DisplayMath(_)
+            | Block::PageBreak
+            | Block::BibliographyHeading { .. }
+            | Block::TableOfContents => {}
         }
 
         if let Block::Figure(figure) = block {
@@ -4604,7 +4607,10 @@ fn resolve_footnote_citation_placeholders(
                     resolve_footnote_citations_inlines(item, bibliography, &mut tracker, false);
                 }
             }
-            Block::DisplayMath(_) | Block::BibliographyHeading { .. } | Block::TableOfContents => {}
+            Block::DisplayMath(_)
+            | Block::PageBreak
+            | Block::BibliographyHeading { .. }
+            | Block::TableOfContents => {}
         }
 
         if let Block::Figure(figure) = block {
@@ -4723,7 +4729,10 @@ fn resolve_citation_placeholders(blocks: &mut [Block], bibliography: &HashMap<St
                     resolve_inline_citations(item, bibliography);
                 }
             }
-            Block::DisplayMath(_) | Block::BibliographyHeading { .. } | Block::TableOfContents => {}
+            Block::DisplayMath(_)
+            | Block::PageBreak
+            | Block::BibliographyHeading { .. }
+            | Block::TableOfContents => {}
         }
         if let Block::Figure(figure) = block {
             resolve_inline_citations(&mut figure.source, bibliography);
@@ -5684,6 +5693,7 @@ fn attach_standalone_label(blocks: &mut [Block], label: String) {
             Block::Paragraph(_)
             | Block::StyledParagraph { .. }
             | Block::List(_)
+            | Block::PageBreak
             | Block::BibliographyHeading { .. }
             | Block::TableOfContents => {}
         }
@@ -6793,9 +6803,6 @@ fn is_skippable(chunk: &str) -> bool {
         || c.starts_with("\\newcommand")
         || c.starts_with("\\renewcommand")
         || c.starts_with("\\DeclareMathOperator")
-        || c.starts_with("\\newpage")
-        || c.starts_with("\\clearpage")
-        || c.starts_with("\\cleardoublepage")
         || c.starts_with("\\ifdefmacro")
         || c.starts_with("\\captionsetup")
         || c.starts_with("\\DefTblrTemplate")
@@ -6935,7 +6942,10 @@ fn resolve_references(
                     resolve_inline_references(item, &labels, preserve_reference_nodes);
                 }
             }
-            Block::DisplayMath(_) | Block::BibliographyHeading { .. } | Block::TableOfContents => {}
+            Block::DisplayMath(_)
+            | Block::PageBreak
+            | Block::BibliographyHeading { .. }
+            | Block::TableOfContents => {}
         }
     }
 }
@@ -7025,6 +7035,7 @@ fn build_label_registry(
             Block::Paragraph(_)
             | Block::StyledParagraph { .. }
             | Block::List(_)
+            | Block::PageBreak
             | Block::BibliographyHeading { .. }
             | Block::TableOfContents => {}
         }
@@ -7199,18 +7210,42 @@ fn try_parse_plain_heading(
     })
 }
 
-/// Detect `\tableofcontents` and emit a language-neutral [`Block::TableOfContents`].
+/// Detect structural control commands and emit dedicated block nodes.
 ///
-/// The renderer expands this node into generated TOC paragraphs at render time.
-/// The heading text (e.g. "ОГЛАВЛЕНИЕ", "Table of Contents") is NOT stored here —
-/// it must come from a preceding `\chapter*{...}` or similar command in the LaTeX source.
+/// Supported commands:
+/// - `\tableofcontents[*]` -> [`Block::TableOfContents`]
+/// - `\newpage`, `\clearpage`, `\cleardoublepage` -> [`Block::PageBreak`]
 fn try_parse_structural_heading_command(chunk: &str) -> Option<Block> {
     let command = chunk.trim_start();
-    if command.starts_with("\\tableofcontents") {
+    if is_standalone_page_break_command(command) {
+        Some(Block::PageBreak)
+    } else if command.starts_with("\\tableofcontents") {
         Some(Block::TableOfContents)
     } else {
         None
     }
+}
+
+fn is_standalone_page_break_command(chunk: &str) -> bool {
+    let mut rest = chunk.trim();
+    let mut matched = false;
+
+    loop {
+        let mut consumed_any = false;
+        for command in ["\\newpage", "\\clearpage", "\\cleardoublepage"] {
+            if let Some(after) = consume_control_word(rest, command) {
+                matched = true;
+                rest = after.trim_start();
+                consumed_any = true;
+                break;
+            }
+        }
+        if !consumed_any {
+            break;
+        }
+    }
+
+    matched && rest.is_empty()
 }
 
 /// Detect bibliography-rendering commands and emit a `Block::BibliographyHeading`.

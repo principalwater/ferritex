@@ -633,6 +633,12 @@ fn linebreak_inline_renders_text_wrapping_break() {
 }
 
 #[test]
+fn page_break_block_renders_page_break_break_tag() {
+    let xml = String::from_utf8(page_break_paragraph().build()).expect("paragraph xml utf8");
+    assert!(xml.contains("w:br w:type=\"page\""), "xml: {xml}");
+}
+
+#[test]
 fn resolve_figure_path_uses_images_fallback_and_extension_guess() {
     use std::time::{SystemTime, UNIX_EPOCH};
 

@@ -497,6 +497,8 @@ pub enum Block {
     /// A display-math block from `\begin{equation}…\end{equation}` or `\[…\]`.
     /// Stored as raw LaTeX source.
     DisplayMath(String),
+    /// An explicit page break command (`\newpage`, `\clearpage`, `\cleardoublepage`).
+    PageBreak,
     /// A bibliography section rendered as a chapter-level heading.
     ///
     /// Emitted for `\printbibliography`, `\insertbibliofullsorted`, and similar commands.

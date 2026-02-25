@@ -8,7 +8,7 @@ use anyhow::{Result, anyhow};
 use tectonic::{
     TexEngine,
     config::PersistentConfig,
-    driver::{OutputFormat, ProcessingSessionBuilder},
+    driver::{OutputFormat, PassSetting, ProcessingSessionBuilder},
     latex_to_pdf,
     status::NoopStatusBackend,
     unstable_opts::UnstableOptions,
@@ -24,6 +24,7 @@ const PROBE_LOG_NAME: &str = "ferritex_probe.log";
 const PROBE_TEX_ENGINE_HALT_ON_ERROR: bool = false;
 const PROBE_TEX_ENGINE_SHELL_ESCAPE_ENABLED: bool = false;
 const PROBE_TEX_ENGINE_BUILD_DATE: SystemTime = SystemTime::UNIX_EPOCH;
+const PROBE_RECOVERY_DEFAULT_RERUNS: usize = 1;
 const PDF_PAGE_COUNT_KEYWORD: &[u8] = b"/Count";
 
 #[derive(Debug)]
@@ -90,13 +91,97 @@ impl ProbeConfidenceModel {
     }
 }
 
+#[derive(Debug, Clone, Copy)]
+struct ProbeTexRuntimeProfile {
+    halt_on_error: bool,
+    shell_escape_enabled: bool,
+    build_date: SystemTime,
+}
+
+impl Default for ProbeTexRuntimeProfile {
+    fn default() -> Self {
+        Self {
+            halt_on_error: PROBE_TEX_ENGINE_HALT_ON_ERROR,
+            shell_escape_enabled: PROBE_TEX_ENGINE_SHELL_ESCAPE_ENABLED,
+            build_date: PROBE_TEX_ENGINE_BUILD_DATE,
+        }
+    }
+}
+
+impl ProbeTexRuntimeProfile {
+    fn continue_on_errors(self) -> bool {
+        !self.halt_on_error
+    }
+
+    fn build_tex_engine(self) -> TexEngine {
+        let mut tex_engine = TexEngine::default();
+        tex_engine
+            .halt_on_error_mode(self.halt_on_error)
+            .shell_escape(self.shell_escape_enabled)
+            .build_date(self.build_date);
+        tex_engine
+    }
+
+    fn apply_to_builder(self, builder: &mut ProcessingSessionBuilder, pass_plan: ProbePassPlan) {
+        builder.build_date(self.build_date).pass(pass_plan.pass);
+        if let Some(reruns) = pass_plan.reruns {
+            builder.reruns(reruns);
+        }
+
+        if self.shell_escape_enabled {
+            builder.shell_escape_with_temp_dir();
+        } else {
+            builder.shell_escape_disabled();
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
+struct ProbePassPlan {
+    label: &'static str,
+    pass: PassSetting,
+    reruns: Option<usize>,
+}
+
+const PROBE_PRIMARY_PASS_PLAN: ProbePassPlan = ProbePassPlan {
+    label: "tex-single-pass",
+    pass: PassSetting::Tex,
+    reruns: None,
+};
+
+const PROBE_RECOVERY_PASS_PLAN: ProbePassPlan = ProbePassPlan {
+    label: "default-recovery-pass",
+    pass: PassSetting::Default,
+    reruns: Some(PROBE_RECOVERY_DEFAULT_RERUNS),
+};
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct ProbePassSignal {
+    has_run_error: bool,
+    populated_field_count: usize,
+}
+
+#[derive(Debug)]
+struct ProbePassOutcome {
+    plan: ProbePassPlan,
+    probe_output: LayoutProbeOutput,
+    log_text: String,
+    has_log_errors: bool,
+    run_error: Option<String>,
+    populated_field_count: usize,
+}
+
+impl ProbePassOutcome {
+    fn signal(&self) -> ProbePassSignal {
+        ProbePassSignal {
+            has_run_error: self.run_error.is_some(),
+            populated_field_count: self.populated_field_count,
+        }
+    }
+}
+
 fn build_probe_tex_engine() -> TexEngine {
-    let mut tex_engine = TexEngine::default();
-    tex_engine
-        .halt_on_error_mode(PROBE_TEX_ENGINE_HALT_ON_ERROR)
-        .shell_escape(PROBE_TEX_ENGINE_SHELL_ESCAPE_ENABLED)
-        .build_date(PROBE_TEX_ENGINE_BUILD_DATE);
-    tex_engine
+    ProbeTexRuntimeProfile::default().build_tex_engine()
 }
 
 fn with_temporary_working_dir<T, F>(target_dir: &Path, action: F) -> Result<T>
@@ -107,24 +192,27 @@ where
     action()
 }
 
-pub(crate) fn probe_layout_with_tectonic(
-    input_path: &Path,
-    expanded_source: &str,
-) -> Result<LayoutProbeOutput> {
-    let preamble = expanded_source
-        .split_once("\\begin{document}")
-        .map(|(head, _)| head)
-        .unwrap_or(expanded_source);
-    let probe_source = build_probe_source(preamble);
+fn should_run_recovery_probe_pass(signal: ProbePassSignal) -> bool {
+    signal.has_run_error || signal.populated_field_count == 0
+}
 
-    let root_dir = input_path.parent().unwrap_or_else(|| Path::new("."));
-    let tex_engine_profile = build_probe_tex_engine();
-    log::debug!("tectonic probe engine profile: {:?}", tex_engine_profile);
+fn should_prefer_recovery_pass(primary: ProbePassSignal, recovery: ProbePassSignal) -> bool {
+    if primary.has_run_error && !recovery.has_run_error {
+        return true;
+    }
 
+    recovery.populated_field_count > primary.populated_field_count
+}
+
+fn run_probe_pass(
+    root_dir: &Path,
+    probe_source: &str,
+    runtime_profile: ProbeTexRuntimeProfile,
+    pass_plan: ProbePassPlan,
+) -> Result<ProbePassOutcome> {
     let mut status = NoopStatusBackend::default();
     let config = PersistentConfig::open(false)
         .map_err(|error| anyhow!("failed to open default tectonic config: {error}"))?;
-
     let bundle = config
         .default_bundle(false, &mut status)
         .map_err(|error| anyhow!("failed to load tectonic default bundle: {error}"))?;
@@ -145,19 +233,21 @@ pub(crate) fn probe_layout_with_tectonic(
         .keep_intermediates(false)
         .print_stdout(false)
         .do_not_write_output_files()
-        .build_date(PROBE_TEX_ENGINE_BUILD_DATE)
-        .shell_escape_disabled()
         // Probe should keep partial extraction signal even if TeX reports
         // recoverable errors in template-specific preamble logic.
         .unstables(UnstableOptions {
-            continue_on_errors: !PROBE_TEX_ENGINE_HALT_ON_ERROR,
+            continue_on_errors: runtime_profile.continue_on_errors(),
             ..Default::default()
         });
+    runtime_profile.apply_to_builder(&mut builder, pass_plan);
 
     let mut session = builder
         .create(&mut status)
         .map_err(|error| anyhow!("failed to create tectonic processing session: {error}"))?;
-    let run_result = session.run(&mut status);
+    let run_error = session
+        .run(&mut status)
+        .err()
+        .map(|error| error.to_string());
 
     let mut files = session.into_file_data();
     let log_text = if let Some(file) = files.remove(PROBE_LOG_NAME) {
@@ -176,20 +266,94 @@ pub(crate) fn probe_layout_with_tectonic(
         String::from_utf8_lossy(&fallback.data).into_owned()
     };
 
-    let mut probe_output = parse_probe_log(&log_text);
-    let has_log_errors = probe_log_has_tex_errors(&log_text);
-    let has_run_error = run_result.is_err();
+    let probe_output = parse_probe_log(&log_text);
+    let populated_field_count = probe_output.populated_field_names().len();
 
-    if let Err(error) = run_result {
-        let populated_before_filter = probe_output.populated_field_names();
-        if populated_before_filter.is_empty() {
-            return Err(anyhow!(
-                "tectonic layout probe run failed: {error}. log excerpt: {}",
-                probe_log_excerpt(&log_text)
-            ));
+    Ok(ProbePassOutcome {
+        plan: pass_plan,
+        probe_output,
+        has_log_errors: probe_log_has_tex_errors(&log_text),
+        log_text,
+        run_error,
+        populated_field_count,
+    })
+}
+
+pub(crate) fn probe_layout_with_tectonic(
+    input_path: &Path,
+    expanded_source: &str,
+) -> Result<LayoutProbeOutput> {
+    let preamble = expanded_source
+        .split_once("\\begin{document}")
+        .map(|(head, _)| head)
+        .unwrap_or(expanded_source);
+    let probe_source = build_probe_source(preamble);
+
+    let root_dir = input_path.parent().unwrap_or_else(|| Path::new("."));
+    let runtime_profile = ProbeTexRuntimeProfile::default();
+    let tex_engine_profile = runtime_profile.build_tex_engine();
+    log::debug!("tectonic probe engine profile: {:?}", tex_engine_profile);
+
+    let mut selected_outcome = run_probe_pass(
+        root_dir,
+        &probe_source,
+        runtime_profile,
+        PROBE_PRIMARY_PASS_PLAN,
+    )?;
+    let primary_signal = selected_outcome.signal();
+    log::debug!(
+        "tectonic probe pass '{}' extracted {} field(s); run_error={}",
+        selected_outcome.plan.label,
+        selected_outcome.populated_field_count,
+        primary_signal.has_run_error
+    );
+
+    if should_run_recovery_probe_pass(primary_signal) {
+        let recovery_outcome = run_probe_pass(
+            root_dir,
+            &probe_source,
+            runtime_profile,
+            PROBE_RECOVERY_PASS_PLAN,
+        )?;
+        let recovery_signal = recovery_outcome.signal();
+        log::debug!(
+            "tectonic probe pass '{}' extracted {} field(s); run_error={}",
+            recovery_outcome.plan.label,
+            recovery_outcome.populated_field_count,
+            recovery_signal.has_run_error
+        );
+
+        if should_prefer_recovery_pass(primary_signal, recovery_signal) {
+            selected_outcome = recovery_outcome;
         }
     }
 
+    let ProbePassOutcome {
+        plan: selected_plan,
+        mut probe_output,
+        log_text,
+        has_log_errors,
+        run_error,
+        populated_field_count,
+    } = selected_outcome;
+
+    if let Some(error) = run_error.as_deref() {
+        if populated_field_count == 0 {
+            return Err(anyhow!(
+                "tectonic layout probe pass '{}' failed: {error}. log excerpt: {}",
+                selected_plan.label,
+                probe_log_excerpt(&log_text)
+            ));
+        }
+
+        log::warn!(
+            "tectonic probe pass '{}' reported run error but retained {} extracted field(s).",
+            selected_plan.label,
+            populated_field_count
+        );
+    }
+
+    let has_run_error = run_error.is_some();
     let confidence_model = build_probe_confidence_model(&log_text, has_run_error, has_log_errors);
     let downgraded_fields = confidence_model.downgraded_fields();
     if !downgraded_fields.is_empty() {
@@ -687,6 +851,83 @@ FERRITEX_PROBE:list_label_width=8 pt
         assert_eq!(probe.body_line_spacing_twips, None);
         assert_eq!(probe.page_margin_left_twips, Some(1_200));
         assert_eq!(probe.list_label_sep_twips, Some(120));
+    }
+
+    #[test]
+    fn probe_pass_plans_define_low_level_orchestration_contract() {
+        assert_eq!(PROBE_PRIMARY_PASS_PLAN.pass, PassSetting::Tex);
+        assert_eq!(PROBE_PRIMARY_PASS_PLAN.reruns, None);
+        assert_eq!(PROBE_RECOVERY_PASS_PLAN.pass, PassSetting::Default);
+        assert_eq!(
+            PROBE_RECOVERY_PASS_PLAN.reruns,
+            Some(PROBE_RECOVERY_DEFAULT_RERUNS)
+        );
+    }
+
+    #[test]
+    fn recovery_probe_pass_is_requested_for_empty_primary_signal() {
+        let signal = ProbePassSignal {
+            has_run_error: false,
+            populated_field_count: 0,
+        };
+        assert!(should_run_recovery_probe_pass(signal));
+    }
+
+    #[test]
+    fn recovery_probe_pass_is_requested_for_primary_run_error() {
+        let signal = ProbePassSignal {
+            has_run_error: true,
+            populated_field_count: 8,
+        };
+        assert!(should_run_recovery_probe_pass(signal));
+    }
+
+    #[test]
+    fn recovery_probe_pass_is_skipped_when_primary_signal_is_healthy() {
+        let signal = ProbePassSignal {
+            has_run_error: false,
+            populated_field_count: 8,
+        };
+        assert!(!should_run_recovery_probe_pass(signal));
+    }
+
+    #[test]
+    fn recovery_probe_pass_is_preferred_when_primary_failed_and_recovery_clean() {
+        let primary = ProbePassSignal {
+            has_run_error: true,
+            populated_field_count: 4,
+        };
+        let recovery = ProbePassSignal {
+            has_run_error: false,
+            populated_field_count: 4,
+        };
+        assert!(should_prefer_recovery_pass(primary, recovery));
+    }
+
+    #[test]
+    fn recovery_probe_pass_is_preferred_when_it_has_more_fields() {
+        let primary = ProbePassSignal {
+            has_run_error: false,
+            populated_field_count: 6,
+        };
+        let recovery = ProbePassSignal {
+            has_run_error: false,
+            populated_field_count: 9,
+        };
+        assert!(should_prefer_recovery_pass(primary, recovery));
+    }
+
+    #[test]
+    fn recovery_probe_pass_is_not_preferred_when_primary_is_stronger() {
+        let primary = ProbePassSignal {
+            has_run_error: false,
+            populated_field_count: 9,
+        };
+        let recovery = ProbePassSignal {
+            has_run_error: false,
+            populated_field_count: 6,
+        };
+        assert!(!should_prefer_recovery_pass(primary, recovery));
     }
 
     #[test]

@@ -110,9 +110,10 @@
   typography-sensitive fields (`font_size_body_hp`, `body_line_spacing_twips`)
   when TeX error traces are detected in probe logs, avoiding incorrect DOCX-wide
   line-spacing regressions while retaining geometry/list probe signals.
-- First runtime `tectonic::TexEngine` integration slice is wired for probe configuration:
-  - probe session now aligns explicit engine profile (`halt_on_error`, `shell_escape`, `build_date`)
-    with `ProcessingSessionBuilder` runtime settings.
+- Probe runtime now uses direct low-level `TexEngine` pass orchestration:
+  - explicit engine profile (`halt_on_error`, `shell_escape`, `build_date`) remains aligned with runtime settings,
+  - primary probe pass is `PassSetting::Tex` (single-pass extraction),
+  - conditional recovery pass uses `PassSetting::Default` with fixed `reruns=1` when primary signal is empty or errored.
 - `TotPages` layering no longer depends on `.aux` only:
   - sidecar resolution now supports `.aux` and `.log`,
   - fallback heuristic now considers `\\newpage` + `\\clearpage` + `\\cleardoublepage` + `\\pagebreak`,

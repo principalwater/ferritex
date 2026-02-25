@@ -1,5 +1,5 @@
 use super::*;
-use crate::model::{Block, Inline};
+use crate::model::{Block, Inline, PageOrientation};
 
 #[test]
 fn test_chapter_level1() {
@@ -669,24 +669,90 @@ fn test_inline_newpage_command_does_not_emit_page_break_block() {
 }
 
 #[test]
-fn test_landscape_switch_commands_become_page_break_blocks() {
+fn test_landscape_switch_commands_become_orientation_blocks() {
     let doc =
         parse_latex("\\begin{landscape}\n\n\\end{landscape}\n\n\\landscape\n\n\\endlandscape");
     assert_eq!(doc.blocks.len(), 4, "unexpected blocks: {:?}", doc.blocks);
-    for block in doc.blocks {
-        assert!(matches!(block, Block::PageBreak));
-    }
+    assert!(matches!(
+        doc.blocks[0],
+        Block::PageOrientationSwitch {
+            orientation: PageOrientation::Landscape
+        }
+    ));
+    assert!(matches!(
+        doc.blocks[1],
+        Block::PageOrientationSwitch {
+            orientation: PageOrientation::Portrait
+        }
+    ));
+    assert!(matches!(
+        doc.blocks[2],
+        Block::PageOrientationSwitch {
+            orientation: PageOrientation::Landscape
+        }
+    ));
+    assert!(matches!(
+        doc.blocks[3],
+        Block::PageOrientationSwitch {
+            orientation: PageOrientation::Portrait
+        }
+    ));
 }
 
 #[test]
-fn test_inline_landscape_command_does_not_emit_page_break_block() {
+fn test_inline_landscape_command_does_not_emit_orientation_block() {
     let doc = parse_latex("Before \\landscape content.");
     assert!(
         doc.blocks
             .iter()
-            .all(|block| !matches!(block, Block::PageBreak)),
-        "unexpected page-break block in {:?}",
+            .all(|block| !matches!(block, Block::PageOrientationSwitch { .. })),
+        "unexpected orientation block in {:?}",
         doc.blocks
+    );
+}
+
+#[test]
+fn test_leading_pagebreak_and_landscape_commands_are_emitted_before_text() {
+    let doc = parse_latex("\\clearpage \\landscape Appendix content.");
+    assert_eq!(doc.blocks.len(), 3, "unexpected blocks: {:?}", doc.blocks);
+    assert!(matches!(doc.blocks[0], Block::PageBreak));
+    assert!(matches!(
+        doc.blocks[1],
+        Block::PageOrientationSwitch {
+            orientation: PageOrientation::Landscape
+        }
+    ));
+
+    match &doc.blocks[2] {
+        Block::Paragraph(inlines) => {
+            let text = inlines
+                .iter()
+                .filter_map(|inline| match inline {
+                    Inline::Text(value) => Some(value.as_str()),
+                    _ => None,
+                })
+                .collect::<String>();
+            assert!(text.contains("Appendix content"), "unexpected text: {text}");
+        }
+        other => panic!("expected paragraph, got {other:?}"),
+    }
+}
+
+#[test]
+fn test_leading_structural_commands_are_emitted_before_section_command() {
+    let doc = parse_latex("\\clearpage \\landscape \\chapter{Appendix}");
+    assert_eq!(doc.blocks.len(), 3, "unexpected blocks: {:?}", doc.blocks);
+    assert!(matches!(doc.blocks[0], Block::PageBreak));
+    assert!(matches!(
+        doc.blocks[1],
+        Block::PageOrientationSwitch {
+            orientation: PageOrientation::Landscape
+        }
+    ));
+    assert!(
+        matches!(doc.blocks[2], Block::Section { level: 1, .. }),
+        "expected section block, got {:?}",
+        doc.blocks[2]
     );
 }
 
@@ -1335,6 +1401,70 @@ fn test_parse_latex_file_resolves_year_primitives_from_metadata() {
     assert!(
         text.contains(&expected_year),
         "expected year '{expected_year}' in parsed text, got: {text}"
+    );
+
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+#[test]
+fn test_infer_total_pages_from_aux_text_prefers_abspage_last() {
+    let aux = r#"
+\relax
+\newlabel{LastPage}{{}{9}{}{page.9}{}}
+\gdef \@abspage@last{17}
+"#;
+    assert_eq!(infer_total_pages_from_aux_text(aux), Some(17));
+}
+
+#[test]
+fn test_infer_total_pages_from_aux_text_reads_lastpage_label() {
+    let aux = r#"
+\relax
+\newlabel{LastPage}{{}{23}{}{page.23}{}}
+"#;
+    assert_eq!(infer_total_pages_from_aux_text(aux), Some(23));
+}
+
+#[test]
+fn test_parse_latex_file_uses_aux_totpages_counter_for_dissertation_placeholder() {
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    let unique = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .expect("clock should be monotonic")
+        .as_nanos();
+    let root = std::env::temp_dir().join(format!("ferritex_aux_totpages_{unique}"));
+    std::fs::create_dir_all(&root).expect("failed to create temp dir");
+
+    let main_tex = root.join("main.tex");
+    let main_aux = root.join("main.aux");
+    std::fs::write(
+        &main_tex,
+        "\\documentclass{disser}\nПолный объём диссертации составляет страницы, включая рисунков и таблицы.",
+    )
+    .expect("failed to write main.tex");
+    std::fs::write(&main_aux, "\\gdef \\@abspage@last{17}\n").expect("failed to write main.aux");
+
+    let doc = parse_latex_file(&main_tex).expect("parse_latex_file failed");
+    let text = doc
+        .blocks
+        .iter()
+        .filter_map(|block| match block {
+            Block::Paragraph(inlines) => Some(
+                inlines
+                    .iter()
+                    .filter_map(|inline| match inline {
+                        Inline::Text(value) => Some(value.as_str()),
+                        _ => None,
+                    })
+                    .collect::<String>(),
+            ),
+            _ => None,
+        })
+        .collect::<String>();
+    assert!(
+        text.contains("17 страниц"),
+        "expected TotPages from AUX in placeholder replacement, got: {text}"
     );
 
     let _ = std::fs::remove_dir_all(&root);

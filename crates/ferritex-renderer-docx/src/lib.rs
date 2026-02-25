@@ -10,14 +10,15 @@ use anyhow::{Context, anyhow};
 use docx_rs::{
     AbstractNumbering, AlignmentType, BreakType, Docx, Footnote, Header, Hyperlink, HyperlinkType,
     IndentLevel, Level, LevelJc, LevelText, LineSpacing, LineSpacingType, NumberFormat, Numbering,
-    NumberingId, PageMargin, PageNum, Paragraph, Pic, Run, RunChild, RunFonts, SpecialIndentType,
-    Start, Style, StyleType, Tab, TabLeaderType, TabValueType, Table as DocxTable,
-    TableAlignmentType, TableCell as DocxCell, TableRow as DocxRow, VertAlignType,
+    NumberingId, PageMargin, PageNum, PageOrientationType, PageSize, Paragraph, Pic, Run, RunChild,
+    RunFonts, SectionProperty, SectionType, SpecialIndentType, Start, Style, StyleType, Tab,
+    TabLeaderType, TabValueType, Table as DocxTable, TableAlignmentType, TableCell as DocxCell,
+    TableRow as DocxRow, VertAlignType,
 };
 use zip::{ZipArchive, ZipWriter, write::SimpleFileOptions};
 
 use ferritex_core::model::{
-    Block, Document, DocumentLayout, Figure, Inline, ParagraphStyle, Table,
+    Block, Document, DocumentLayout, Figure, Inline, PageOrientation, ParagraphStyle, Table,
 };
 
 const PAGE_A4_WIDTH_TWIPS: u32 = 11_906;
@@ -796,6 +797,7 @@ fn build_reference_render_index(
             | Block::StyledParagraph { .. }
             | Block::List(_)
             | Block::PageBreak
+            | Block::PageOrientationSwitch { .. }
             | Block::BibliographyHeading { .. }
             | Block::TableOfContents => {}
         }
@@ -1025,7 +1027,7 @@ fn figure_caption_settings(profile: &RenderProfile) -> CaptionRenderSettings {
 /// - Body paragraphs use the `Normal` style with justify alignment and first-line indent.
 /// - Section headings use `Heading1` / `Heading2` / `Heading3` styles.
 /// - Bold runs use `Run::bold()`, italic runs use `Run::italic()`.
-/// - No `<w:sectPr>` is inserted inside paragraph properties.
+/// - `Block::PageOrientationSwitch` emits controlled section-break paragraphs (`<w:sectPr>` in `<w:pPr>`).
 pub fn render_docx(document: &Document, output_path: &Path) -> anyhow::Result<()> {
     render_docx_with_context(document, output_path, None)
 }
@@ -1051,6 +1053,7 @@ pub fn render_docx_with_context(
     // abstractNumId == numId for simplicity (one-to-one mapping).
     let mut next_num_id: usize = LIST_NUM_ID_BASE;
     let mut rendered_any_block = false;
+    let mut current_orientation = default_page_orientation(&profile);
 
     for (index, block) in document.blocks.iter().enumerate() {
         match block {
@@ -1092,6 +1095,25 @@ pub fn render_docx_with_context(
             Block::PageBreak => {
                 docx = docx.add_paragraph(page_break_paragraph());
                 rendered_any_block = true;
+            }
+            Block::PageOrientationSwitch { orientation } => {
+                if *orientation != current_orientation {
+                    if !rendered_any_block {
+                        // If switch marker appears before any emitted content,
+                        // update default section geometry instead of injecting
+                        // an empty break paragraph.
+                        current_orientation = *orientation;
+                        docx = apply_default_section_geometry(docx, current_orientation, &profile);
+                        continue;
+                    }
+
+                    docx = docx.add_paragraph(orientation_section_break_paragraph(
+                        current_orientation,
+                        &profile,
+                    ));
+                    current_orientation = *orientation;
+                    rendered_any_block = true;
+                }
             }
             Block::Paragraph(_) => {
                 let para = build_paragraph(block, &profile, &ref_index);
@@ -1228,6 +1250,8 @@ pub fn render_docx_with_context(
         }
     }
 
+    docx = apply_default_section_geometry(docx, current_orientation, &profile);
+
     let file = File::create(output_path)?;
     docx.build().pack(file)?;
     postprocess_docx(output_path, profile.document_language.as_deref())?;
@@ -1235,19 +1259,15 @@ pub fn render_docx_with_context(
 }
 
 fn create_styled_docx(profile: &RenderProfile) -> Docx {
-    let page_margin = PageMargin::new()
-        .top(profile.page_margin_top_twips)
-        .bottom(profile.page_margin_bottom_twips)
-        .left(profile.page_margin_left_twips)
-        .right(profile.page_margin_right_twips)
-        .header(profile.page_margin_header_twips)
-        .footer(profile.page_margin_footer_twips)
-        .gutter(profile.page_gutter_twips);
+    let default_orientation = default_page_orientation(profile);
+    let (page_width_twips, page_height_twips) =
+        page_dimensions_for_orientation(profile, default_orientation);
     let fonts = build_run_fonts(profile);
 
     let mut docx = Docx::new()
-        .page_size(profile.page_width_twips, profile.page_height_twips)
-        .page_margin(page_margin)
+        .page_size(page_width_twips, page_height_twips)
+        .page_orient(docx_page_orientation(default_orientation))
+        .page_margin(page_margin_from_profile(profile))
         .default_size(profile.font_size_body_hp)
         .default_fonts(fonts.clone())
         .default_line_spacing(line_spacing(profile.body_line_spacing_twips));
@@ -2193,13 +2213,15 @@ fn build_paragraph(
         Block::StyledParagraph { inlines, style } => {
             build_styled_body_paragraph(inlines, style, profile, refs)
         }
-        // Table, Figure, List, DisplayMath, PageBreak, BibliographyHeading, TableOfContents
+        // Table, Figure, List, DisplayMath, PageBreak, orientation switch,
+        // BibliographyHeading, TableOfContents
         // are handled separately in the render loop — unreachable here.
         Block::Table(_)
         | Block::Figure(_)
         | Block::List(_)
         | Block::DisplayMath(_)
         | Block::PageBreak
+        | Block::PageOrientationSwitch { .. }
         | Block::BibliographyHeading { .. }
         | Block::TableOfContents => {
             unreachable!()
@@ -2209,6 +2231,73 @@ fn build_paragraph(
 
 fn page_break_paragraph() -> Paragraph {
     Paragraph::new().add_run(Run::new().add_break(BreakType::Page))
+}
+
+fn orientation_section_break_paragraph(
+    section_orientation: PageOrientation,
+    profile: &RenderProfile,
+) -> Paragraph {
+    let (page_width_twips, page_height_twips) =
+        page_dimensions_for_orientation(profile, section_orientation);
+    let mut section_property = SectionProperty::new()
+        .page_size(
+            PageSize::new()
+                .size(page_width_twips, page_height_twips)
+                .orient(docx_page_orientation(section_orientation)),
+        )
+        .page_margin(page_margin_from_profile(profile));
+    section_property.section_type = Some(SectionType::NextPage);
+    Paragraph::new().section_property(section_property)
+}
+
+fn apply_default_section_geometry(
+    docx: Docx,
+    orientation: PageOrientation,
+    profile: &RenderProfile,
+) -> Docx {
+    let (page_width_twips, page_height_twips) =
+        page_dimensions_for_orientation(profile, orientation);
+    docx.page_size(page_width_twips, page_height_twips)
+        .page_orient(docx_page_orientation(orientation))
+        .page_margin(page_margin_from_profile(profile))
+}
+
+fn page_margin_from_profile(profile: &RenderProfile) -> PageMargin {
+    PageMargin::new()
+        .top(profile.page_margin_top_twips)
+        .bottom(profile.page_margin_bottom_twips)
+        .left(profile.page_margin_left_twips)
+        .right(profile.page_margin_right_twips)
+        .header(profile.page_margin_header_twips)
+        .footer(profile.page_margin_footer_twips)
+        .gutter(profile.page_gutter_twips)
+}
+
+fn default_page_orientation(profile: &RenderProfile) -> PageOrientation {
+    if profile.page_width_twips > profile.page_height_twips {
+        PageOrientation::Landscape
+    } else {
+        PageOrientation::Portrait
+    }
+}
+
+fn page_dimensions_for_orientation(
+    profile: &RenderProfile,
+    orientation: PageOrientation,
+) -> (u32, u32) {
+    let short_edge = profile.page_width_twips.min(profile.page_height_twips);
+    let long_edge = profile.page_width_twips.max(profile.page_height_twips);
+    match orientation {
+        PageOrientation::Portrait => (short_edge, long_edge),
+        PageOrientation::Landscape => (long_edge, short_edge),
+    }
+}
+
+fn docx_page_orientation(orientation: PageOrientation) -> PageOrientationType {
+    match orientation {
+        PageOrientation::Portrait => PageOrientationType::Portrait,
+        PageOrientation::Landscape => PageOrientationType::Landscape,
+    }
 }
 
 fn build_default_body_paragraph(

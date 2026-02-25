@@ -1,8 +1,9 @@
 use super::*;
 use docx_rs::BuildXML;
 use ferritex_core::model::{
-    Block, Document, Inline, ParagraphStyle, Table, TableCell, TableRow, TocEntry,
+    Block, Document, Inline, PageOrientation, ParagraphStyle, Table, TableCell, TableRow, TocEntry,
 };
+use std::io::Read;
 
 #[test]
 fn float_number_is_chapter_aware() {
@@ -639,6 +640,70 @@ fn page_break_block_renders_page_break_break_tag() {
 }
 
 #[test]
+fn orientation_section_break_uses_current_section_orientation() {
+    let profile = RenderProfile::from_layout(&DocumentLayout::default());
+    let xml = String::from_utf8(
+        orientation_section_break_paragraph(PageOrientation::Landscape, &profile).build(),
+    )
+    .expect("paragraph xml utf8");
+    assert!(xml.contains("w:type w:val=\"nextPage\""), "xml: {xml}");
+    assert!(xml.contains("w:orient=\"landscape\""), "xml: {xml}");
+}
+
+#[test]
+fn render_docx_orientation_switch_between_sections_emits_ordered_section_breaks() {
+    let document = Document {
+        blocks: vec![
+            Block::Paragraph(vec![Inline::Text("Portrait block".to_string())]),
+            Block::PageOrientationSwitch {
+                orientation: PageOrientation::Landscape,
+            },
+            Block::Paragraph(vec![Inline::Text("Landscape block".to_string())]),
+            Block::PageOrientationSwitch {
+                orientation: PageOrientation::Portrait,
+            },
+            Block::Paragraph(vec![Inline::Text("Portrait block 2".to_string())]),
+        ],
+        layout: DocumentLayout::default(),
+        toc_entries: Vec::new(),
+    };
+
+    let xml = render_document_xml(&document, "orientation_switch_between_sections");
+    let break_orientations = next_page_break_orientations(&xml);
+    assert_eq!(
+        break_orientations,
+        vec!["portrait", "landscape"],
+        "unexpected nextPage break orientations: {break_orientations:?}"
+    );
+}
+
+#[test]
+fn render_docx_orientation_switch_at_start_avoids_empty_leading_section_break() {
+    let document = Document {
+        blocks: vec![
+            Block::PageOrientationSwitch {
+                orientation: PageOrientation::Landscape,
+            },
+            Block::Paragraph(vec![Inline::Text("Landscape block".to_string())]),
+            Block::PageOrientationSwitch {
+                orientation: PageOrientation::Portrait,
+            },
+            Block::Paragraph(vec![Inline::Text("Portrait block".to_string())]),
+        ],
+        layout: DocumentLayout::default(),
+        toc_entries: Vec::new(),
+    };
+
+    let xml = render_document_xml(&document, "orientation_switch_at_start");
+    let break_orientations = next_page_break_orientations(&xml);
+    assert_eq!(
+        break_orientations,
+        vec!["landscape"],
+        "unexpected nextPage break orientations: {break_orientations:?}"
+    );
+}
+
+#[test]
 fn resolve_figure_path_uses_images_fallback_and_extension_guess() {
     use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -681,6 +746,64 @@ fn resolve_figure_path_accepts_absolute_path() {
     assert_eq!(resolved, Some(image_path.clone()));
 
     let _ = std::fs::remove_dir_all(&root);
+}
+
+fn render_document_xml(document: &Document, stem: &str) -> String {
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    let unique = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .expect("clock should be monotonic")
+        .as_nanos();
+    let path = std::env::temp_dir().join(format!(
+        "ferritex_renderer_docx_orientation_{stem}_{}_{}.docx",
+        std::process::id(),
+        unique
+    ));
+
+    render_docx(document, &path).expect("render_docx should succeed");
+
+    let file = std::fs::File::open(&path).expect("cannot open rendered docx");
+    let mut zip = zip::ZipArchive::new(file).expect("rendered file must be a valid zip");
+    let mut entry = zip
+        .by_name("word/document.xml")
+        .expect("word/document.xml is missing");
+    let mut xml = String::new();
+    entry
+        .read_to_string(&mut xml)
+        .expect("cannot read word/document.xml");
+
+    let _ = std::fs::remove_file(&path);
+    xml
+}
+
+fn next_page_break_orientations(xml: &str) -> Vec<&'static str> {
+    let marker = "<w:type w:val=\"nextPage\" />";
+    let mut cursor = 0usize;
+    let mut out = Vec::new();
+
+    while let Some(rel) = xml[cursor..].find(marker) {
+        let marker_abs = cursor + rel;
+        let before = &xml[..marker_abs];
+        let portrait = before.rfind("w:orient=\"portrait\"");
+        let landscape = before.rfind("w:orient=\"landscape\"");
+        let orientation = match (portrait, landscape) {
+            (Some(p), Some(l)) => {
+                if p > l {
+                    "portrait"
+                } else {
+                    "landscape"
+                }
+            }
+            (Some(_), None) => "portrait",
+            (None, Some(_)) => "landscape",
+            (None, None) => "unknown",
+        };
+        out.push(orientation);
+        cursor = marker_abs + marker.len();
+    }
+
+    out
 }
 
 // ── Task 3: new TOC fields — fallback defaults ────────────────────

@@ -11,17 +11,21 @@ This directory contains the operational rules for AI/code agents working on ferr
 - `memory_policy.md` — repository-local memory policy for all AI clients
 - `future_session_prompt.md` — copy-ready bootstrap prompt for new sessions
 - `future_compaction_prompt.md` — copy-ready compaction/handoff prompt for session wrap-up
+- `reviews/` — focused audit/review write-ups with dated findings
 
 ## Plans
 
-- `plans/v0.9-visual-parity.md` — archival (completed)
-- `plans/v0.9.1-latex-driven-audit.md` — archival (completed)
 - `plans/v0.9.1-docx-manual-qa-followup.md` — archival baseline for parity workstreams
-- `plans/v0.9.2-remaining-hardcodes.md` — completed in working tree (pending PR)
 - `plans/v0.9.3-docx-parity-disstyles-wave2.md` — active (manual QA defects from current dissertation parity cycle)
 - `plans/v0.9.4-test-organization-and-property-based.md` — in progress (property-based invariants started; full test-architecture audit pending)
-- `plans/v0.9.5-layoutprobe-tectonic-foundation.md` — in progress (embedded TeX probe foundation implemented in working tree; corpus-level validation pending)
+- `plans/v0.9.5-layoutprobe-tectonic-foundation.md` — in progress (embedded TeX probe foundation implemented; degraded-mode spacing regression fixed; helper-crate follow-up pending)
 - `plans/v1.0-multi-backend-foundation.md` — future (PDF/MD backends, after LayoutProbe foundation + DOCX parity stabilization)
+
+## Plan Archive
+
+- `archive/plans/v0.9-visual-parity.md` — completed
+- `archive/plans/v0.9.1-latex-driven-audit.md` — completed
+- `archive/plans/v0.9.2-remaining-hardcodes.md` — completed (historical context retained)
 
 ## Usage
 

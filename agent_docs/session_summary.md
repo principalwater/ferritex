@@ -1,4 +1,4 @@
-# Session Summary (updated 2026-02-25)
+# Session Summary (updated 2026-02-25, orientation section-switch complete + probe field-confidence model)
 
 ## Project Goal
 
@@ -17,105 +17,82 @@ LaTeX source -> LayoutProbe + parser extraction
 
 ## Repository State
 
-- Active branch: `fix/v0.9.3-landscape-switch-pagebreaks`
-- Latest `master`: `0936f24` (`fix(v0.9.3): preserve explicit LaTeX page breaks in DOCX output (#38)`)
-- PR status:
-  - PR `#35` merged.
-  - PR `#36` merged.
-  - PR `#37` merged (TOC non-chapter before-skip propagation).
-- PR `#38` merged (explicit page-break block propagation).
-- Working tree: dirty on `fix/v0.9.3-landscape-switch-pagebreaks` (wave-2 item #5 landscape-switch marker increment).
+- Active branch: `feat/v0.9.3-orientation-section-breaks`
+- `HEAD`: `7610def` (same as `master`), commit:
+  - `fix(v0.9.3): keep landscape switch markers as flow boundaries (#39)`
+- Working tree: dirty (combined v0.9.3 + v0.9.5 in-progress edits), including:
+  - orientation completion in parser/renderer/tests,
+  - degraded-probe field-confidence model in `layout_probe/tectonic`,
+  - docs and plan/session memory synchronization updates.
+- PR status (`gh pr status`):
+  - no open PRs,
+  - current branch has no associated PR.
 
 ## Quality Gate Status
 
-- `cargo fmt --all` ✅
-- `cargo clippy --workspace --all-targets --locked -- -D warnings` ✅
-- `cargo test --workspace --locked` ✅
-- `cargo check -p ferritex-core --features layout-probe-tectonic --locked` ✅
-- Notes:
-  - CI needed `libfontconfig1-dev` for `layout-probe-tectonic` feature check on Ubuntu runners.
+- Current dirty working tree:
+  - `cargo fmt --all` ✅
+  - `cargo clippy --workspace --all-targets --locked -- -D warnings` ✅
+  - `cargo test --workspace --locked` ✅
+- Additional focused validation:
+  - `cargo test -p ferritex-core --features layout-probe-tectonic --locked layout_probe::tectonic` ✅
+  - `cargo test -p ferritex-renderer-docx --locked orientation` ✅
+  - parser structural/orientation tests in `parser::latex::tests::*` ✅
+- External corpus run (probe-enabled):
+  - input: `/Users/principalwater/Documents/git/phd-eaeu-electricity-market/thesis/dissertation.tex`
+  - output: `/tmp/ferritex_orientation_wip/dissertation.docx`
+  - sha256: `c5302d8dd991ed56fe89cd64a0dd0026ef992d92c98cce4b6fe71a2745cf593e`
+  - runtime logs confirm probe mode (`LayoutProbe backend: tectonic`) and degraded typography downgrade.
+  - XML checks:
+    - body/default spacing restored to parser-calibrated `w:line="332"` (no `2.02` regression),
+    - orientation structure present: `nextPage` section breaks = `2`,
+      `w:orient="landscape"` sections = `1`, final section returns to portrait.
 
-## Completed in This Session
+## Done in This Session
 
-1. `v0.9.5` foundation implemented in code:
-   - `LayoutProbeOutput` contract added.
-   - embedded `tectonic` probe module added (feature-gated).
-   - merge contract implemented and wired into parser entrypoint.
-   - precedence enforced: `probe > parser > fallback`.
-   - high-impact fields covered: page geometry, body font size/family, paragraph indent, line spacing, list geometry.
-   - new unit/integration/property-style tests added for merge behavior and determinism.
+1. Completed orientation WIP end-to-end:
+   - parser now consumes leading structural commands from mixed chunks (for example `\clearpage \landscape \chapter{...}`) before normal paragraph/heading parsing,
+   - orientation markers are preserved as `Block::PageOrientationSwitch`,
+   - DOCX renderer orientation section-break behavior validated by unit tests and corpus XML.
+2. Added parser regression tests for mixed leading command chains:
+   - `test_leading_pagebreak_and_landscape_commands_are_emitted_before_text`,
+   - `test_leading_structural_commands_are_emitted_before_section_command`.
+3. Kept strict DOCX section semantics:
+   - break paragraph `sectPr` uses current section orientation,
+   - final body `sectPr` carries final section geometry.
+4. Upgraded degraded probe safety to field-level confidence:
+   - generalized from binary filter to `ProbeConfidenceModel` per typography field,
+   - added targeted downgrade logic (font-risk vs spacing-risk vs general failure),
+   - retained geometry/list probe signals in degraded runs.
+5. Synced docs/memory with current architecture state:
+   - `docs/SUPPORTED_ELEMENTS.md`, `docs/ROADMAP.md`, `docs/ARCHITECTURE.md`,
+   - `docs/TECTONIC_INTEGRATION.md`,
+   - `agent_docs/plans/v0.9.3-docx-parity-disstyles-wave2.md`,
+   - `agent_docs/plans/v0.9.5-layoutprobe-tectonic-foundation.md`,
+   - this `agent_docs/session_summary.md`.
 
-2. `layout-probe-tectonic` environment/build issues in this local macOS setup resolved:
-   - `tectonic` switched to `external-harfbuzz`.
-   - repo-level env defaults for pkg-config/C/C++ flags added in `.cargo/config.toml`.
-   - probe backend error handling and log artifact extraction path fixed for current toolchain.
+## Open Questions / Risks
 
-3. Toolchain/dependency synchronization implemented:
-   - local Rust updated to `1.93.1`.
-   - repository toolchain pinned via `rust-toolchain.toml`.
-   - crate-level `rust-version = "1.93"` added.
-   - `ratatui` updated to latest stable (`0.30.0`).
+1. `.aux`-driven `TotPages` extraction depends on sidecar presence/quality; without `.aux`,
+   parser still falls back to lightweight `\newpage`-based heuristic.
+2. Orientation/docx parity is now structurally correct in XML; final visual sign-off in Word UI is still user-side.
+3. Wider tectonic reuse targets (`TexEngine`, `latex_to_pdf`) remain design-level and not yet integrated in runtime codepaths.
 
-4. CI synchronized with local environment:
-   - pinned Rust `1.93.1`.
-   - lockfile-safe checks (`--locked`) for clippy/tests.
-   - native deps install step for probe feature.
-   - explicit CI feature check for `layout-probe-tectonic`.
+## Not Done
 
-5. Documentation synchronized with implemented architecture/policy:
-   - pipeline and precedence docs updated.
-   - reproducible environment/toolchain pinning documented.
-   - native prerequisites for `layout-probe-tectonic` documented.
-
-6. PR `#36` conflict and CI blockers were resolved and merged:
-   - squash-merge conflict trap resolved by rebuilding branch head from `origin/master` + cherry-pick.
-   - CI fix: `libfontconfig1-dev` added for the probe-feature check.
-   - PR `#36` merged: <https://github.com/principalwater/ferritex/pull/36>.
-
-7. v0.9.3 wave-2 TOC density increment implemented (current branch):
-   - parser extraction added for:
-     - `\setlength{\cftbeforesectionskip}{...}`,
-     - `\setlength{\cftbeforesubsectionskip}{...}`,
-     - `\setlength{\cftbeforesubsubsectionskip}{...}`.
-   - `DocumentLayout` + `RenderProfile` extended with level-aware TOC before-spacing fields.
-   - renderer TOC paragraph builder now applies level-aware before-spacing for levels 2/3/4.
-   - parser and renderer tests added for present/absent/fallback behavior.
-   - merged as PR `#37`: <https://github.com/principalwater/ferritex/pull/37>.
-
-8. v0.9.3 wave-2 appendix/page-break increment implemented (current branch):
-   - new AST node `Block::PageBreak` added.
-   - parser now emits `Block::PageBreak` for standalone `\newpage`, `\clearpage`, `\cleardoublepage`.
-   - renderer consumes `Block::PageBreak` and emits DOCX page-break paragraph (`w:br w:type="page"`).
-   - parser/renderer tests added for positive + negative behavior.
-   - local quality gate green after this increment (`fmt`, `clippy --locked -D warnings`, `test --workspace --locked`).
-
-9. v0.9.3 wave-2 landscape-switch flow-boundary increment implemented (current branch):
-   - parser no longer drops standalone landscape markers as skippable lines.
-   - standalone `\begin{landscape}`, `\end{landscape}`, `\landscape`, `\endlandscape` are mapped to
-     `Block::PageBreak` as deterministic flow-boundary fallback.
-   - parser tests added for positive + negative behavior.
-   - true portrait/landscape DOCX section orientation switching is still pending.
-
-## Not Done / Known Limitations
-
-1. `v0.9.5` is not fully closed by exit criteria yet:
-   - fallback reduction is not yet measured on a representative external multi-file corpus.
-   - optional helper-crate stream (`biblatex`, `codebook-tree-sitter-latex`) has not been evaluated in code.
-2. `v0.9.3` DOCX parity wave still has unresolved items from manual QA
-   (title page, TOC density artifact-level validation, math OMML, appendix orientation sections, table typography, counter-driven prose robustness, publications block).
-3. Newly added TOC spacing + page-break controls (including landscape switch flow-boundary fallback)
-   need corpus-level visual validation against canonical PDF/manual DOCX.
+1. No commit or PR prepared yet for the current dirty branch state.
+2. No implemented runtime PDF path via `tectonic::latex_to_pdf` yet (still planned).
+3. No implemented custom low-level probing path via `tectonic::TexEngine` yet (still planned).
 
 ## Active Plans
 
-1. Primary: `agent_docs/plans/v0.9.5-layoutprobe-tectonic-foundation.md`
-2. Secondary: `agent_docs/plans/v0.9.3-docx-parity-disstyles-wave2.md`
+1. Primary delivery branch context: `agent_docs/plans/v0.9.3-docx-parity-disstyles-wave2.md`
+2. Current session priority: `agent_docs/plans/v0.9.5-layoutprobe-tectonic-foundation.md`
 3. Cross-cutting: `agent_docs/plans/v0.9.4-test-organization-and-property-based.md`
-4. Blocked downstream: `agent_docs/plans/v1.0-multi-backend-foundation.md`
+4. Downstream: `agent_docs/plans/v1.0-multi-backend-foundation.md`
 
 ## Next Session Steps (ordered)
 
-1. Commit and open PR for `fix/v0.9.3-landscape-switch-pagebreaks` (landscape markers -> flow-boundary page breaks).
-2. Run artifact-level manual QA for TOC density/pagination and appendix landscape fragments on representative multi-file corpus.
-3. Continue `v0.9.3` remaining workstreams (title page, OMML math, true orientation sections, table typography) parser/probe-first.
-4. In parallel, complete `v0.9.5` corpus-level fallback-reduction measurements.
+1. Split current dirty work into coherent commits (`v0.9.3 orientation` and `v0.9.5 probe-confidence/docs`).
+2. Open PR(s) with probe-enabled validation evidence (`w:line=332`, orientation section sequence).
+3. Start the next tectonic-first slice: evaluate concrete integration path for `tectonic::latex_to_pdf` in PDF backend strategy without breaking AST/StyleMap contract.

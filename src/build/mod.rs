@@ -133,6 +133,17 @@ impl BuildConfig {
 
 /// Run the full build pipeline according to the given configuration.
 pub fn run_build(config: &BuildConfig) -> Result<BuildResult> {
+    if ferritex_core::layout_probe::probe_backend_is_enabled() {
+        log::info!(
+            "LayoutProbe backend: {}",
+            ferritex_core::layout_probe::active_probe_backend()
+        );
+    } else {
+        log::warn!(
+            "LayoutProbe backend is disabled at compile time; parser-only extraction is active."
+        );
+    }
+
     log::info!("Reading {}", config.input.display());
     let document = parser::latex::parse_latex_file(&config.input)
         .with_context(|| format!("failed to parse {}", config.input.display()))?;

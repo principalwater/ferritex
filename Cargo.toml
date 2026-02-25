@@ -19,12 +19,7 @@ crossterm = "0.29.0"
 docx-rs = "0.4.19"
 env_logger = "0.11.9"
 log = "0.4.29"
-quick-xml = "0.39.2"
 ratatui = "0.30.0"
-serde = { version = "1.0.228", features = ["derive"] }
-serde_json = "1.0.149"
-thiserror = "2.0.18"
-walkdir = "2.5.0"
 zip = "8.1.0"
 
 [package]
@@ -36,6 +31,10 @@ description = "Native Rust CLI to convert LaTeX to DOCX/PDF/MD"
 license = "MIT"
 authors = ["Vladislav Kuzmin <https://github.com/principalwater>"]
 
+[features]
+default = ["layout-probe-tectonic"]
+layout-probe-tectonic = ["ferritex-core/layout-probe-tectonic"]
+
 [dependencies]
 anyhow = { workspace = true }
 clap = { workspace = true }
@@ -43,7 +42,6 @@ crossterm = { workspace = true }
 env_logger = { workspace = true }
 log = { workspace = true }
 ratatui = { workspace = true }
-thiserror = { workspace = true }
 zip = { workspace = true }
 ferritex-core = { path = "crates/ferritex-core" }
 ferritex-renderer-docx = { path = "crates/ferritex-renderer-docx" }

@@ -1,13 +1,12 @@
 use std::{
     collections::{HashMap, HashSet},
     path::{Path, PathBuf},
-    process::Command,
 };
 
-use crate::layout_probe::{merge_probe_and_parser_layout, probe_layout};
+use crate::layout_probe::{active_probe_backend, merge_probe_and_parser_layout, probe_layout};
 use crate::model::{
-    Block, Document, DocumentLayout, Figure, Inline, List, ParagraphStyle, Table, TableCell,
-    TableRow, TocEntry,
+    Block, Document, DocumentLayout, Figure, Inline, LayoutProbeOutput, List, PageOrientation,
+    ParagraphStyle, Table, TableCell, TableRow, TocEntry,
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -93,7 +92,32 @@ pub fn parse_latex_file(input_path: &Path) -> anyhow::Result<Document> {
     let root_dir = input_path.parent().unwrap_or_else(|| Path::new("."));
     let mut stack = Vec::new();
     let expanded = expand_inputs_recursive(input_path, root_dir, &mut stack)?;
-    let probe_layout_output = probe_layout(input_path, &expanded).unwrap_or_default();
+    let probe_layout_output = match probe_layout(input_path, &expanded) {
+        Ok(output) => output,
+        Err(error) => {
+            log::warn!(
+                "LayoutProbe backend '{}' failed for {}: {error}; falling back to parser-only extraction.",
+                active_probe_backend(),
+                input_path.display()
+            );
+            LayoutProbeOutput::default()
+        }
+    };
+    let probe_fields = probe_layout_output.populated_field_names();
+    if probe_fields.is_empty() {
+        log::debug!(
+            "LayoutProbe backend '{}' produced no extracted fields for {}.",
+            active_probe_backend(),
+            input_path.display()
+        );
+    } else {
+        log::info!(
+            "LayoutProbe backend '{}' extracted {} field(s): {}",
+            active_probe_backend(),
+            probe_fields.len(),
+            probe_fields.join(", ")
+        );
+    }
     let autocite_mode = detect_autocite_mode(&expanded);
     let mut metadata = collect_parse_metadata(&expanded, input_path, root_dir);
     let mut document = parse_latex_with_mode(&expanded, autocite_mode, &metadata, true, true);
@@ -321,12 +345,19 @@ fn parse_latex_with_mode(
                     else {
                         continue;
                     };
-                    if let Some(label) = extract_standalone_label(prepared.text.as_str()) {
+                    let (leading_structural_blocks, remaining_text) =
+                        consume_leading_structural_blocks(prepared.text.as_str());
+                    blocks.extend(leading_structural_blocks);
+                    if remaining_text.trim().is_empty() {
+                        continue;
+                    }
+
+                    if let Some(label) = extract_standalone_label(remaining_text) {
                         attach_standalone_label(&mut blocks, label);
                         continue;
                     }
 
-                    let heading_candidate = strip_heading_prefix_noise(prepared.text.as_str());
+                    let heading_candidate = strip_heading_prefix_noise(remaining_text);
                     if let Some(block) = try_parse_section(
                         heading_candidate,
                         autocite_mode,
@@ -342,18 +373,16 @@ fn parse_latex_with_mode(
                         preserve_dynamic_markers,
                     ) {
                         blocks.push(block);
-                    } else if let Some(block) =
-                        try_parse_structural_heading_command(prepared.text.as_str())
+                    } else if let Some(block) = try_parse_structural_heading_command(remaining_text)
                     {
                         blocks.push(block);
                     } else if let Some(block) = try_parse_bibliography_command(
-                        prepared.text.as_str(),
+                        remaining_text,
                         layout.document_language.as_deref(),
                     ) {
                         blocks.push(block);
                     } else {
-                        let cleaned_chunk =
-                            trim_spaces_around_manual_linebreaks(prepared.text.as_str());
+                        let cleaned_chunk = trim_spaces_around_manual_linebreaks(remaining_text);
                         let inlines = parse_inlines(
                             cleaned_chunk.as_str(),
                             autocite_mode,
@@ -367,7 +396,7 @@ fn parse_latex_with_mode(
                             if let Some(mut style) = prepared.style {
                                 if let Some(left_indent) =
                                     estimate_flushright_tabular_left_indent_twips(
-                                        prepared.text.as_str(),
+                                        remaining_text,
                                         &inlines,
                                         &layout,
                                         style.font_size_hp,
@@ -3975,7 +4004,7 @@ fn collect_parse_metadata(source: &str, input_path: &Path, root_dir: &Path) -> P
         .counters
         .insert("totalappendix".to_string(), appendix_labels.len() as i64);
 
-    if let Some(pages) = infer_pdf_page_count(input_path) {
+    if let Some(pages) = infer_total_pages_from_aux(input_path) {
         metadata
             .counters
             .insert("TotPages".to_string(), pages as i64);
@@ -4481,23 +4510,82 @@ fn count_unique_citation_keys(source: &str) -> usize {
     keys.len()
 }
 
-fn infer_pdf_page_count(input_path: &Path) -> Option<u32> {
-    let pdf_path = input_path.with_extension("pdf");
-    if !pdf_path.is_file() {
-        return None;
-    }
-    let output = Command::new("pdfinfo").arg(&pdf_path).output().ok()?;
-    if !output.status.success() {
-        return None;
-    }
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    for line in stdout.lines() {
-        let trimmed = line.trim();
-        if let Some(rest) = trimmed.strip_prefix("Pages:") {
-            let value = rest.trim().parse::<u32>().ok()?;
-            return Some(value);
+fn infer_total_pages_from_aux(input_path: &Path) -> Option<u32> {
+    let aux_path = input_path.with_extension("aux");
+    let raw = std::fs::read_to_string(aux_path).ok()?;
+    infer_total_pages_from_aux_text(&raw)
+}
+
+fn infer_total_pages_from_aux_text(aux: &str) -> Option<u32> {
+    infer_total_pages_from_abs_page_last(aux)
+        .or_else(|| infer_total_pages_from_last_page_label(aux))
+}
+
+fn infer_total_pages_from_abs_page_last(aux: &str) -> Option<u32> {
+    for line in aux.lines() {
+        let Some(marker_pos) = line.find("\\@abspage@last") else {
+            continue;
+        };
+        let tail = &line[marker_pos + "\\@abspage@last".len()..];
+        let Some(open_pos) = tail.find('{') else {
+            continue;
+        };
+        let grouped = &tail[open_pos..];
+        let Some(group_len) = braced_len(grouped) else {
+            continue;
+        };
+        let payload = grouped[1..group_len - 1].trim();
+        if let Ok(pages) = payload.parse::<u32>() {
+            return Some(pages);
         }
     }
+
+    None
+}
+
+fn infer_total_pages_from_last_page_label(aux: &str) -> Option<u32> {
+    for line in aux.lines() {
+        let marker = if line.contains("\\newlabel{LastPage}") {
+            "\\newlabel{LastPage}"
+        } else if line.contains("\\newlabel{lastpage}") {
+            "\\newlabel{lastpage}"
+        } else if line.contains("\\newlabel{LastPages}") {
+            "\\newlabel{LastPages}"
+        } else {
+            continue;
+        };
+
+        let Some(marker_pos) = line.find(marker) else {
+            continue;
+        };
+        let mut tail = line[marker_pos + marker.len()..].trim_start();
+        if !tail.starts_with('{') {
+            let Some(open_pos) = tail.find('{') else {
+                continue;
+            };
+            tail = &tail[open_pos..];
+        }
+
+        let Some(payload_len) = braced_len(tail) else {
+            continue;
+        };
+        let payload = &tail[1..payload_len - 1];
+
+        let mut rest = payload.trim_start();
+        let Some(first_group_len) = braced_len(rest) else {
+            continue;
+        };
+        rest = rest[first_group_len..].trim_start();
+
+        let Some(second_group_len) = braced_len(rest) else {
+            continue;
+        };
+        let page_value = rest[1..second_group_len - 1].trim();
+        if let Ok(pages) = page_value.parse::<u32>() {
+            return Some(pages);
+        }
+    }
+
     None
 }
 
@@ -4530,6 +4618,7 @@ fn resolve_dynamic_placeholders(blocks: &mut [Block], metadata: &ParseMetadata) 
             }
             Block::DisplayMath(_)
             | Block::PageBreak
+            | Block::PageOrientationSwitch { .. }
             | Block::BibliographyHeading { .. }
             | Block::TableOfContents => {}
         }
@@ -4609,6 +4698,7 @@ fn resolve_footnote_citation_placeholders(
             }
             Block::DisplayMath(_)
             | Block::PageBreak
+            | Block::PageOrientationSwitch { .. }
             | Block::BibliographyHeading { .. }
             | Block::TableOfContents => {}
         }
@@ -4731,6 +4821,7 @@ fn resolve_citation_placeholders(blocks: &mut [Block], bibliography: &HashMap<St
             }
             Block::DisplayMath(_)
             | Block::PageBreak
+            | Block::PageOrientationSwitch { .. }
             | Block::BibliographyHeading { .. }
             | Block::TableOfContents => {}
         }
@@ -5694,6 +5785,7 @@ fn attach_standalone_label(blocks: &mut [Block], label: String) {
             | Block::StyledParagraph { .. }
             | Block::List(_)
             | Block::PageBreak
+            | Block::PageOrientationSwitch { .. }
             | Block::BibliographyHeading { .. }
             | Block::TableOfContents => {}
         }
@@ -6940,6 +7032,7 @@ fn resolve_references(
             }
             Block::DisplayMath(_)
             | Block::PageBreak
+            | Block::PageOrientationSwitch { .. }
             | Block::BibliographyHeading { .. }
             | Block::TableOfContents => {}
         }
@@ -7032,6 +7125,7 @@ fn build_label_registry(
             | Block::StyledParagraph { .. }
             | Block::List(_)
             | Block::PageBreak
+            | Block::PageOrientationSwitch { .. }
             | Block::BibliographyHeading { .. }
             | Block::TableOfContents => {}
         }
@@ -7206,19 +7300,99 @@ fn try_parse_plain_heading(
     })
 }
 
+/// Consume structural commands that appear at the beginning of a text chunk.
+///
+/// This preserves flow markers when a chunk starts with commands followed by
+/// regular content in the same paragraph, for example:
+/// `\clearpage \landscape Some heading`.
+fn consume_leading_structural_blocks(mut chunk: &str) -> (Vec<Block>, &str) {
+    let mut blocks = Vec::new();
+
+    loop {
+        let trimmed = chunk.trim_start();
+        if trimmed.is_empty() {
+            return (blocks, trimmed);
+        }
+
+        if let Some(after) = consume_leading_page_break_command(trimmed) {
+            blocks.push(Block::PageBreak);
+            chunk = after;
+            continue;
+        }
+        if let Some((orientation, after)) = consume_leading_landscape_switch_command(trimmed) {
+            blocks.push(Block::PageOrientationSwitch { orientation });
+            chunk = after;
+            continue;
+        }
+        if let Some(after) = consume_leading_tableofcontents_command(trimmed) {
+            blocks.push(Block::TableOfContents);
+            chunk = after;
+            continue;
+        }
+
+        return (blocks, trimmed);
+    }
+}
+
+fn consume_leading_page_break_command(src: &str) -> Option<&str> {
+    ["\\newpage", "\\clearpage", "\\cleardoublepage"]
+        .iter()
+        .find_map(|command| consume_control_word(src, command))
+}
+
+fn consume_leading_tableofcontents_command(src: &str) -> Option<&str> {
+    let mut rest = consume_control_word(src, "\\tableofcontents")?;
+    if let Some(after_star) = rest.strip_prefix('*') {
+        rest = after_star;
+    }
+    Some(rest)
+}
+
+fn consume_leading_landscape_switch_command(src: &str) -> Option<(PageOrientation, &str)> {
+    if let Some(after) = src.strip_prefix("\\begin{landscape}") {
+        return Some((PageOrientation::Landscape, after));
+    }
+    if let Some(after) = src.strip_prefix("\\end{landscape}") {
+        return Some((PageOrientation::Portrait, after));
+    }
+
+    if let Some(after_begin) = consume_control_word(src, "\\begin") {
+        let after_begin = after_begin.trim_start();
+        if let Some(after) = after_begin.strip_prefix("{landscape}") {
+            return Some((PageOrientation::Landscape, after));
+        }
+    }
+    if let Some(after_end) = consume_control_word(src, "\\end") {
+        let after_end = after_end.trim_start();
+        if let Some(after) = after_end.strip_prefix("{landscape}") {
+            return Some((PageOrientation::Portrait, after));
+        }
+    }
+
+    if let Some(after) = consume_control_word(src, "\\landscape") {
+        return Some((PageOrientation::Landscape, after));
+    }
+    if let Some(after) = consume_control_word(src, "\\endlandscape") {
+        return Some((PageOrientation::Portrait, after));
+    }
+
+    None
+}
+
 /// Detect structural control commands and emit dedicated block nodes.
 ///
 /// Supported commands:
 /// - `\tableofcontents[*]` -> [`Block::TableOfContents`]
 /// - `\newpage`, `\clearpage`, `\cleardoublepage` -> [`Block::PageBreak`]
 /// - `\begin{landscape}`, `\end{landscape}`, `\landscape`, `\endlandscape`
-///   -> [`Block::PageBreak`] (orientation switch marker fallback)
+///   -> [`Block::PageOrientationSwitch`]
 fn try_parse_structural_heading_command(chunk: &str) -> Option<Block> {
     let command = chunk.trim_start();
-    if is_standalone_page_break_command(command) || is_standalone_landscape_switch_command(command)
-    {
+    if is_standalone_page_break_command(command) {
         Some(Block::PageBreak)
-    } else if command.starts_with("\\tableofcontents") {
+    } else if let Some(orientation) = parse_standalone_landscape_switch_command(command) {
+        Some(Block::PageOrientationSwitch { orientation })
+    } else if is_standalone_tableofcontents_command(command) {
         Some(Block::TableOfContents)
     } else {
         None
@@ -7247,30 +7421,47 @@ fn is_standalone_page_break_command(chunk: &str) -> bool {
     matched && rest.is_empty()
 }
 
-fn is_standalone_landscape_switch_command(chunk: &str) -> bool {
+fn parse_standalone_landscape_switch_command(chunk: &str) -> Option<PageOrientation> {
     let mut rest = chunk.trim();
-    let mut matched = false;
+    let mut orientation = None;
 
     loop {
         let next = if let Some(after) = rest.strip_prefix("\\begin{landscape}") {
+            orientation = Some(PageOrientation::Landscape);
             Some(after)
         } else if let Some(after) = rest.strip_prefix("\\end{landscape}") {
+            orientation = Some(PageOrientation::Portrait);
             Some(after)
         } else if let Some(after) = consume_control_word(rest, "\\landscape") {
+            orientation = Some(PageOrientation::Landscape);
+            Some(after)
+        } else if let Some(after) = consume_control_word(rest, "\\endlandscape") {
+            orientation = Some(PageOrientation::Portrait);
             Some(after)
         } else {
-            consume_control_word(rest, "\\endlandscape")
+            None
         };
 
         let Some(after) = next else {
             break;
         };
 
-        matched = true;
         rest = after.trim_start();
     }
 
-    matched && rest.is_empty()
+    if rest.is_empty() { orientation } else { None }
+}
+
+fn is_standalone_tableofcontents_command(chunk: &str) -> bool {
+    let mut rest = chunk.trim_start();
+    let Some(after_command) = consume_control_word(rest, "\\tableofcontents") else {
+        return false;
+    };
+    rest = after_command.trim_start();
+    if let Some(after_star) = rest.strip_prefix('*') {
+        rest = after_star.trim_start();
+    }
+    rest.is_empty()
 }
 
 /// Detect bibliography-rendering commands and emit a `Block::BibliographyHeading`.

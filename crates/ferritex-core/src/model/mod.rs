@@ -559,6 +559,11 @@ pub enum Block {
     DisplayMath(String),
     /// An explicit page break command (`\newpage`, `\clearpage`, `\cleardoublepage`).
     PageBreak,
+    /// A page-orientation switch marker extracted from standalone LaTeX commands.
+    ///
+    /// Produced for `\begin{landscape}` / `\landscape` (landscape) and
+    /// `\end{landscape}` / `\endlandscape` (portrait).
+    PageOrientationSwitch { orientation: PageOrientation },
     /// A bibliography section rendered as a chapter-level heading.
     ///
     /// Emitted for `\printbibliography`, `\insertbibliofullsorted`, and similar commands.
@@ -571,6 +576,15 @@ pub enum Block {
     /// The section heading (e.g. "ОГЛАВЛЕНИЕ") is emitted separately by the
     /// preceding `\chapter*{...}` command and appears as a `Block::Section`.
     TableOfContents,
+}
+
+/// Effective page orientation requested by LaTeX flow markers.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PageOrientation {
+    /// Portrait page orientation.
+    Portrait,
+    /// Landscape page orientation.
+    Landscape,
 }
 
 /// A table block.

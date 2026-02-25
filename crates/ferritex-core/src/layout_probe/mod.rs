@@ -10,6 +10,19 @@ mod tectonic;
 #[cfg(any(test, feature = "layout-probe-tectonic"))]
 const TWIPS_PER_POINT_F64: f64 = 20.0;
 
+/// Returns the active LayoutProbe backend identifier for this build.
+pub fn active_probe_backend() -> &'static str {
+    #[cfg(feature = "layout-probe-tectonic")]
+    {
+        "tectonic"
+    }
+
+    #[cfg(not(feature = "layout-probe-tectonic"))]
+    {
+        "disabled (parser-only)"
+    }
+}
+
 /// Probe effective layout/style values with the configured backend.
 ///
 /// When `layout-probe-tectonic` is disabled, this returns an empty probe

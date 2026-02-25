@@ -17,13 +17,12 @@ LaTeX source -> LayoutProbe + parser extraction
 
 ## Repository State
 
-- Active branch: `fix/v0.9.3-list-parity`
-- Latest branch commit: `8e0d646` (`docs: sync architecture, plans, and memory for LayoutProbe foundation`)
+- Active branch: `fix/v0.9.3-toc-before-skip-levels`
+- Latest branch baseline on `master`: `d23be92` (`feat(v0.9.5): add LayoutProbe foundation and sync architecture docs (#36)`)
 - PR status:
-  - PR `#35` on this branch is merged.
-  - PR `#36` is open: <https://github.com/principalwater/ferritex/pull/36>
-  - `bot-merge` label is applied.
-- Working tree: clean.
+  - PR `#35` merged.
+  - PR `#36` merged (after conflict-resolution rewrite + CI fix).
+- Working tree: dirty on `fix/v0.9.3-toc-before-skip-levels` (TOC spacing wave-2 increment).
 
 ## Quality Gate Status
 
@@ -31,9 +30,8 @@ LaTeX source -> LayoutProbe + parser extraction
 - `cargo clippy --workspace --all-targets --locked -- -D warnings` ✅
 - `cargo test --workspace --locked` ✅
 - `cargo check -p ferritex-core --features layout-probe-tectonic --locked` ✅
-- PR checks (as of 2026-02-25):
-  - `Bot Merge` reported failure before CI checks appeared for this PR.
-  - A follow-up branch update may be needed to trigger fresh PR CI checks.
+- Notes:
+  - CI needed `libfontconfig1-dev` for `layout-probe-tectonic` feature check on Ubuntu runners.
 
 ## Completed in This Session
 
@@ -67,21 +65,28 @@ LaTeX source -> LayoutProbe + parser extraction
    - reproducible environment/toolchain pinning documented.
    - native prerequisites for `layout-probe-tectonic` documented.
 
-6. Working tree was split and committed as two atomic commits:
-   - `2592aac` — code/infrastructure (`LayoutProbe`, toolchain, CI, lockfile, tests).
-   - `8e0d646` — docs/memory synchronization.
+6. PR `#36` conflict and CI blockers were resolved and merged:
+   - squash-merge conflict trap resolved by rebuilding branch head from `origin/master` + cherry-pick.
+   - CI fix: `libfontconfig1-dev` added for the probe-feature check.
+   - PR `#36` merged: <https://github.com/principalwater/ferritex/pull/36>.
 
-7. Branch was pushed and PR opened:
-   - PR `#36`: <https://github.com/principalwater/ferritex/pull/36>
+7. v0.9.3 wave-2 TOC density increment implemented (current branch):
+   - parser extraction added for:
+     - `\setlength{\cftbeforesectionskip}{...}`,
+     - `\setlength{\cftbeforesubsectionskip}{...}`,
+     - `\setlength{\cftbeforesubsubsectionskip}{...}`.
+   - `DocumentLayout` + `RenderProfile` extended with level-aware TOC before-spacing fields.
+   - renderer TOC paragraph builder now applies level-aware before-spacing for levels 2/3/4.
+   - parser and renderer tests added for present/absent/fallback behavior.
 
 ## Not Done / Known Limitations
 
 1. `v0.9.5` is not fully closed by exit criteria yet:
    - fallback reduction is not yet measured on a representative external multi-file corpus.
    - optional helper-crate stream (`biblatex`, `codebook-tree-sitter-latex`) has not been evaluated in code.
-2. PR `#36` still needs standard CI/merge completion.
-3. `v0.9.3` DOCX parity wave still has unresolved items from manual QA
+2. `v0.9.3` DOCX parity wave still has unresolved items from manual QA
    (title page, TOC density, math OMML, appendix layout, table typography, counter-driven prose robustness, publications block).
+3. Newly added TOC spacing controls need corpus-level visual validation against canonical PDF/manual DOCX.
 
 ## Active Plans
 
@@ -92,7 +97,7 @@ LaTeX source -> LayoutProbe + parser extraction
 
 ## Next Session Steps (ordered)
 
-1. Ensure PR `#36` receives fresh CI checks and reaches green status.
-2. Complete merge flow for PR `#36`.
-3. After merge, run representative multi-file corpus validation and quantify reduced fallback usage for probe-covered fields.
-4. Continue `v0.9.3` remaining parity stream with parser/probe-first fixes only.
+1. Commit and open PR for `fix/v0.9.3-toc-before-skip-levels` (TOC level-before-spacing propagation).
+2. Run artifact-level manual QA for TOC density/pagination on representative multi-file corpus.
+3. Continue `v0.9.3` remaining workstreams (title page, OMML math, appendix layout, table typography) parser/probe-first.
+4. In parallel, complete `v0.9.5` corpus-level fallback-reduction measurements.

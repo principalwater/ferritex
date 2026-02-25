@@ -49,7 +49,7 @@
 - Path resolution and artifact naming centralized
 
 ## v0.8 ✅
-- Workspace refactor: mono-repo with `ferritex-core`, `ferritex-renderer-docx`, `ferritex-renderer-pdf` (stub), `ferritex-renderer-md` (stub)
+- Workspace refactor: mono-repo with `ferritex-core`, `ferritex-renderer-docx`, `ferritex-renderer-pdf` (initially stub; baseline now implemented), `ferritex-renderer-md` (stub)
 - TOC `cft*` formatting: indent/numwidth, dot leaders, chapter font, page font, aftersnum separators, appendix prefix
 - Caption layout: `captionsetup` extraction (skip, position, singlelinecheck, indent, labelsep)
 - Float alignment: `\centering`, `\raggedright`, etc. inside figure/table blocks
@@ -110,6 +110,13 @@
   typography-sensitive fields (`font_size_body_hp`, `body_line_spacing_twips`)
   when TeX error traces are detected in probe logs, avoiding incorrect DOCX-wide
   line-spacing regressions while retaining geometry/list probe signals.
+- First runtime `tectonic::TexEngine` integration slice is wired for probe configuration:
+  - probe session now aligns explicit engine profile (`halt_on_error`, `shell_escape`, `build_date`)
+    with `ProcessingSessionBuilder` runtime settings.
+- `TotPages` layering no longer depends on `.aux` only:
+  - sidecar resolution now supports `.aux` and `.log`,
+  - fallback heuristic now considers `\\newpage` + `\\clearpage` + `\\cleardoublepage` + `\\pagebreak`,
+  - runtime fallback can infer page count from canonical tectonic PDF bytes when sidecars are absent.
 - First probe-covered fields:
   page geometry, body font size/family, paragraph indent, line spacing, list geometry.
 - Optional helper crates for targeted tasks:
@@ -119,10 +126,12 @@
 - Regression coverage added for merge precedence, absent-probe fallback behavior,
   multi-file integration, and property-style determinism/conversion invariants.
 
-## v1.0
+## v1.0 (in progress)
 - OMML / Word equation rendering (upgrade from plain-text math approximation)
 - Resolved `\ref` / `\cite` cross-reference hyperlinks in body text
 - Bibliography entry list rendering (heading is placed, entries are pending)
 - Image embedding in DOCX
-- PDF output backend (`ferritex-renderer-pdf`)
+- PDF output backend (`ferritex-renderer-pdf`) baseline:
+  - canonical runtime path via `tectonic::latex_to_pdf` is implemented,
+  - integration test validates `build --format pdf` artifact generation.
 - Markdown output backend (`ferritex-renderer-md`)

@@ -9,3 +9,5 @@ license = "MIT"
 [dependencies]
 anyhow = { workspace = true }
 ferritex-core = { path = "../ferritex-core" }
+log = { workspace = true }
+tectonic = { version = "0.15.0", features = ["external-harfbuzz"] }

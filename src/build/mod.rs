@@ -17,7 +17,7 @@ use crate::renderer;
 pub enum OutputFormat {
     /// Generate DOCX only.
     Docx,
-    /// Generate PDF only (not yet implemented).
+    /// Generate PDF only.
     Pdf,
     /// Generate Markdown only (not yet implemented).
     Md,

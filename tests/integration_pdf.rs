@@ -10,22 +10,20 @@ fn pdf_build_path_is_wired_to_pdf_backend() {
     std::fs::create_dir_all(&output_dir).expect("failed to create temp output dir");
 
     let config = BuildConfig::from_build_args(&input, Some(&output_dir), OutputFormat::Pdf);
-    let err = run_build(&config).expect_err("PDF backend should be stubbed for now");
-    let err_text = err.to_string();
-    let chain_text = err
-        .chain()
-        .map(|cause| cause.to_string())
-        .collect::<Vec<_>>()
-        .join(" | ");
+    let result = run_build(&config).expect("PDF backend should compile via tectonic::latex_to_pdf");
+    let pdf_path = result
+        .pdf
+        .expect("expected PDF artifact path in build result");
+    let pdf_bytes = std::fs::read(&pdf_path).expect("failed to read generated PDF artifact");
     assert!(
-        err_text.contains("failed to write"),
-        "unexpected top-level error: {err_text}"
+        !pdf_bytes.is_empty(),
+        "generated PDF artifact must not be empty"
     );
     assert!(
-        chain_text.contains("PDF output backend is not implemented yet"),
-        "unexpected error chain: {chain_text}"
+        pdf_bytes.starts_with(b"%PDF-"),
+        "generated artifact is not a PDF file"
     );
 
-    let _ = std::fs::remove_file(config.pdf_path());
+    let _ = std::fs::remove_file(pdf_path);
     let _ = std::fs::remove_dir_all(output_dir);
 }

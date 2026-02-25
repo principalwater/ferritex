@@ -5,7 +5,7 @@
 Use `tectonic` as the primary embedded TeX engine for:
 
 1. high-fidelity layout/style probing for backend mapping (`docx`, future `md`),
-2. PDF generation path for visual parity workflows (future `pdf` backend),
+2. PDF generation path for visual parity workflows (canonical `pdf` backend baseline),
 3. deterministic, reproducible execution without external LaTeX subprocess orchestration.
 
 ## APIs and Intended Roles
@@ -13,8 +13,8 @@ Use `tectonic` as the primary embedded TeX engine for:
 | API | Role in ferritex | Current state |
 |---|---|---|
 | `tectonic::driver::ProcessingSessionBuilder` | Probe session for effective style values with in-memory input and `.log` marker parsing | Implemented |
-| `tectonic::TexEngine` | Low-level TeX pass control for advanced/custom probing scenarios | Not integrated yet |
-| `tectonic::latex_to_pdf` | Direct PDF generation from LaTeX source bytes for parity-oriented PDF backend workflows | Planned |
+| `tectonic::TexEngine` | Runtime profile anchor for probe execution settings (`halt_on_error`, `shell_escape`, `build_date`) | First integration slice implemented |
+| `tectonic::latex_to_pdf` | Direct PDF generation from LaTeX source bytes for parity-oriented PDF backend workflows | Implemented in `ferritex-renderer-pdf` |
 
 ## Probe Reliability Model
 
@@ -40,9 +40,10 @@ Rationale: raw TeX font/baseline metrics from degraded runs can produce incorrec
 - Keep current contract: `LayoutProbe + parser -> DocumentLayout -> RenderProfile`.
 - Continue parser-first normalization for fields requiring DOCX-specific calibration (for example, line spacing mapping).
 
-### PDF (target)
+### PDF
 
-- Introduce a dedicated path that can call `tectonic::latex_to_pdf` for canonical PDF output when parity is the priority.
+- Dedicated canonical path now calls `tectonic::latex_to_pdf` in `ferritex-renderer-pdf`.
+- Runtime compiles the input `.tex` source in the input-context directory so relative includes/assets resolve as in normal LaTeX project layout.
 - Keep AST/StyleMap path for cross-backend feature consistency and metadata-aware workflows.
 
 ### Markdown (target)

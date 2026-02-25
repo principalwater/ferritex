@@ -57,6 +57,7 @@ Mapped into `DocumentLayout` and rendered:
 - `\setlength{\cftsectionindent}{...}`, `\setlength{\cftsectionnumwidth}{...}`
 - `\setlength{\cftsubsectionindent}{...}`, `\setlength{\cftsubsectionnumwidth}{...}`
 - `\setlength{\cftsubsubsectionindent}{...}`, `\setlength{\cftsubsubsectionnumwidth}{...}`
+- `\setlength{\cftbeforechapterskip}{...}`, `\setlength{\cftbeforesectionskip}{...}`, `\setlength{\cftbeforesubsectionskip}{...}`, `\setlength{\cftbeforesubsubsectionskip}{...}`
 
 Newly mapped in v0.8:
 - `\renewcommand{\cftchapterfont}{\normalfont}` → `toc_chapter_entry_bold` (bold/non-bold chapter title in TOC)
@@ -69,6 +70,5 @@ Newly mapped in v0.8:
 - `\renewcommand{\cftappendixname}{...}` → `toc_appendix_name` (extracted; appendix TOC rendering reserved for future)
 
 Not mapped yet (fallback behavior applies):
-- `\cftbefore...skip` spacing controls
 - `\setpnumwidth{...}` (page number width box)
 - `\settoctitlefont{...}` and other title-level TOC font macros

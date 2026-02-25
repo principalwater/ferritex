@@ -45,6 +45,24 @@ pub fn probe_layout(input_path: &Path, expanded_source: &str) -> Result<LayoutPr
     }
 }
 
+/// Infer total pages from runtime TeX execution when sidecar counters are absent.
+///
+/// This helper is intentionally best-effort:
+/// - returns `Some(total_pages)` when runtime extraction is successful,
+/// - returns `None` when runtime probing is unavailable or inconclusive.
+pub fn infer_total_pages_with_runtime(input_path: &Path, expanded_source: &str) -> Option<u32> {
+    #[cfg(feature = "layout-probe-tectonic")]
+    {
+        tectonic::infer_total_pages_with_tectonic_runtime(input_path, expanded_source)
+    }
+
+    #[cfg(not(feature = "layout-probe-tectonic"))]
+    {
+        let _ = (input_path, expanded_source);
+        None
+    }
+}
+
 #[cfg(any(test, feature = "layout-probe-tectonic"))]
 pub(crate) fn pt_to_twips_rounded(points: f64) -> Option<i32> {
     if !points.is_finite() {

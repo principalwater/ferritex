@@ -16,10 +16,10 @@ This directory contains the operational rules for AI/code agents working on ferr
 ## Plans
 
 - `plans/v0.9.1-docx-manual-qa-followup.md` — archival baseline for parity workstreams
-- `plans/v0.9.3-docx-parity-disstyles-wave2.md` — active (manual QA defects from current dissertation parity cycle)
+- `plans/v0.9.3-docx-parity-disstyles-wave2.md` — partially completed (manual QA parity wave; orientation/page-break stream closed, remaining defects tracked)
 - `plans/v0.9.4-test-organization-and-property-based.md` — in progress (property-based invariants started; full test-architecture audit pending)
-- `plans/v0.9.5-layoutprobe-tectonic-foundation.md` — in progress (embedded TeX probe foundation implemented; degraded-mode spacing regression fixed; helper-crate follow-up pending)
-- `plans/v1.0-multi-backend-foundation.md` — future (PDF/MD backends, after LayoutProbe foundation + DOCX parity stabilization)
+- `plans/v0.9.5-layoutprobe-tectonic-foundation.md` — partially completed (`parser > probe > fallback` stabilized; `latex_to_pdf` path + first `TexEngine` runtime slice landed; remaining probe/TotPages hardening tracked)
+- `plans/v1.0-multi-backend-foundation.md` — in progress (canonical PDF path via `latex_to_pdf` implemented baseline; DOCX/MD semantic parity path continues)
 
 ## Plan Archive
 

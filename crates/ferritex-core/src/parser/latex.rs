@@ -3,7 +3,10 @@ use std::{
     path::{Path, PathBuf},
 };
 
-use crate::layout_probe::{active_probe_backend, merge_probe_and_parser_layout, probe_layout};
+use crate::layout_probe::{
+    active_probe_backend, infer_total_pages_with_runtime, merge_probe_and_parser_layout,
+    probe_layout,
+};
 use crate::model::{
     Block, Document, DocumentLayout, Figure, Inline, LayoutProbeOutput, List, PageOrientation,
     ParagraphStyle, Table, TableCell, TableRow, TocEntry,
@@ -4004,7 +4007,13 @@ fn collect_parse_metadata(source: &str, input_path: &Path, root_dir: &Path) -> P
         .counters
         .insert("totalappendix".to_string(), appendix_labels.len() as i64);
 
-    if let Some(pages) = infer_total_pages_from_aux(input_path) {
+    if let Some(pages) = infer_total_pages_from_sidecars(input_path).or_else(|| {
+        if source_requests_total_pages_counter(source) {
+            infer_total_pages_with_runtime(input_path, source)
+        } else {
+            None
+        }
+    }) {
         metadata
             .counters
             .insert("TotPages".to_string(), pages as i64);
@@ -4059,13 +4068,13 @@ fn enrich_structural_counters(metadata: &mut ParseMetadata, document: &Document,
         metadata.text_counters.insert("formatpl".to_string(), text);
     }
 
-    if !metadata.counters.contains_key("TotPages") {
-        let approx_pages = source.matches("\\newpage").count() as i64;
-        if approx_pages > 0 {
-            metadata
-                .counters
-                .insert("TotPages".to_string(), approx_pages);
-        }
+    if !metadata.counters.contains_key("TotPages")
+        && let Some(approx_pages) = infer_total_pages_from_explicit_breaks(source)
+        && approx_pages > 0
+    {
+        metadata
+            .counters
+            .insert("TotPages".to_string(), approx_pages);
     }
 }
 
@@ -4510,10 +4519,59 @@ fn count_unique_citation_keys(source: &str) -> usize {
     keys.len()
 }
 
+fn infer_total_pages_from_sidecars(input_path: &Path) -> Option<u32> {
+    infer_total_pages_from_aux(input_path).or_else(|| infer_total_pages_from_log(input_path))
+}
+
+fn source_requests_total_pages_counter(source: &str) -> bool {
+    source.contains("TotPages")
+        || source.contains("LastPage")
+        || source.contains("LastPages")
+        || source.contains("lastpage")
+}
+
 fn infer_total_pages_from_aux(input_path: &Path) -> Option<u32> {
     let aux_path = input_path.with_extension("aux");
     let raw = std::fs::read_to_string(aux_path).ok()?;
     infer_total_pages_from_aux_text(&raw)
+}
+
+fn infer_total_pages_from_log(input_path: &Path) -> Option<u32> {
+    let log_path = input_path.with_extension("log");
+    let raw = std::fs::read_to_string(log_path).ok()?;
+    infer_total_pages_from_log_text(&raw)
+}
+
+fn infer_total_pages_from_log_text(log: &str) -> Option<u32> {
+    for line in log.lines().rev() {
+        let lower = line.to_ascii_lowercase();
+        if !lower.contains("output written on") || !lower.contains("page") {
+            continue;
+        }
+
+        let Some(open_paren) = line.rfind('(') else {
+            continue;
+        };
+        let tail = &line[open_paren + 1..];
+        let tail_lower = tail.to_ascii_lowercase();
+        let Some(page_keyword_pos) = tail_lower.find("page") else {
+            continue;
+        };
+
+        let raw_number = tail[..page_keyword_pos]
+            .chars()
+            .filter(|ch| ch.is_ascii_digit())
+            .collect::<String>();
+        if raw_number.is_empty() {
+            continue;
+        }
+
+        if let Ok(pages) = raw_number.parse::<u32>() {
+            return Some(pages);
+        }
+    }
+
+    None
 }
 
 fn infer_total_pages_from_aux_text(aux: &str) -> Option<u32> {
@@ -4587,6 +4645,24 @@ fn infer_total_pages_from_last_page_label(aux: &str) -> Option<u32> {
     }
 
     None
+}
+
+fn infer_total_pages_from_explicit_breaks(source: &str) -> Option<i64> {
+    let explicit_breaks = [
+        "\\newpage",
+        "\\clearpage",
+        "\\cleardoublepage",
+        "\\pagebreak",
+    ]
+    .iter()
+    .map(|marker| source.matches(marker).count() as i64)
+    .sum::<i64>();
+
+    if explicit_breaks == 0 {
+        None
+    } else {
+        Some(explicit_breaks.saturating_add(1))
+    }
 }
 
 fn resolve_dynamic_placeholders(blocks: &mut [Block], metadata: &ParseMetadata) {

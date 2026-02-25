@@ -1426,6 +1426,25 @@ fn test_infer_total_pages_from_aux_text_reads_lastpage_label() {
 }
 
 #[test]
+fn test_infer_total_pages_from_log_text_reads_output_written_line() {
+    let log = r#"
+This is XeTeX, Version 3.1415...
+Output written on main.pdf (42 pages, 123456 bytes).
+Transcript written on main.log.
+"#;
+    assert_eq!(infer_total_pages_from_log_text(log), Some(42));
+}
+
+#[test]
+fn test_infer_total_pages_from_explicit_breaks_counts_clearpage_variants() {
+    let source = r#"
+\documentclass{disser}
+One.\newpage Two.\clearpage Three.\cleardoublepage Four.
+"#;
+    assert_eq!(infer_total_pages_from_explicit_breaks(source), Some(4));
+}
+
+#[test]
 fn test_parse_latex_file_uses_aux_totpages_counter_for_dissertation_placeholder() {
     use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -1465,6 +1484,55 @@ fn test_parse_latex_file_uses_aux_totpages_counter_for_dissertation_placeholder(
     assert!(
         text.contains("17 страниц"),
         "expected TotPages from AUX in placeholder replacement, got: {text}"
+    );
+
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+#[test]
+fn test_parse_latex_file_uses_log_totpages_counter_when_aux_missing() {
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    let unique = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .expect("clock should be monotonic")
+        .as_nanos();
+    let root = std::env::temp_dir().join(format!("ferritex_log_totpages_{unique}"));
+    std::fs::create_dir_all(&root).expect("failed to create temp dir");
+
+    let main_tex = root.join("main.tex");
+    let main_log = root.join("main.log");
+    std::fs::write(
+        &main_tex,
+        "\\documentclass{disser}\nПолный объём диссертации составляет страницы, включая рисунков и таблицы.",
+    )
+    .expect("failed to write main.tex");
+    std::fs::write(
+        &main_log,
+        "Output written on main.pdf (31 pages, 100500 bytes).\n",
+    )
+    .expect("failed to write main.log");
+
+    let doc = parse_latex_file(&main_tex).expect("parse_latex_file failed");
+    let text = doc
+        .blocks
+        .iter()
+        .filter_map(|block| match block {
+            Block::Paragraph(inlines) => Some(
+                inlines
+                    .iter()
+                    .filter_map(|inline| match inline {
+                        Inline::Text(value) => Some(value.as_str()),
+                        _ => None,
+                    })
+                    .collect::<String>(),
+            ),
+            _ => None,
+        })
+        .collect::<String>();
+    assert!(
+        text.contains("31 страница"),
+        "expected TotPages from LOG in placeholder replacement, got: {text}"
     );
 
     let _ = std::fs::remove_dir_all(&root);

@@ -1004,6 +1004,8 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "ferritex-core",
+ "log",
+ "tectonic",
 ]
 
 [[package]]

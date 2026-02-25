@@ -1,9 +1,15 @@
-use std::{collections::HashMap, path::Path};
+use std::{
+    collections::HashMap,
+    path::{Path, PathBuf},
+    time::SystemTime,
+};
 
 use anyhow::{Result, anyhow};
 use tectonic::{
+    TexEngine,
     config::PersistentConfig,
     driver::{OutputFormat, ProcessingSessionBuilder},
+    latex_to_pdf,
     status::NoopStatusBackend,
     unstable_opts::UnstableOptions,
 };
@@ -15,6 +21,40 @@ use super::pt_to_twips_rounded;
 const PROBE_MARKER_PREFIX: &str = "FERRITEX_PROBE:";
 const PROBE_TEX_INPUT_NAME: &str = "ferritex_probe.tex";
 const PROBE_LOG_NAME: &str = "ferritex_probe.log";
+const PROBE_TEX_ENGINE_HALT_ON_ERROR: bool = false;
+const PROBE_TEX_ENGINE_SHELL_ESCAPE_ENABLED: bool = false;
+const PROBE_TEX_ENGINE_BUILD_DATE: SystemTime = SystemTime::UNIX_EPOCH;
+const PDF_PAGE_COUNT_KEYWORD: &[u8] = b"/Count";
+
+#[derive(Debug)]
+struct CurrentDirGuard {
+    previous_dir: PathBuf,
+}
+
+impl CurrentDirGuard {
+    fn change_to(target_dir: &Path) -> Result<Self> {
+        let previous_dir = std::env::current_dir()
+            .map_err(|error| anyhow!("failed to read current working directory: {error}"))?;
+        std::env::set_current_dir(target_dir).map_err(|error| {
+            anyhow!(
+                "failed to switch current working directory to {}: {error}",
+                target_dir.display()
+            )
+        })?;
+        Ok(Self { previous_dir })
+    }
+}
+
+impl Drop for CurrentDirGuard {
+    fn drop(&mut self) {
+        if let Err(error) = std::env::set_current_dir(&self.previous_dir) {
+            log::warn!(
+                "failed to restore working directory to {}: {error}",
+                self.previous_dir.display()
+            );
+        }
+    }
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum FieldConfidence {
@@ -50,6 +90,23 @@ impl ProbeConfidenceModel {
     }
 }
 
+fn build_probe_tex_engine() -> TexEngine {
+    let mut tex_engine = TexEngine::default();
+    tex_engine
+        .halt_on_error_mode(PROBE_TEX_ENGINE_HALT_ON_ERROR)
+        .shell_escape(PROBE_TEX_ENGINE_SHELL_ESCAPE_ENABLED)
+        .build_date(PROBE_TEX_ENGINE_BUILD_DATE);
+    tex_engine
+}
+
+fn with_temporary_working_dir<T, F>(target_dir: &Path, action: F) -> Result<T>
+where
+    F: FnOnce() -> Result<T>,
+{
+    let _guard = CurrentDirGuard::change_to(target_dir)?;
+    action()
+}
+
 pub(crate) fn probe_layout_with_tectonic(
     input_path: &Path,
     expanded_source: &str,
@@ -61,6 +118,8 @@ pub(crate) fn probe_layout_with_tectonic(
     let probe_source = build_probe_source(preamble);
 
     let root_dir = input_path.parent().unwrap_or_else(|| Path::new("."));
+    let tex_engine_profile = build_probe_tex_engine();
+    log::debug!("tectonic probe engine profile: {:?}", tex_engine_profile);
 
     let mut status = NoopStatusBackend::default();
     let config = PersistentConfig::open(false)
@@ -86,10 +145,12 @@ pub(crate) fn probe_layout_with_tectonic(
         .keep_intermediates(false)
         .print_stdout(false)
         .do_not_write_output_files()
+        .build_date(PROBE_TEX_ENGINE_BUILD_DATE)
+        .shell_escape_disabled()
         // Probe should keep partial extraction signal even if TeX reports
         // recoverable errors in template-specific preamble logic.
         .unstables(UnstableOptions {
-            continue_on_errors: true,
+            continue_on_errors: !PROBE_TEX_ENGINE_HALT_ON_ERROR,
             ..Default::default()
         });
 
@@ -144,6 +205,73 @@ pub(crate) fn probe_layout_with_tectonic(
     }
 
     Ok(probe_output)
+}
+
+pub(crate) fn infer_total_pages_with_tectonic_runtime(
+    input_path: &Path,
+    expanded_source: &str,
+) -> Option<u32> {
+    let root_dir = input_path.parent().unwrap_or_else(|| Path::new("."));
+    let tex_engine_profile = build_probe_tex_engine();
+    log::debug!(
+        "TotPages runtime inference via tectonic APIs; engine profile: {:?}",
+        tex_engine_profile
+    );
+
+    let pdf_data = match with_temporary_working_dir(root_dir, || {
+        latex_to_pdf(expanded_source).map_err(|error| {
+            anyhow!(
+                "tectonic::latex_to_pdf failed while inferring TotPages for {}: {error}",
+                input_path.display()
+            )
+        })
+    }) {
+        Ok(data) => data,
+        Err(error) => {
+            log::debug!("{error}");
+            return None;
+        }
+    };
+
+    infer_total_pages_from_pdf_bytes(&pdf_data)
+}
+
+fn infer_total_pages_from_pdf_bytes(pdf_data: &[u8]) -> Option<u32> {
+    let mut cursor = 0usize;
+    let mut max_pages = 0u32;
+
+    while let Some(offset) = find_subslice(&pdf_data[cursor..], PDF_PAGE_COUNT_KEYWORD) {
+        let mut index = cursor + offset + PDF_PAGE_COUNT_KEYWORD.len();
+        while index < pdf_data.len() && pdf_data[index].is_ascii_whitespace() {
+            index += 1;
+        }
+
+        let value_start = index;
+        while index < pdf_data.len() && pdf_data[index].is_ascii_digit() {
+            index += 1;
+        }
+
+        if value_start < index
+            && let Ok(raw) = std::str::from_utf8(&pdf_data[value_start..index])
+            && let Ok(pages) = raw.parse::<u32>()
+        {
+            max_pages = max_pages.max(pages);
+        }
+
+        cursor += offset + PDF_PAGE_COUNT_KEYWORD.len();
+    }
+
+    if max_pages > 0 { Some(max_pages) } else { None }
+}
+
+fn find_subslice(haystack: &[u8], needle: &[u8]) -> Option<usize> {
+    if needle.is_empty() || haystack.len() < needle.len() {
+        return None;
+    }
+
+    haystack
+        .windows(needle.len())
+        .position(|window| window == needle)
 }
 
 fn build_probe_source(preamble: &str) -> String {
@@ -559,5 +687,31 @@ FERRITEX_PROBE:list_label_width=8 pt
         assert_eq!(probe.body_line_spacing_twips, None);
         assert_eq!(probe.page_margin_left_twips, Some(1_200));
         assert_eq!(probe.list_label_sep_twips, Some(120));
+    }
+
+    #[test]
+    fn infer_total_pages_from_pdf_bytes_reads_max_count_marker() {
+        let sample = br#"%PDF-1.7
+1 0 obj << /Type /Pages /Count 3 >>
+2 0 obj << /Type /Pages /Count 17 >>
+trailer << /Root 1 0 R >>
+"#;
+        assert_eq!(infer_total_pages_from_pdf_bytes(sample), Some(17));
+    }
+
+    #[test]
+    fn infer_total_pages_from_pdf_bytes_returns_none_without_count_marker() {
+        let sample = br#"%PDF-1.7
+1 0 obj << /Type /Catalog >>
+trailer << /Root 1 0 R >>
+"#;
+        assert_eq!(infer_total_pages_from_pdf_bytes(sample), None);
+    }
+
+    #[test]
+    fn build_probe_tex_engine_uses_runtime_profile() {
+        let profile = format!("{:?}", build_probe_tex_engine());
+        assert!(profile.contains("halt_on_error: false"));
+        assert!(profile.contains("shell_escape_enabled: false"));
     }
 }

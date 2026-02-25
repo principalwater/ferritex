@@ -24,8 +24,13 @@ renderer  renderer    renderer
 |-------|---------|
 | `ferritex-core` | LaTeX extraction core: parser + `LayoutProbe` contract (`LayoutProbeOutput`) + merge (`probe > parser`) + AST model (`Block`, `Inline`) + `DocumentLayout` (StyleMap) |
 | `ferritex-renderer-docx` | DOCX renderer + `RenderProfile::from_layout()` — **fully implemented** |
-| `ferritex-renderer-pdf` | PDF renderer — **stub** |
+| `ferritex-renderer-pdf` | PDF renderer — canonical path via `tectonic::latex_to_pdf` (baseline implemented) |
 | `ferritex-renderer-md` | Markdown renderer — **stub** |
+
+Current PDF backend behavior:
+- runtime reads the input `.tex` source and runs `tectonic::latex_to_pdf` in the input-file directory context,
+- this provides canonical parity-oriented PDF generation without external LaTeX subprocess orchestration,
+- AST/StyleMap-driven PDF semantics remain a future extension path.
 
 `RenderProfile::from_layout()` is the single bridge where `DocumentLayout` option fields
 are resolved to concrete values with fallback defaults. All renderer functions consume

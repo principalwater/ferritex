@@ -46,7 +46,7 @@ Rendering policy:
 | File inclusion (`\input{}`, `\include{}`) | ✅ v0.5 | Recursive expansion from entry `.tex` file |
 | LayoutProbe merge contract (`probe > parser > fallback`) | ✅ v0.9.5 foundation | `LayoutProbeOutput` + deterministic merge helper implemented in `ferritex-core`; `parse_latex_file` applies merge before renderer mapping. |
 | LayoutProbe embedded backend (`layout-probe-tectonic`) | 🟨 v0.9.5 foundation | Feature-gated `tectonic` backend extracts first high-impact fields: page geometry, body font size/family, paragraph indent, line spacing, list geometry. In degraded probe runs (TeX error traces), a field-level confidence model downgrades typography-sensitive fields (`font_size_body_hp`, `body_line_spacing_twips`) so parser values remain authoritative while geometry/list probe fields are retained. |
-| PDF output | ⬜ v1.0 | |
+| PDF output (`build --format pdf`) | 🟨 v1.0 baseline | Canonical runtime path is implemented via `tectonic::latex_to_pdf`; current behavior compiles source `.tex` in input-context directory and writes resulting PDF artifact. AST/StyleMap-driven semantic PDF mapping remains future work. |
 
 ## TOC `cft*` coverage
 

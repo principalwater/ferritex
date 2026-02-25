@@ -5,6 +5,7 @@ use tectonic::{
     config::PersistentConfig,
     driver::{OutputFormat, ProcessingSessionBuilder},
     status::NoopStatusBackend,
+    unstable_opts::UnstableOptions,
 };
 
 use crate::model::LayoutProbeOutput;
@@ -14,6 +15,40 @@ use super::pt_to_twips_rounded;
 const PROBE_MARKER_PREFIX: &str = "FERRITEX_PROBE:";
 const PROBE_TEX_INPUT_NAME: &str = "ferritex_probe.tex";
 const PROBE_LOG_NAME: &str = "ferritex_probe.log";
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum FieldConfidence {
+    Trusted,
+    Degraded,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct ProbeConfidenceModel {
+    font_size_body_hp: FieldConfidence,
+    body_line_spacing_twips: FieldConfidence,
+}
+
+impl Default for ProbeConfidenceModel {
+    fn default() -> Self {
+        Self {
+            font_size_body_hp: FieldConfidence::Trusted,
+            body_line_spacing_twips: FieldConfidence::Trusted,
+        }
+    }
+}
+
+impl ProbeConfidenceModel {
+    fn downgraded_fields(self) -> Vec<&'static str> {
+        let mut fields = Vec::new();
+        if self.font_size_body_hp == FieldConfidence::Degraded {
+            fields.push("font_size_body_hp");
+        }
+        if self.body_line_spacing_twips == FieldConfidence::Degraded {
+            fields.push("body_line_spacing_twips");
+        }
+        fields
+    }
+}
 
 pub(crate) fn probe_layout_with_tectonic(
     input_path: &Path,
@@ -50,14 +85,18 @@ pub(crate) fn probe_layout_with_tectonic(
         .keep_logs(true)
         .keep_intermediates(false)
         .print_stdout(false)
-        .do_not_write_output_files();
+        .do_not_write_output_files()
+        // Probe should keep partial extraction signal even if TeX reports
+        // recoverable errors in template-specific preamble logic.
+        .unstables(UnstableOptions {
+            continue_on_errors: true,
+            ..Default::default()
+        });
 
     let mut session = builder
         .create(&mut status)
         .map_err(|error| anyhow!("failed to create tectonic processing session: {error}"))?;
-    session
-        .run(&mut status)
-        .map_err(|error| anyhow!("tectonic layout probe run failed: {error}"))?;
+    let run_result = session.run(&mut status);
 
     let mut files = session.into_file_data();
     let log_text = if let Some(file) = files.remove(PROBE_LOG_NAME) {
@@ -76,7 +115,35 @@ pub(crate) fn probe_layout_with_tectonic(
         String::from_utf8_lossy(&fallback.data).into_owned()
     };
 
-    Ok(parse_probe_log(&log_text))
+    let mut probe_output = parse_probe_log(&log_text);
+    let has_log_errors = probe_log_has_tex_errors(&log_text);
+    let has_run_error = run_result.is_err();
+
+    if let Err(error) = run_result {
+        let populated_before_filter = probe_output.populated_field_names();
+        if populated_before_filter.is_empty() {
+            return Err(anyhow!(
+                "tectonic layout probe run failed: {error}. log excerpt: {}",
+                probe_log_excerpt(&log_text)
+            ));
+        }
+    }
+
+    let confidence_model = build_probe_confidence_model(&log_text, has_run_error, has_log_errors);
+    let downgraded_fields = confidence_model.downgraded_fields();
+    if !downgraded_fields.is_empty() {
+        apply_probe_confidence_model(&mut probe_output, confidence_model);
+
+        let populated_fields = probe_output.populated_field_names();
+        log::warn!(
+            "tectonic layout probe degraded confidence for field(s): {}; retained {} field(s) after safety filter: {}",
+            downgraded_fields.join(", "),
+            populated_fields.len(),
+            populated_fields.join(", ")
+        );
+    }
+
+    Ok(probe_output)
 }
 
 fn build_probe_source(preamble: &str) -> String {
@@ -225,10 +292,119 @@ fn parse_points(raw: &str) -> Option<f64> {
     let token = raw
         .trim()
         .trim_end_matches("pt")
-        .trim()
         .split_whitespace()
         .next()?;
     token.parse::<f64>().ok()
+}
+
+fn probe_log_excerpt(log_text: &str) -> String {
+    let mut selected = Vec::new();
+    for raw_line in log_text.lines() {
+        let line = raw_line.trim();
+        if line.is_empty() {
+            continue;
+        }
+        if line.starts_with('!')
+            || line.contains("Error")
+            || line.contains("Undefined control sequence")
+            || line.contains("Emergency stop")
+        {
+            selected.push(line.to_string());
+            if selected.len() == 3 {
+                break;
+            }
+        }
+    }
+
+    if selected.is_empty() {
+        selected.extend(
+            log_text
+                .lines()
+                .map(str::trim)
+                .filter(|line| !line.is_empty())
+                .take(3)
+                .map(ToOwned::to_owned),
+        );
+    }
+
+    selected.join(" | ")
+}
+
+fn probe_log_has_tex_errors(log_text: &str) -> bool {
+    log_text.lines().any(|raw_line| {
+        let line = raw_line.trim();
+        line.starts_with('!')
+            || line.contains("LaTeX Error")
+            || line.contains("Undefined control sequence")
+            || line.contains("Emergency stop")
+            || line.contains("Fatal error")
+    })
+}
+
+fn build_probe_confidence_model(
+    log_text: &str,
+    has_run_error: bool,
+    has_log_errors: bool,
+) -> ProbeConfidenceModel {
+    if !has_run_error && !has_log_errors {
+        return ProbeConfidenceModel::default();
+    }
+
+    let mut model = ProbeConfidenceModel::default();
+    let lower = log_text.to_ascii_lowercase();
+
+    let has_general_failure = has_run_error
+        || lower.contains("undefined control sequence")
+        || lower.contains("emergency stop")
+        || lower.contains("fatal error")
+        || log_text
+            .lines()
+            .any(|line| line.trim_start().starts_with('!'));
+
+    if has_general_failure {
+        model.font_size_body_hp = FieldConfidence::Degraded;
+        model.body_line_spacing_twips = FieldConfidence::Degraded;
+        return model;
+    }
+
+    let has_font_metric_risk = lower.contains("fontspec")
+        || lower.contains("font warning")
+        || lower.contains("font shape")
+        || lower.contains("font not found")
+        || lower.contains("missing character");
+    if has_font_metric_risk {
+        model.font_size_body_hp = FieldConfidence::Degraded;
+    }
+
+    let has_spacing_metric_risk = lower.contains("illegal unit of measure")
+        || lower.contains("missing number")
+        || lower.contains("bad register code")
+        || lower.contains("dimension too large");
+    if has_spacing_metric_risk {
+        model.body_line_spacing_twips = FieldConfidence::Degraded;
+    }
+
+    // Conservative fallback: when TeX reports errors but risk class is unknown,
+    // degrade typography-sensitive fields rather than emitting potentially
+    // inflated Word spacing/size mappings.
+    if model.downgraded_fields().is_empty() {
+        model.font_size_body_hp = FieldConfidence::Degraded;
+        model.body_line_spacing_twips = FieldConfidence::Degraded;
+    }
+
+    model
+}
+
+fn apply_probe_confidence_model(
+    probe_output: &mut LayoutProbeOutput,
+    confidence_model: ProbeConfidenceModel,
+) {
+    if confidence_model.font_size_body_hp == FieldConfidence::Degraded {
+        probe_output.font_size_body_hp = None;
+    }
+    if confidence_model.body_line_spacing_twips == FieldConfidence::Degraded {
+        probe_output.body_line_spacing_twips = None;
+    }
 }
 
 const PROBE_BODY: &str = r#"
@@ -323,5 +499,65 @@ FERRITEX_PROBE:list_label_width=8 pt
         assert_eq!(parse_points("12.5pt"), Some(12.5));
         assert_eq!(parse_points("12.5 pt"), Some(12.5));
         assert_eq!(parse_points("12.5"), Some(12.5));
+    }
+
+    #[test]
+    fn probe_log_error_detection_detects_tex_error_markers() {
+        let clean_log = "This is XeTeX\nFERRITEX_PROBE:page_width=595 pt\nOutput written";
+        assert!(!probe_log_has_tex_errors(clean_log));
+
+        let error_log = "This is XeTeX\n! Undefined control sequence.\nl.42 \\badmacro";
+        assert!(probe_log_has_tex_errors(error_log));
+    }
+
+    #[test]
+    fn probe_confidence_model_general_failure_degrades_both_typography_fields() {
+        let model = build_probe_confidence_model("! Undefined control sequence", false, true);
+        assert_eq!(
+            model.downgraded_fields(),
+            vec!["font_size_body_hp", "body_line_spacing_twips"]
+        );
+    }
+
+    #[test]
+    fn probe_confidence_model_font_error_degrades_font_only() {
+        let model = build_probe_confidence_model(
+            "LaTeX Error: fontspec error: The font \"Foo\" cannot be found.",
+            false,
+            true,
+        );
+        assert_eq!(model.downgraded_fields(), vec!["font_size_body_hp"]);
+    }
+
+    #[test]
+    fn probe_confidence_model_spacing_error_degrades_spacing_only() {
+        let model = build_probe_confidence_model(
+            "LaTeX Error: Illegal unit of measure (pt inserted).",
+            false,
+            true,
+        );
+        assert_eq!(model.downgraded_fields(), vec!["body_line_spacing_twips"]);
+    }
+
+    #[test]
+    fn probe_confidence_model_application_clears_only_degraded_fields() {
+        let mut probe = LayoutProbeOutput {
+            page_margin_left_twips: Some(1_200),
+            font_size_body_hp: Some(29),
+            body_line_spacing_twips: Some(485),
+            list_label_sep_twips: Some(120),
+            ..LayoutProbeOutput::default()
+        };
+
+        let model = ProbeConfidenceModel {
+            font_size_body_hp: FieldConfidence::Trusted,
+            body_line_spacing_twips: FieldConfidence::Degraded,
+        };
+        apply_probe_confidence_model(&mut probe, model);
+
+        assert_eq!(probe.font_size_body_hp, Some(29));
+        assert_eq!(probe.body_line_spacing_twips, None);
+        assert_eq!(probe.page_margin_left_twips, Some(1_200));
+        assert_eq!(probe.list_label_sep_twips, Some(120));
     }
 }

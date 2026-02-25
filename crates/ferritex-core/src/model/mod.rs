@@ -429,6 +429,66 @@ impl LayoutProbeOutput {
             && self.list_label_sep_twips.is_none()
             && self.list_label_width_twips.is_none()
     }
+
+    /// Returns stable field identifiers populated by the probe output.
+    pub fn populated_field_names(&self) -> Vec<&'static str> {
+        let mut fields = Vec::new();
+        if self.page_margin_top_twips.is_some() {
+            fields.push("page_margin_top_twips");
+        }
+        if self.page_margin_bottom_twips.is_some() {
+            fields.push("page_margin_bottom_twips");
+        }
+        if self.page_margin_left_twips.is_some() {
+            fields.push("page_margin_left_twips");
+        }
+        if self.page_margin_right_twips.is_some() {
+            fields.push("page_margin_right_twips");
+        }
+        if self.page_margin_header_twips.is_some() {
+            fields.push("page_margin_header_twips");
+        }
+        if self.page_margin_footer_twips.is_some() {
+            fields.push("page_margin_footer_twips");
+        }
+        if self.page_gutter_twips.is_some() {
+            fields.push("page_gutter_twips");
+        }
+        if self.page_width_twips.is_some() {
+            fields.push("page_width_twips");
+        }
+        if self.page_height_twips.is_some() {
+            fields.push("page_height_twips");
+        }
+        if self.font_family_body.is_some() {
+            fields.push("font_family_body");
+        }
+        if self.font_size_body_hp.is_some() {
+            fields.push("font_size_body_hp");
+        }
+        if self.body_first_line_indent_twips.is_some() {
+            fields.push("body_first_line_indent_twips");
+        }
+        if self.body_line_spacing_twips.is_some() {
+            fields.push("body_line_spacing_twips");
+        }
+        if self.list_left_indent_twips.is_some() {
+            fields.push("list_left_indent_twips");
+        }
+        if self.list_hanging_indent_twips.is_some() {
+            fields.push("list_hanging_indent_twips");
+        }
+        if self.list_item_indent_twips.is_some() {
+            fields.push("list_item_indent_twips");
+        }
+        if self.list_label_sep_twips.is_some() {
+            fields.push("list_label_sep_twips");
+        }
+        if self.list_label_width_twips.is_some() {
+            fields.push("list_label_width_twips");
+        }
+        fields
+    }
 }
 
 /// A single table-of-contents entry extracted from LaTeX auxiliary data.

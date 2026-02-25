@@ -46,6 +46,10 @@ The build core provides a single entry point (`build::run_build`) used by
 `build`, `convert`, and `tui`, ensuring one implementation for path resolution,
 artifact naming, and sequencing.
 
+The root `ferritex` crate enables `layout-probe-tectonic` by default and logs
+the active probe mode at build start; parser-only mode is available via
+`--no-default-features`.
+
 Output formats are selected via `OutputFormat`
 (`docx` / `pdf` / `md` / `both` / `all`).
 
@@ -68,6 +72,14 @@ citation behavior, include graph, block-local directives):
 
 Renderers must consume this intent through AST + StyleMap rather than adding
 document-specific hardcoded formatting rules.
+
+### Probe reliability note
+
+When probe execution detects TeX error traces, typography-sensitive probe fields
+(`font_size_body_hp`, `body_line_spacing_twips`) are evaluated via a field-level
+confidence model and downgraded fields are deferred to parser values. Geometry/list
+signals from probe remain usable.
+This prevents degraded TeX runs from forcing incorrect DOCX spacing.
 
 This rule is strict for all backends: effective LaTeX build parameters must be
 propagated to ferritex outputs. Backend constants are fallback-only.
@@ -100,3 +112,7 @@ effect can be achieved by propagating LaTeX semantics.
 - Rust version is pinned in `rust-toolchain.toml` (`1.93.1`).
 - CI installs the same Rust toolchain and runs checks with `--locked`.
 - `Cargo.lock` is the canonical dependency snapshot for reproducible builds.
+
+## Related design notes
+
+- `docs/TECTONIC_INTEGRATION.md` — tectonic API usage strategy and degraded-mode probe policy.

@@ -10,6 +10,24 @@ mod tectonic;
 #[cfg(any(test, feature = "layout-probe-tectonic"))]
 const TWIPS_PER_POINT_F64: f64 = 20.0;
 
+/// Returns the active LayoutProbe backend identifier for this build.
+pub fn active_probe_backend() -> &'static str {
+    #[cfg(feature = "layout-probe-tectonic")]
+    {
+        "tectonic"
+    }
+
+    #[cfg(not(feature = "layout-probe-tectonic"))]
+    {
+        "disabled (parser-only)"
+    }
+}
+
+/// Returns `true` when a real probe backend is compiled in.
+pub fn probe_backend_is_enabled() -> bool {
+    cfg!(feature = "layout-probe-tectonic")
+}
+
 /// Probe effective layout/style values with the configured backend.
 ///
 /// When `layout-probe-tectonic` is disabled, this returns an empty probe
@@ -17,7 +35,7 @@ const TWIPS_PER_POINT_F64: f64 = 20.0;
 pub fn probe_layout(input_path: &Path, expanded_source: &str) -> Result<LayoutProbeOutput> {
     #[cfg(feature = "layout-probe-tectonic")]
     {
-        return tectonic::probe_layout_with_tectonic(input_path, expanded_source);
+        tectonic::probe_layout_with_tectonic(input_path, expanded_source)
     }
 
     #[cfg(not(feature = "layout-probe-tectonic"))]
@@ -136,6 +154,28 @@ mod tests {
             );
             previous = current;
         }
+    }
+
+    #[test]
+    fn backend_descriptor_is_consistent_with_feature_state() {
+        let backend = active_probe_backend();
+        assert!(!backend.is_empty());
+        assert_eq!(probe_backend_is_enabled(), backend == "tectonic");
+    }
+
+    #[test]
+    fn populated_field_names_reports_set_fields_only() {
+        let probe = LayoutProbeOutput {
+            page_margin_left_twips: Some(1_440),
+            font_size_body_hp: Some(28),
+            list_label_sep_twips: Some(120),
+            ..LayoutProbeOutput::default()
+        };
+        let names = probe.populated_field_names();
+        assert!(names.contains(&"page_margin_left_twips"));
+        assert!(names.contains(&"font_size_body_hp"));
+        assert!(names.contains(&"list_label_sep_twips"));
+        assert!(!names.contains(&"page_margin_right_twips"));
     }
 
     fn optional_i32(seed: u64, shift: u8) -> Option<i32> {

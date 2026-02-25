@@ -123,24 +123,8 @@ Track implementation status in docs/SUPPORTED_ELEMENTS.md.
 ## When adding a new crate
 Update this file with: crate name, version pinned, reason for adding.
 
-## Current crates in use
+## Pinned crate versions
 (agent must update this table when Cargo.toml changes)
-| Crate | Version | Purpose |
-|-------|---------|---------|
-| clap | latest stable | CLI argument parsing |
-| anyhow | latest stable | Error propagation |
-| thiserror | latest stable | Error type definitions |
-| docx-rs | latest stable | DOCX generation |
-| quick-xml | latest stable | Low-level XML manipulation |
-| serde/serde_json | latest stable | Serialization |
-| zip | latest stable | ZIP/DOCX container |
-| log + env_logger | latest stable | Logging |
-| crossterm | latest stable | Terminal events/raw mode for TUI |
-| ratatui | latest stable | TUI rendering/layout |
-
-## Project extensions
-
-### Pinned crate versions
 | Crate | Version | Purpose |
 |---|---|---|
 | clap | 4.5.60 | CLI argument parsing |
@@ -189,7 +173,7 @@ dissertation, or private project.
   - `/tmp/dissertation.docx`
 - Never place personal dissertation outputs under repository paths (tracked or untracked).
 - Transfer workflow example:
-  - `scp principalwater@alfheim-home.local:/tmp/dissertation.docx ~/Desktop/dissertation.docx`
+  - `scp user@host:/tmp/output.docx ~/Desktop/output.docx`
 
 ### Commit / PR metadata policy
 - The same privacy rules apply to commit messages, PR titles, PR bodies,

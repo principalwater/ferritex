@@ -29,6 +29,7 @@ At the start of every session, read these files before touching any code:
 1. `AGENTS.md` — architecture rules, LaTeX-driven policy, parameter table
 2. `agent_docs/session_summary.md` — last known state, open issues, next steps
 3. Active plan file(s) in `agent_docs/plans/` (check session_summary for which is active)
+4. `agent_docs/memory_policy.md` — for the full reading list (12+ files)
 
 Do NOT start writing code before completing this checklist.
 

@@ -2,7 +2,7 @@
 
 ## Scope
 
-These rules apply to all ferritex Rust code (`src/`, tests, and internal tooling code in this repository).
+These rules apply to all ferritex Rust code (`crates/`, `src/`, tests, and internal tooling code in this repository).
 
 ## 1) No Magic Numbers
 
@@ -48,3 +48,17 @@ These rules apply to all ferritex Rust code (`src/`, tests, and internal tooling
 ## 7) Generic Product Mindset
 
 ferritex is a generic LaTeX-driven converter for many document classes (articles, journals, dissertations, books, theses). Code must not assume any single corpus-specific formatting profile.
+
+## 8) Three-File Rule
+
+Every new LaTeX element requires changes in all three layers:
+1. Parser extraction: `crates/ferritex-core/src/parser/latex.rs`
+2. Model field: `crates/ferritex-core/src/model/mod.rs`
+3. Renderer consumption: `crates/ferritex-renderer-docx/src/lib.rs`
+
+## 9) Test Conventions
+
+- Every `DocumentLayout` field must have paired tests:
+  1. Positive: extraction from a representative LaTeX snippet.
+  2. Negative: `None`/default when the command is absent.
+  3. Renderer fallback: minimal document renders without panics using documented fallback.

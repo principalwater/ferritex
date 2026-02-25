@@ -1,188 +1,117 @@
-# Session Summary (2026-02-24, updated after v0.9.1 audit PRs)
+# Session Summary (updated 2026-02-25)
 
 ## Project Goal
 
-`ferritex` is a generic LaTeX-driven converter with:
+`ferritex` (FerriTeX) is a generic LaTeX-driven converter with:
 - a single shared semantic core (`ferritex-core`),
 - multiple backend renderers (`docx` implemented, `pdf`/`md` scaffolded),
 - zero project-specific formatting hardcodes.
 
-All layout/formatting behavior must come from LaTeX sources and/or explicit project config, then propagate through:
+All layout/formatting behavior comes from LaTeX sources and/or explicit project config:
 
 ```text
 LaTeX source -> parser extraction -> AST + DocumentLayout -> backend renderer
 ```
 
-## Repository State Snapshot
+## Repository State
 
-- Current branch: `master`.
-- Uncommitted WIP exists in:
-  - `crates/ferritex-core/src/parser/latex.rs`
-  - `crates/ferritex-core/src/model/mod.rs`
-  - `crates/ferritex-renderer-docx/src/lib.rs`
-- Build health restored for current WIP:
-  - parser lifetime bug (`E0515` in `extract_setlist_param_raw`) fixed,
-  - quality gate currently passes: `cargo fmt --all`, `cargo clippy --workspace --all-targets -- -D warnings`, `cargo test --workspace`.
+- **Current version**: v0.9.1
+- **Branch**: `master` (clean, all PRs merged through #31)
+- **Active branch**: `feat/docs-audit-and-update` (docs audit + hardcode inventory)
+- **Build health**: quality gate passes (`cargo fmt`, `cargo clippy`, `cargo test` — 257+ tests)
 
-This means the current tree is an in-progress parity batch, not a merge-ready state.
+## What ferritex-core can do
 
-## Stable Baseline (already merged before current WIP)
+- Parse LaTeX documents with recursive `\input{}`/`\include{}` expansion
+- Extract 30+ layout parameters from preamble: page geometry, fonts, line spacing,
+  paragraph indent, heading format, list geometry, caption settings, TOC formatting,
+  source-line spacing, float alignment, language tag
+- Build a typed AST: sections, paragraphs, inline styles, tables, figures, lists,
+  math (inline + display), footnotes, TOC marker, bibliography heading
+- Resolve references, labels, bookmarks for cross-linking
+- Extract title-page blocks with per-paragraph style overrides
+- Language-aware defaults: chapter name, bibliography title derived from `document_language`
+- Dissertation-specific counter fallbacks gated on `document_class` (known exception)
 
-1. Workspace split into backend-oriented crates:
-   - `ferritex-core`
-   - `ferritex-renderer-docx`
-   - `ferritex-renderer-pdf` (stub)
-   - `ferritex-renderer-md` (stub)
-2. Unified build flow (`build::run_build`) and `OutputFormat::{Docx,Pdf,Md,Both,All}`.
-3. Existing DOCX support includes:
-   - sections/paragraphs/lists/tables/figures,
-   - captions/source lines,
-   - footnotes,
-   - TOC generation,
-   - layout mapping from many LaTeX preamble/style parameters.
+## What ferritex-renderer-docx can do
 
-## Current WIP (manual QA parity follow-up, not finalized)
+- Full DOCX generation from AST + DocumentLayout via `RenderProfile::from_layout()`
+- Page setup: margins, paper size, different-first-page mode
+- Document styles: BodyText, Heading1-3, Caption, TableGrid, FootnoteText
+- TOC generation with indent/numwidth, dot leaders, chapter/page bold settings,
+  aftersnum separators, anchor hyperlinks
+- Tables with cell content and alignment
+- Figures with captions (text only, no image embed yet)
+- Lists with LaTeX-driven geometry (labelsep, labelwidth, bullet marker)
+- Native DOCX footnotes with reference markers
+- Cross-reference bookmarks and anchor hyperlinks
+- Source attribution lines (italic, single-spaced, with vspace)
+- Post-processing: footnote marker injection, language tag injection
 
-### `ferritex-core` (parser/model side)
+## Known Issues and Remaining Hardcodes
 
-1. Parse-mode split:
-   - `parse_latex(...)` keeps legacy resolved-text behavior,
-   - `parse_latex_file(...)` enables preserving dynamic reference nodes for renderer-side hyperlinking.
-2. Standalone label handling:
-   - detects chunks like `\label{...}` and attaches them to the previous relevant block (section/table/figure/equation).
-3. Reference resolution extensions:
-   - optional preservation of `Inline::Reference` for anchor-aware DOCX rendering.
-4. Footnote citation repeat logic (early implementation):
-   - consecutive repeat -> `Там же.`,
-   - repeated non-consecutive -> `... Указ. соч.`,
-   - first mention -> formatted bibliographic entry.
-5. Bibliography injection (early implementation):
-   - after `Block::BibliographyHeading`, parser injects numbered bibliography paragraphs based on parsed `.bib`.
-6. List settings extraction expanded:
-   - support for `itemindent` and `leftmargin` from `\setlist{...}`,
-   - partial `\dimexpr` evaluation for enumitem expressions.
-7. Model extension:
-   - `DocumentLayout.list_item_indent_twips: Option<i32>`.
-8. Title-page text-flow extraction upgraded:
-   - `titlepage` now treated the same as `titlingpage` for paragraph-style overrides,
-   - leading `\vspace{...}` in mixed title-page chunks is propagated into `ParagraphStyle.space_before_twips`,
-   - spacing directives now recognize `\setSpacing{...}`, `\setstretch{...}`, and `\linespread{...}`,
-   - `\fontsize{<size>}{<baseline>}` now propagates both font size and per-paragraph line-spacing override.
-9. Global line-spacing extraction hardened:
-   - document-level spacing (`DocumentLayout.body_line_spacing_twips`) is now extracted from preamble only,
-   - body-local `\linespread{...}` no longer overrides global layout spacing.
-10. Title-page block-layout extraction further refined:
-   - manual `\\` line breaks now drop synthetic leading/trailing spaces around break markers,
-   - `flushright + tabular{l}` title-page blocks are now mapped to a generic paragraph left-indent estimate (model extension: `ParagraphStyle.left_indent_twips`),
-   - memoir `\sethangfrom{\noindent #1}` is now treated as a heading-justify signal (`heading_alignment = "both"` unless explicit center/right is set).
-11. Spacing-command semantics refined for memoir/setspace compatibility (updated 2026-02-24):
-   - `\OnehalfSpacing` / `\DoubleSpacing` / `\SingleSpacing` are now parsed as size-aware factors (instead of fixed 1.5/2.0/1.0 assumptions),
-   - memoir uppercase commands use memoir class factors by `\documentclass` size (`10/11/12/14/17/9pt` mappings),
-   - 14pt memoir one-half/double mappings are calibrated for DOCX visual parity (`312`/`416` twips equivalents),
-   - setspace lowercase commands use setspace factors (`10/11/12pt` mappings + fallback),
-   - title-page chunk-level spacing extraction now uses the same logic as document-level spacing extraction.
-12. TOC chapter-spacing extraction extended (updated 2026-02-24):
-   - `DocumentLayout` now carries `toc_chapter_space_before_twips`,
-   - parser extracts `\cftbeforechapterskip` (and memoir default when absent),
-   - DOCX renderer applies this spacing before numbered TOC chapter entries (`ГЛАВА ...` lines).
-13. Title-page tabular block spacing and TOC chapter pre-gap tuned (updated 2026-02-24):
-   - title-page `flushright + tabular{l}` blocks now receive generic vertical box-padding in parser (`ParagraphStyle.space_before/space_after`) so DOCX preserves LaTeX tabular block extents without corpus-specific hacks,
-   - memoir fallback for `\cftbeforechapterskip` is slightly expanded in deterministic mapping to reduce under-spacing before chapter entries in DOCX TOC.
+### Renderer — HIGH (fix in v0.9.2)
+1. Hyperlink text color hardcoded to `"000000"` — needs `\hypersetup{linkcolor=…}` extraction
+2. Hyperlink underline hardcoded to `"none"` — needs `\hypersetup{colorlinks=…}` extraction
+3. TOC chapter entries unconditionally uppercased — should respect `heading_uppercase`
 
-### `ferritex-renderer-docx` (renderer side)
+### Renderer — MEDIUM (fix in v0.9.2)
+4. Page gutter hardcoded to `0` — needs `DocumentLayout` field or documented fallback
+5. Page number alignment hardcoded to `Center` — needs extraction
+6. Body text alignment hardcoded to `Both` (justified) — needs extraction
+7. Caption label style hardcoded to bold — needs `captionsetup{font=…}` extraction
+8. TOC depth hardcoded to 2 — needs `\setcounter{tocdepth}{N}` extraction
+9. TOC tab stop minimum `1_000` twips — safety guard, needs comment
 
-1. Reference index/bookmark infrastructure introduced:
-   - label -> displayed value
-   - label -> bookmark
-   - section -> bookmark
-   - TOC entry -> anchor mapping
-2. Internal hyperlinks in DOCX (WIP):
-   - `Inline::Reference` can render as `HyperlinkType::Anchor` when target bookmark exists.
-3. TOC rendering updates (WIP):
-   - entry text can be wrapped in anchor hyperlinks,
-   - per-level `aftersnum`, chapter/page bold settings respected.
-4. Indentation changes (WIP):
-   - section/list handling moved toward first-line indentation behavior,
-   - list item first-line indent uses new layout field.
-5. Source/caption/table updates (WIP):
-   - source lines rendered with single spacing + footnote-size italic style,
-   - table paragraphs use `TableGrid` style and inline reference-aware rendering.
-6. Bookmark attachment for section/figure/table/equation nodes (WIP).
-7. Stabilization pass completed for current WIP:
-   - parser + renderer unit tests synchronized with new helper signatures (`ReferenceRenderIndex` arguments and expanded list-settings tuple),
-   - clippy compliance restored without `allow` downgrades (`collapsible_if`, function argument count).
-8. Additional parser tests added for title-page spacing/line-spacing behavior:
-   - mixed `titlepage` chunk with `\centering` + leading `\vspace`,
-   - title-page `\setstretch` line-spacing override,
-   - global `\linespread` extraction into `DocumentLayout.body_line_spacing_twips`.
-9. TOC and heading paragraph layout mapping refined:
-   - TOC paragraph styles/entries now use document body line spacing (LaTeX-driven `DocumentLayout.body_line_spacing_twips`) instead of hardcoded single spacing,
-   - styled paragraphs now consume `ParagraphStyle.left_indent_twips`,
-   - heading styles/paragraphs now honor parser-provided justify alignment from memoir `\sethangfrom`.
+### Parser — MEDIUM (fix in v0.9.2)
+10. Em-to-twips conversion assumes 14pt base (`280.0`) — should compute from body font size
+11. Plain-text chapter heading detection (`"ГЛАВА"`) is Russian-only without language gating
+12. DOCX line-spacing unit `240.0` in parser — should be in renderer constants
 
-## Open Issues / Limitations (from latest manual QA and current state)
-
-1. Title-page spacing/line spacing extraction and supervisor-block offset mapping were improved, but final visual parity still requires manual DOCX validation on full corpus.
-2. TOC active links are in place; visual parity still needs manual verification after latest line-spacing update.
-3. Indent behavior still has regressions (full-block shift vs first-line-only expectations) in lists/body paragraphs.
-4. Math is still rendered as plain text approximation; Word equation/OMML rendering is pending.
-5. Citation behavior needs full LaTeX-style parity (`Там же.`, `Указ. соч.`, related bibliography semantics).
-6. Figure/table source-line formatting still needs final spacing/indent tuning.
-7. Table content readability/formatting needs additional mapping parity.
-8. Cross-reference hyperlinks in body text (figures/tables/sections/appendices) need full validation.
-9. Bibliography section rendering is still incomplete at semantic quality level.
-10. Appendix rendering remains a deferred follow-up area.
+### Not yet implemented
+- OMML / Word equation rendering (currently plain-text approximation)
+- Image embedding in DOCX
+- Bibliography entry list rendering
+- Resolved `\ref`/`\cite` hyperlinks in body text
+- PDF output backend
+- Markdown output backend
 
 ## Key Agreements (must stay stable)
 
 1. No project-specific renderer hacks for one corpus.
 2. Every formatting fix follows parser -> `DocumentLayout` -> renderer mapping.
 3. Renderer constants are fallback-only when LaTeX/config does not specify a parameter.
-4. Decisions and stable context must be written into repository Markdown files; chat/global memory is not authoritative.
-5. For manual QA build requests from the user, use:
-   - input: `/Users/principalwater/Documents/git/phd-eaeu-electricity-market/thesis/dissertation.tex`,
-   - outputs by format: `/tmp/dissertation.docx`, `/tmp/dissertation.pdf`, `/tmp/dissertation.md`.
+4. Decisions and stable context must be written into repository Markdown files;
+   chat/global memory is not authoritative.
+5. For manual QA build requests, the user provides the input path at runtime.
+   Default output directory: `/tmp/` (e.g. `/tmp/output.docx`).
 
-## Completed This Session (2026-02-24)
+## Completed in Recent Sessions
 
-### PR-1: WIP Stabilization (feat/v0.9.1-wip-stabilize)
-All uncommitted changes committed and submitted as PR #28:
-- parser, model, renderer, tests, agent docs
+### Session 2026-02-24
+- PR #28: WIP stabilization (parser/renderer/model/tests/docs)
+- PR #29: LaTeX-driven audit — 4 policy violations fixed:
+  1. `Block::TableOfContents` replaces Russian string-matching TOC detection
+  2. List labelsep fallback scaled with body font size
+  3. Bibliography default title language-aware
+  4. Dissertation counter fallbacks gated on document class
+- PR #30: CLAUDE.md added
+- PR #31: README.md rewritten with FerriTeX branding
 
-### PR-2: LaTeX-driven Audit Fixes (feat/v0.9.1-latex-driven-audit)
-Four policy violations identified and fixed:
-
-1. **Block::TableOfContents (CRITICAL)**: `\tableofcontents` now emits
-   `Block::TableOfContents` instead of `Block::Section { title: "ОГЛАВЛЕНИЕ" }`.
-   Renderer detects TOC via AST type. `is_toc_heading()` Russian string match removed.
-
-2. **list labelsep fallback (HIGH)**: Magic constant `142` (0.5em at 14pt)
-   replaced with inline em computation using `layout.font_size_body_hp`.
-
-3. **Bibliography default title (HIGH)**: `try_parse_bibliography_command`
-   now accepts `language: Option<&str>`. Added `default_bibliography_title_for_language()`
-   following the same pattern as `default_chapter_name_for_language()`.
-   Falls back to `"REFERENCES"` for unknown/absent language.
-
-4. **Dissertation counter gate (MEDIUM)**: `apply_known_counter_fallbacks()`
-   now gates on `ParseMetadata.document_class` containing "disser*".
-   All other document classes get an early no-op return.
-
-### Documentation updated
-- `AGENTS.md`: updated parameter table; added `Block::TableOfContents` row;
-  added known exception note for dissertation counter gate.
-- `docs/SUPPORTED_ELEMENTS.md`: added `\tableofcontents` entry; updated bibliography entry.
-- `agent_docs/plans/v0.9.1-latex-driven-audit.md`: plan file added.
+### Session 2026-02-25
+- Full repository audit (code + docs):
+  - 3 HIGH + 6 MEDIUM renderer hardcodes identified
+  - 3 MEDIUM parser hardcodes identified
+  - Privacy violations removed from 4 files (previous session WIP)
+  - ROADMAP.md updated through v0.9.2
+  - All agent_docs and docs files reviewed for accuracy
+  - session_summary.md, plans, memory_policy.md, future_session_prompt.md updated
+  - New plan: `v0.9.2-remaining-hardcodes.md`
 
 ## Immediate Next Steps
 
-1. Merge PR-1 and PR-2 (both submitted, bot-merge labelled).
-2. Continue remaining DOCX parity workstreams from `v0.9.1-docx-manual-qa-followup.md`:
-   - Title page spacing parity (workstream 2)
-   - TOC parity + active navigation (workstream 3)
-   - First-line indentation correctness (workstream 4)
-   - Math rendering upgrade — OMML (workstream 5)
-   - Footnote citation semantics (workstream 6)
-   - Bibliography section completion (workstream 9)
-3. Validate updated DOCX behavior on synthetic fixtures plus full dissertation corpus.
-4. Only after DOCX parity stabilization, resume v1.0 backend expansion (`pdf`/`md`).
+1. Commit docs audit + hardcode inventory to `feat/docs-audit-and-update` branch, open PR
+2. Implement v0.9.2 fixes (12 items above — hyperlinks, TOC uppercase, tocdepth, body alignment, em-to-twips, etc.)
+3. Continue DOCX parity workstreams from `v0.9.1-docx-manual-qa-followup.md`
+4. Validate updated DOCX on synthetic fixtures plus large multi-file corpus
+5. Only after DOCX parity stabilization, resume v1.0 backend expansion (PDF/MD)

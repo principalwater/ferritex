@@ -41,3 +41,26 @@ cargo test --workspace
 - Use clear commit messages (`feat: ...`, `fix: ...`, `chore: ...`).
 - Do not mix unrelated changes in one commit.
 - Keep repository content privacy-safe and generic.
+
+## Branch Protection
+
+- Master branch requires 1 approval + CI green before merge.
+
+## SSH Agent (Claude Code / remote agents)
+
+The shell may not inherit the user's SSH agent. Before any `git push` or `gh` command:
+```bash
+export SSH_AUTH_SOCK=$(ls -t /tmp/com.apple.launchd.*/Listeners 2>/dev/null | head -1)
+```
+
+## Squash-Merge Rebase Trap
+
+When a PR is squash-merged, its individual commits disappear from master history.
+If a follow-up branch was based on those commits, `git rebase origin/master` will
+replay them as duplicates and cause conflicts.
+
+Correct procedure:
+1. Identify unique commits: `git log --oneline <master-tip>..<branch-tip>`
+2. Create a new branch from master: `git checkout -b <new-branch> origin/master`
+3. Cherry-pick only unique commits: `git cherry-pick <sha1> <sha2> ...`
+4. Delete old branch; push and PR the new one.

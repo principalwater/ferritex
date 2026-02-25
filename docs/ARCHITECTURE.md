@@ -14,9 +14,18 @@ DOCX        PDF        Markdown ...
 renderer  renderer    renderer
 ```
 
-Current state:
-- DOCX renderer is implemented.
-- PDF and Markdown renderers are planned and must consume the same AST + StyleMap contract.
+## Workspace crates
+
+| Crate | Purpose |
+|-------|---------|
+| `ferritex-core` | LaTeX parser, AST model (`Block`, `Inline`), `DocumentLayout` (StyleMap) |
+| `ferritex-renderer-docx` | DOCX renderer + `RenderProfile::from_layout()` — **fully implemented** |
+| `ferritex-renderer-pdf` | PDF renderer — **stub** |
+| `ferritex-renderer-md` | Markdown renderer — **stub** |
+
+`RenderProfile::from_layout()` is the single bridge where `DocumentLayout` option fields
+are resolved to concrete values with fallback defaults. All renderer functions consume
+`RenderProfile`, never raw `DocumentLayout`.
 
 ## Stage responsibilities
 

@@ -48,3 +48,13 @@ For each new LaTeX formatting feature, update all three layers:
 3. Renderer consumption + fallback mapping (`crates/ferritex-renderer-docx/src/lib.rs`)
 
 Plus tests for extraction behavior and fallback behavior.
+
+This checklist applies to **all backends** (DOCX, PDF, MD), not just the DOCX renderer.
+
+## Known Exception
+
+`apply_known_counter_fallbacks` in `parser/latex.rs` contains dissertation-specific
+Russian counter placeholder templates. This is gated on `ParseMetadata.document_class`
+containing `"disser"`: only documents whose `\documentclass` matches that pattern
+trigger the replacement. All other document classes get an early no-op return.
+See `AGENTS.md` for the full exception note.

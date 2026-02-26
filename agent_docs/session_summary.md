@@ -1,4 +1,4 @@
-# Session Summary (updated 2026-02-26, PR #45 opened)
+# Session Summary (updated 2026-02-26, PR #45 merged; v0.9.7 follow-up in progress)
 
 ## Project Goal
 
@@ -20,19 +20,15 @@ DOCX/MD: parser-first semantics + LayoutProbe fallback/validation
 
 ## Repository State
 
-- `origin/master` includes merged PRs `#40`, `#41`, `#42`, `#43`, `#44`.
-- PR `#44` (`fix: harden tectonic PDF runtime and tool install policy`) is `MERGED`:
-  - URL: `https://github.com/principalwater/ferritex/pull/44`
+- `origin/master` includes merged PRs `#40`, `#41`, `#42`, `#43`, `#44`, `#45`.
+- PR `#45` (`fix: make biber auto-install matrix boundaries explicit`) is `MERGED`:
+  - URL: `https://github.com/principalwater/ferritex/pull/45`
   - CI checks: `SUCCESS`
   - merge mode: squash (bot-merge flow), remote feature branch deleted.
-- Local `master` is synced to `origin/master` (`efcdfe0`).
-- Current working branch: `feat/v0.9.6-biber-matrix-guidance`.
-- Current branch head: `f6e4138` (`fix: clarify biber auto-install matrix guidance`).
-- PR `#45` is open:
-  - URL: `https://github.com/principalwater/ferritex/pull/45`
-  - state: `OPEN`, `MERGEABLE`, review required,
-  - checks: `CI` in progress, `bot-merge` workflow queued.
-- Working tree: clean.
+- `origin/master` current tip: `6df9619`.
+- Current working branch: `feat/v0.9.7-biber-matrix-bcf311` (created from `origin/master`).
+- Current slice PR status: not opened yet (local branch work in progress).
+- Working tree: local modifications in progress for the v0.9.7 matrix extension.
 
 ## Completed in This Session
 
@@ -101,18 +97,37 @@ DOCX/MD: parser-first semantics + LayoutProbe fallback/validation
    - `cargo clippy --workspace --all-targets --locked -- -D warnings` ✅
    - `cargo test --workspace --locked` ✅
 15. Packaged current matrix-guidance slice:
-   - committed as `f6e4138`,
-   - pushed to `origin/feat/v0.9.6-biber-matrix-guidance`,
-   - opened PR `#45` and applied `bot-merge` label.
+  - committed as `f6e4138`,
+  - pushed to `origin/feat/v0.9.6-biber-matrix-guidance`,
+  - opened PR `#45` and applied `bot-merge` label.
+16. Started next compatibility extension slice after PR `#45` merge:
+  - created branch `feat/v0.9.7-biber-matrix-bcf311` from `origin/master`,
+  - expanded built-in auto-install matrix in `ferritex-renderer-pdf`:
+    - `BCF 3.8 -> biber 2.17` (existing),
+    - `BCF 3.11 -> biber 2.21` (new),
+    - both on `macos-universal`, `linux-x86_64`, `windows-x86_64`,
+  - runtime asset metadata now includes per-asset SourceForge directory selection:
+    - versioned `2.17` path for legacy assets,
+    - `current` path for `2.21` assets.
+17. Added validation/docs coverage for matrix expansion:
+  - renderer unit test now asserts platform-aware mapping for both supported BCF families (`3.8`, `3.11`),
+  - unsupported-matrix guidance test now checks both matrix pairs in error text,
+  - user docs synced:
+    - `README.md`,
+    - `docs/TECTONIC_INTEGRATION.md`.
+18. Revalidated full workspace gate for the v0.9.7 WIP branch:
+  - `cargo fmt --all` ✅
+  - `cargo clippy --workspace --all-targets --locked -- -D warnings` ✅
+  - `cargo test --workspace --locked` ✅
 
 ## Known Gaps / Active Blockers
 
-1. Autonomous bootstrap currently covers only the pinned `BCF 3.8` compatibility path and selected target platforms.
+1. Autonomous bootstrap currently covers pinned compatibility paths for `BCF 3.8` and `BCF 3.11` only.
 2. Other BCF mismatches/platform combinations still require local compatible `biber` unless additional pinned assets are added.
 3. Network access is required for first-time bootstrap download.
 4. `--tool-install-policy` is global in build-core, but only PDF/biber currently has installable runtime tooling; DOCX/MD have no installer-backed tools yet.
-5. Built-in auto-install matrix still covers only one BCF family (`3.8`) even though unsupported scope is now explicit.
-6. PR `#45` still needs repository merge conditions (CI completion + required review/policy flow).
+5. Auto-install matrix expansion still relies on static pinned archive metadata; no dynamic version negotiation is implemented (by design for reproducibility).
+6. Current v0.9.7 branch changes are local and not yet opened as a PR.
 
 ## Quality Gate Status
 
@@ -130,10 +145,9 @@ DOCX/MD: parser-first semantics + LayoutProbe fallback/validation
 
 ## Next Session Steps (ordered)
 
-1. Add at least one more pinned BCF->biber asset mapping (or document explicit unsupported matrix boundaries).
-2. Decide whether to persist user consent/profile defaults for `--tool-install-policy` in future config (current behavior is per-run CLI/env only).
-3. Finalize and ship current matrix-guidance slice:
-   - wait for `#45` CI completion and required review/policy merge path.
-4. After matrix-guidance PR, implement next compatibility increment:
-   - either add next pinned `BCF -> biber` mapping,
-   - or explicitly keep bounded matrix and add docs/tests that lock this contract.
+1. Commit and push `feat/v0.9.7-biber-matrix-bcf311`, then open follow-up PR against `master`.
+2. Run a real-corpus PDF smoke test for the `BCF 3.11` path using ferritex runtime (to confirm end-to-end auto-install hit and cache reuse behavior).
+3. Decide whether next step is:
+   - add another pinned `BCF -> biber` pair, or
+   - freeze current two-pair matrix and formalize unsupported-scope contract in docs/tests.
+4. Design and scope generalized external-tool preflight/install checks at build-core level for future backend tools beyond PDF/biber.

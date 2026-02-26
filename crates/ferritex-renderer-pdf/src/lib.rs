@@ -29,8 +29,7 @@ const ENV_PDF_BIBER_BIN_DIRS: &str = "FERRITEX_PDF_BIBER_BIN_DIRS";
 const ENV_PDF_BIBER_AUTO_INSTALL: &str = "FERRITEX_PDF_BIBER_AUTO_INSTALL";
 const ENV_PDF_BIBER_CACHE_DIR: &str = "FERRITEX_PDF_BIBER_CACHE_DIR";
 const BIBER_MISMATCH_MARKER: &str = "biber/biblatex compatibility mismatch detected";
-const AUTO_BIBER_SUPPORTED_MATRIX: &str =
-    "BCF 3.8 -> biber 2.17 (platforms: macos-universal, linux-x86_64, windows-x86_64)";
+const AUTO_BIBER_SUPPORTED_MATRIX: &str = "BCF 3.8 -> biber 2.17; BCF 3.11 -> biber 2.21 (platforms: macos-universal, linux-x86_64, windows-x86_64)";
 const SOURCEFORGE_BIBER_BASE_URL: &str = "https://sourceforge.net/projects/biblatex-biber/files";
 const AUTOINSTALL_USER_AGENT: &str = "ferritex/pdf-biber-autoinstall";
 const MAX_AUTOINSTALL_ARCHIVE_BYTES: usize = 256 * 1024 * 1024;
@@ -79,6 +78,7 @@ struct AutoBiberAsset {
     biber_version: &'static str,
     bcf_version: &'static str,
     platform_id: &'static str,
+    sourceforge_version_dir: &'static str,
     sourceforge_platform_dir: &'static str,
     archive_name: &'static str,
     archive_sha1: &'static str,
@@ -740,11 +740,7 @@ fn find_cached_auto_biber_for_bcf(observed_bcf: &str) -> Option<AutoBiberInstall
 }
 
 fn resolve_auto_biber_asset_for_bcf(observed_bcf: &str) -> Option<AutoBiberAsset> {
-    if observed_bcf != "3.8" {
-        return None;
-    }
-
-    resolve_auto_biber_asset_for_current_platform()
+    resolve_auto_biber_asset_for_current_platform(observed_bcf)
 }
 
 #[cfg(all(
@@ -781,45 +777,90 @@ fn current_platform_id() -> &'static str {
     target_os = "macos",
     any(target_arch = "aarch64", target_arch = "x86_64")
 ))]
-fn resolve_auto_biber_asset_for_current_platform() -> Option<AutoBiberAsset> {
-    Some(AutoBiberAsset {
-        biber_version: "2.17",
-        bcf_version: "3.8",
-        platform_id: "macos-universal",
-        sourceforge_platform_dir: "MacOS",
-        archive_name: "biber-darwin_universal.tar.gz",
-        archive_sha1: "0050ffda66a97aa83aa2d7e615c23ee3e12a7b63",
-        archive_format: AutoBiberArchiveFormat::TarGz,
-        binary_name: "biber",
-    })
+fn resolve_auto_biber_asset_for_current_platform(observed_bcf: &str) -> Option<AutoBiberAsset> {
+    match observed_bcf {
+        "3.8" => Some(AutoBiberAsset {
+            biber_version: "2.17",
+            bcf_version: "3.8",
+            platform_id: "macos-universal",
+            sourceforge_version_dir: "2.17",
+            sourceforge_platform_dir: "MacOS",
+            archive_name: "biber-darwin_universal.tar.gz",
+            archive_sha1: "0050ffda66a97aa83aa2d7e615c23ee3e12a7b63",
+            archive_format: AutoBiberArchiveFormat::TarGz,
+            binary_name: "biber",
+        }),
+        "3.11" => Some(AutoBiberAsset {
+            biber_version: "2.21",
+            bcf_version: "3.11",
+            platform_id: "macos-universal",
+            sourceforge_version_dir: "current",
+            sourceforge_platform_dir: "MacOS",
+            archive_name: "biber-darwin_universal.tar.gz",
+            archive_sha1: "8de815fe2ece85a8e97c68eeda9351864c30da2f",
+            archive_format: AutoBiberArchiveFormat::TarGz,
+            binary_name: "biber",
+        }),
+        _ => None,
+    }
 }
 
 #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
-fn resolve_auto_biber_asset_for_current_platform() -> Option<AutoBiberAsset> {
-    Some(AutoBiberAsset {
-        biber_version: "2.17",
-        bcf_version: "3.8",
-        platform_id: "linux-x86_64",
-        sourceforge_platform_dir: "Linux",
-        archive_name: "biber-linux_x86_64.tar.gz",
-        archive_sha1: "a149dc16f6006dc1970cff7681295a46f0fd3ce2",
-        archive_format: AutoBiberArchiveFormat::TarGz,
-        binary_name: "biber",
-    })
+fn resolve_auto_biber_asset_for_current_platform(observed_bcf: &str) -> Option<AutoBiberAsset> {
+    match observed_bcf {
+        "3.8" => Some(AutoBiberAsset {
+            biber_version: "2.17",
+            bcf_version: "3.8",
+            platform_id: "linux-x86_64",
+            sourceforge_version_dir: "2.17",
+            sourceforge_platform_dir: "Linux",
+            archive_name: "biber-linux_x86_64.tar.gz",
+            archive_sha1: "a149dc16f6006dc1970cff7681295a46f0fd3ce2",
+            archive_format: AutoBiberArchiveFormat::TarGz,
+            binary_name: "biber",
+        }),
+        "3.11" => Some(AutoBiberAsset {
+            biber_version: "2.21",
+            bcf_version: "3.11",
+            platform_id: "linux-x86_64",
+            sourceforge_version_dir: "current",
+            sourceforge_platform_dir: "Linux",
+            archive_name: "biber-linux_x86_64.tar.gz",
+            archive_sha1: "c542186235d041d2c13704020596650599d76f43",
+            archive_format: AutoBiberArchiveFormat::TarGz,
+            binary_name: "biber",
+        }),
+        _ => None,
+    }
 }
 
 #[cfg(all(target_os = "windows", target_arch = "x86_64"))]
-fn resolve_auto_biber_asset_for_current_platform() -> Option<AutoBiberAsset> {
-    Some(AutoBiberAsset {
-        biber_version: "2.17",
-        bcf_version: "3.8",
-        platform_id: "windows-x86_64",
-        sourceforge_platform_dir: "Windows",
-        archive_name: "biber-MSWIN64.zip",
-        archive_sha1: "1f00870c645f96c61a4f586f13863e42c3fb83b0",
-        archive_format: AutoBiberArchiveFormat::Zip,
-        binary_name: "biber.exe",
-    })
+fn resolve_auto_biber_asset_for_current_platform(observed_bcf: &str) -> Option<AutoBiberAsset> {
+    match observed_bcf {
+        "3.8" => Some(AutoBiberAsset {
+            biber_version: "2.17",
+            bcf_version: "3.8",
+            platform_id: "windows-x86_64",
+            sourceforge_version_dir: "2.17",
+            sourceforge_platform_dir: "Windows",
+            archive_name: "biber-MSWIN64.zip",
+            archive_sha1: "1f00870c645f96c61a4f586f13863e42c3fb83b0",
+            archive_format: AutoBiberArchiveFormat::Zip,
+            binary_name: "biber.exe",
+        }),
+        "3.11" => Some(AutoBiberAsset {
+            biber_version: "2.21",
+            bcf_version: "3.11",
+            platform_id: "windows-x86_64",
+            sourceforge_version_dir: "current",
+            sourceforge_platform_dir: "Windows",
+            archive_name: "biber-MSWIN64.zip",
+            archive_sha1: "ee3ffda40abd7d420427620d6db3203923cda4c7",
+            archive_format: AutoBiberArchiveFormat::Zip,
+            binary_name: "biber.exe",
+        }),
+        _ => None,
+    }
 }
 
 #[cfg(not(any(
@@ -830,7 +871,7 @@ fn resolve_auto_biber_asset_for_current_platform() -> Option<AutoBiberAsset> {
     all(target_os = "linux", target_arch = "x86_64"),
     all(target_os = "windows", target_arch = "x86_64")
 )))]
-fn resolve_auto_biber_asset_for_current_platform() -> Option<AutoBiberAsset> {
+fn resolve_auto_biber_asset_for_current_platform(_observed_bcf: &str) -> Option<AutoBiberAsset> {
     None
 }
 
@@ -1100,7 +1141,10 @@ fn extract_binary_from_zip(
 fn auto_biber_download_url(asset: AutoBiberAsset) -> String {
     format!(
         "{SOURCEFORGE_BIBER_BASE_URL}/biblatex-biber/{}/binaries/{}/{}{}",
-        asset.biber_version, asset.sourceforge_platform_dir, asset.archive_name, "/download"
+        asset.sourceforge_version_dir,
+        asset.sourceforge_platform_dir,
+        asset.archive_name,
+        "/download"
     )
 }
 
@@ -1400,20 +1444,22 @@ mod tests {
     }
 
     #[test]
-    fn autoinstall_asset_mapping_for_bcf_3_8_is_platform_specific() {
-        let asset = resolve_auto_biber_asset_for_bcf("3.8");
+    fn autoinstall_asset_mapping_for_supported_bcfs_is_platform_specific() {
+        for bcf in ["3.8", "3.11"] {
+            let asset = resolve_auto_biber_asset_for_bcf(bcf);
 
-        if cfg!(any(
-            all(
-                target_os = "macos",
-                any(target_arch = "aarch64", target_arch = "x86_64")
-            ),
-            all(target_os = "linux", target_arch = "x86_64"),
-            all(target_os = "windows", target_arch = "x86_64")
-        )) {
-            assert!(asset.is_some());
-        } else {
-            assert!(asset.is_none());
+            if cfg!(any(
+                all(
+                    target_os = "macos",
+                    any(target_arch = "aarch64", target_arch = "x86_64")
+                ),
+                all(target_os = "linux", target_arch = "x86_64"),
+                all(target_os = "windows", target_arch = "x86_64")
+            )) {
+                assert!(asset.is_some(), "expected built-in asset for BCF {bcf}");
+            } else {
+                assert!(asset.is_none(), "unexpected built-in asset for BCF {bcf}");
+            }
         }
     }
 
@@ -1431,6 +1477,8 @@ mod tests {
         assert!(guidance.contains("supports only"));
         assert!(guidance.contains("BCF 3.8"));
         assert!(guidance.contains("biber 2.17"));
+        assert!(guidance.contains("BCF 3.11"));
+        assert!(guidance.contains("biber 2.21"));
         assert!(guidance.contains("9.9"));
     }
 

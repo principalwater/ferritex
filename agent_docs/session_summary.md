@@ -1,4 +1,4 @@
-# Session Summary (updated 2026-02-26, PR #45 merged; v0.9.7 follow-up in progress)
+# Session Summary (updated 2026-02-26, PR #46 merged; post-merge sync in progress)
 
 ## Project Goal
 
@@ -20,15 +20,19 @@ DOCX/MD: parser-first semantics + LayoutProbe fallback/validation
 
 ## Repository State
 
-- `origin/master` includes merged PRs `#40`, `#41`, `#42`, `#43`, `#44`, `#45`.
+- `origin/master` includes merged PRs `#40`, `#41`, `#42`, `#43`, `#44`, `#45`, `#46`.
 - PR `#45` (`fix: make biber auto-install matrix boundaries explicit`) is `MERGED`:
   - URL: `https://github.com/principalwater/ferritex/pull/45`
   - CI checks: `SUCCESS`
   - merge mode: squash (bot-merge flow), remote feature branch deleted.
-- `origin/master` current tip: `6df9619`.
-- Current working branch: `feat/v0.9.7-biber-matrix-bcf311` (created from `origin/master`).
-- Current slice PR status: not opened yet (local branch work in progress).
-- Working tree: local modifications in progress for the v0.9.7 matrix extension.
+- PR `#46` (`feat: extend biber auto-install matrix for BCF 3.11`) is `MERGED`:
+  - URL: `https://github.com/principalwater/ferritex/pull/46`
+  - CI checks: `SUCCESS`
+  - merge mode: squash (bot-merge flow), remote feature branch deleted.
+- `origin/master` current tip: `000fdb9`.
+- Current working branch: `chore/v0.9.7-postmerge-sync` (created from `origin/master`).
+- Current slice PR status: not opened yet (local housekeeping changes in progress).
+- Working tree: local modifications in progress (`.gitignore`, `agent_docs/session_summary.md`).
 
 ## Completed in This Session
 
@@ -119,6 +123,14 @@ DOCX/MD: parser-first semantics + LayoutProbe fallback/validation
   - `cargo fmt --all` ✅
   - `cargo clippy --workspace --all-targets --locked -- -D warnings` ✅
   - `cargo test --workspace --locked` ✅
+19. Packaged and published v0.9.7 follow-up slice:
+  - committed as `68b78cd`,
+  - pushed to `origin/feat/v0.9.7-biber-matrix-bcf311`,
+  - opened PR `#46` and applied `bot-merge` label.
+20. Merge and post-merge housekeeping:
+  - PR `#46` merged to `master` with green CI,
+  - created `chore/v0.9.7-postmerge-sync` from updated `origin/master`,
+  - added root-level build artifact guard (`/biber`) to `.gitignore`.
 
 ## Known Gaps / Active Blockers
 
@@ -127,7 +139,7 @@ DOCX/MD: parser-first semantics + LayoutProbe fallback/validation
 3. Network access is required for first-time bootstrap download.
 4. `--tool-install-policy` is global in build-core, but only PDF/biber currently has installable runtime tooling; DOCX/MD have no installer-backed tools yet.
 5. Auto-install matrix expansion still relies on static pinned archive metadata; no dynamic version negotiation is implemented (by design for reproducibility).
-6. Current v0.9.7 branch changes are local and not yet opened as a PR.
+6. Post-merge housekeeping changes (`.gitignore` + session memory sync) are currently local and not yet published as a PR.
 
 ## Quality Gate Status
 
@@ -145,7 +157,7 @@ DOCX/MD: parser-first semantics + LayoutProbe fallback/validation
 
 ## Next Session Steps (ordered)
 
-1. Commit and push `feat/v0.9.7-biber-matrix-bcf311`, then open follow-up PR against `master`.
+1. Commit and publish `chore/v0.9.7-postmerge-sync` (post-merge sync + artifact ignore), then open a small PR to `master`.
 2. Run a real-corpus PDF smoke test for the `BCF 3.11` path using ferritex runtime (to confirm end-to-end auto-install hit and cache reuse behavior).
 3. Decide whether next step is:
    - add another pinned `BCF -> biber` pair, or

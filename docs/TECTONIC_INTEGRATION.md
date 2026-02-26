@@ -12,9 +12,9 @@ Use `tectonic` as the primary embedded TeX engine for:
 
 | API | Role in ferritex | Current state |
 |---|---|---|
-| `tectonic::driver::ProcessingSessionBuilder` | Probe session for effective style values with in-memory input and `.log` marker parsing | Implemented |
+| `tectonic::driver::ProcessingSessionBuilder` | Probe session and canonical PDF runtime session with explicit artifact/error handling | Implemented |
 | `tectonic::TexEngine` | Runtime profile anchor for probe execution settings and low-level pass orchestration (`halt_on_error`, `shell_escape`, `build_date`, pass strategy) | Implemented with direct pass control |
-| `tectonic::latex_to_pdf` | Direct PDF generation from LaTeX source bytes for parity-oriented PDF backend workflows | Implemented in `ferritex-renderer-pdf` |
+| `tectonic::latex_to_pdf` | Reference one-call API for parity workflows; kept as compatibility baseline, not the active renderer path | Available |
 
 ## Probe Pass Orchestration
 
@@ -36,7 +36,7 @@ Probe output is split into two execution modes:
 
 1. Clean mode:
    - no TeX error traces,
-   - probe fields are consumed normally (probe > parser > fallback).
+   - probe fields are consumed normally (`parser > probe > fallback` contract still applies).
 2. Degraded mode:
    - TeX run error and/or TeX error markers in `.log`,
    - field-level confidence model is applied:
@@ -56,9 +56,31 @@ Rationale: raw TeX font/baseline metrics from degraded runs can produce incorrec
 
 ### PDF
 
-- Dedicated canonical path now calls `tectonic::latex_to_pdf` in `ferritex-renderer-pdf`.
-- Runtime compiles the input `.tex` source in the input-context directory so relative includes/assets resolve as in normal LaTeX project layout.
+- Dedicated canonical path uses tectonic driver APIs in `ferritex-renderer-pdf` with explicit input-context root and artifact checks.
 - Keep AST/StyleMap path for cross-backend feature consistency and metadata-aware workflows.
+- Current known gap:
+  - some `biblatex` corpora can fail on biber/BCF compatibility mismatch (for example `BCF 3.8` vs `biber expects 3.11`);
+  - renderer now surfaces this cause explicitly in runtime errors and fails fast with guidance.
+  - bibliography tool resolution mode is user-configurable:
+    - CLI: `--pdf-biber-mode auto|strict` (default `auto`),
+    - `auto` retries alternative `biber` candidates on compatibility mismatch,
+    - `strict` fails immediately on the first selected candidate.
+  - external tool bootstrap policy is user-configurable at build-core level:
+    - CLI: `--tool-install-policy ask|auto|never` (default `ask`),
+    - `ask`: interactive confirmation before installing compatible tools,
+    - `auto`: install compatible tools automatically when possible,
+    - `never`: fail-fast with manual-install + rerun guidance.
+  - in `auto` mode, when no compatible local candidate exists, ferritex can
+    bootstrap a compatible `biber` binary into its cache (supported platforms)
+    if tool-install policy permits it.
+  - users can select a local compatible biber installation for PDF runs via:
+    - CLI: `--pdf-biber-bin-dir <DIR>`
+    - env: `FERRITEX_PDF_BIBER_BIN_DIR=<DIR>`
+  - extra auto-mode candidates can be supplied via:
+    - env: `FERRITEX_PDF_BIBER_BIN_DIRS=<PATH-like list>`
+  - auto-install controls:
+    - disable: `FERRITEX_PDF_BIBER_AUTO_INSTALL=0`
+    - cache root override: `FERRITEX_PDF_BIBER_CACHE_DIR=<DIR>`
 
 ### Markdown (target)
 

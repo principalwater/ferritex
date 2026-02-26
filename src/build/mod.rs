@@ -27,6 +27,26 @@ pub enum OutputFormat {
     All,
 }
 
+/// Bibliography tool resolution mode for PDF builds.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PdfBiberMode {
+    /// Try one selected `biber` candidate and fail immediately on error.
+    Strict,
+    /// Retry with alternative `biber` candidates on compatibility mismatch.
+    Auto,
+}
+
+/// Policy for handling missing or incompatible external runtime tools.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ToolInstallPolicy {
+    /// Ask the user before installing a compatible tool.
+    Ask,
+    /// Install compatible tools automatically when possible.
+    Auto,
+    /// Never install tools automatically; fail with guidance.
+    Never,
+}
+
 impl OutputFormat {
     /// Returns `true` if the DOCX pipeline should run.
     pub fn needs_docx(self) -> bool {
@@ -59,6 +79,12 @@ pub struct BuildConfig {
     pub output_stem: String,
     /// Which format(s) to produce.
     pub format: OutputFormat,
+    /// Optional directory containing a compatible `biber` binary for PDF sessions.
+    pub pdf_biber_bin_dir: Option<PathBuf>,
+    /// Strategy used to resolve bibliography tool compatibility during PDF build.
+    pub pdf_biber_mode: PdfBiberMode,
+    /// Policy for handling missing/incompatible external runtime tools.
+    pub tool_install_policy: ToolInstallPolicy,
 }
 
 /// Result of a completed build, listing the artifacts that were produced.
@@ -91,11 +117,21 @@ impl BuildConfig {
             output_dir,
             output_stem,
             format: OutputFormat::Docx,
+            pdf_biber_bin_dir: None,
+            pdf_biber_mode: PdfBiberMode::Auto,
+            tool_install_policy: ToolInstallPolicy::Ask,
         }
     }
 
     /// Create a [`BuildConfig`] from the unified `build` subcommand arguments.
-    pub fn from_build_args(input: &Path, output_dir: Option<&Path>, format: OutputFormat) -> Self {
+    pub fn from_build_args(
+        input: &Path,
+        output_dir: Option<&Path>,
+        format: OutputFormat,
+        pdf_biber_bin_dir: Option<&Path>,
+        pdf_biber_mode: PdfBiberMode,
+        tool_install_policy: ToolInstallPolicy,
+    ) -> Self {
         let resolved_output_dir = output_dir.map(|p| p.to_path_buf()).unwrap_or_else(|| {
             input
                 .parent()
@@ -112,6 +148,9 @@ impl BuildConfig {
             output_dir: resolved_output_dir,
             output_stem,
             format,
+            pdf_biber_bin_dir: pdf_biber_bin_dir.map(Path::to_path_buf),
+            pdf_biber_mode,
+            tool_install_policy,
         }
     }
 
@@ -159,7 +198,14 @@ pub fn run_build(config: &BuildConfig) -> Result<BuildResult> {
 
     if config.format.needs_pdf() {
         let pdf_path = config.pdf_path();
-        run_pdf_pipeline(&document, &config.input, &pdf_path)?;
+        run_pdf_pipeline(
+            &document,
+            &config.input,
+            &pdf_path,
+            config.pdf_biber_bin_dir.as_deref(),
+            config.pdf_biber_mode,
+            config.tool_install_policy,
+        )?;
         result.pdf = Some(pdf_path);
     }
 
@@ -181,11 +227,44 @@ fn run_docx_pipeline(document: &crate::model::Document, input: &Path, output: &P
 }
 
 /// Execute the PDF conversion pipeline: render → write.
-fn run_pdf_pipeline(document: &crate::model::Document, input: &Path, output: &Path) -> Result<()> {
+fn run_pdf_pipeline(
+    document: &crate::model::Document,
+    input: &Path,
+    output: &Path,
+    pdf_biber_bin_dir: Option<&Path>,
+    pdf_biber_mode: PdfBiberMode,
+    tool_install_policy: ToolInstallPolicy,
+) -> Result<()> {
     log::info!("Writing {}", output.display());
-    renderer::pdf::render_pdf_with_context(document, output, Some(input))
-        .with_context(|| format!("failed to write {}", output.display()))?;
+    renderer::pdf::render_pdf_with_context(
+        document,
+        output,
+        Some(input),
+        pdf_biber_bin_dir,
+        pdf_biber_mode.into(),
+        tool_install_policy.into(),
+    )
+    .with_context(|| format!("failed to write {}", output.display()))?;
     Ok(())
+}
+
+impl From<PdfBiberMode> for ferritex_renderer_pdf::BiberResolutionMode {
+    fn from(value: PdfBiberMode) -> Self {
+        match value {
+            PdfBiberMode::Strict => ferritex_renderer_pdf::BiberResolutionMode::Strict,
+            PdfBiberMode::Auto => ferritex_renderer_pdf::BiberResolutionMode::Auto,
+        }
+    }
+}
+
+impl From<ToolInstallPolicy> for ferritex_renderer_pdf::ToolInstallPolicy {
+    fn from(value: ToolInstallPolicy) -> Self {
+        match value {
+            ToolInstallPolicy::Ask => ferritex_renderer_pdf::ToolInstallPolicy::Ask,
+            ToolInstallPolicy::Auto => ferritex_renderer_pdf::ToolInstallPolicy::Auto,
+            ToolInstallPolicy::Never => ferritex_renderer_pdf::ToolInstallPolicy::Never,
+        }
+    }
 }
 
 /// Execute the Markdown conversion pipeline: render → write.
@@ -249,6 +328,8 @@ mod tests {
         assert_eq!(cfg.output_dir, PathBuf::from("out"));
         assert_eq!(cfg.output_stem, "report");
         assert_eq!(cfg.format, OutputFormat::Docx);
+        assert_eq!(cfg.pdf_biber_mode, PdfBiberMode::Auto);
+        assert_eq!(cfg.tool_install_policy, ToolInstallPolicy::Ask);
     }
 
     #[test]
@@ -260,9 +341,18 @@ mod tests {
 
     #[test]
     fn from_build_args_defaults_output_dir_to_input_parent() {
-        let cfg = BuildConfig::from_build_args(Path::new("src/main.tex"), None, OutputFormat::Docx);
+        let cfg = BuildConfig::from_build_args(
+            Path::new("src/main.tex"),
+            None,
+            OutputFormat::Docx,
+            None,
+            PdfBiberMode::Auto,
+            ToolInstallPolicy::Ask,
+        );
         assert_eq!(cfg.output_dir, PathBuf::from("src"));
         assert_eq!(cfg.output_stem, "main");
+        assert_eq!(cfg.pdf_biber_mode, PdfBiberMode::Auto);
+        assert_eq!(cfg.tool_install_policy, ToolInstallPolicy::Ask);
     }
 
     #[test]
@@ -271,10 +361,16 @@ mod tests {
             Path::new("main.tex"),
             Some(Path::new("/tmp/out")),
             OutputFormat::Both,
+            Some(Path::new("/opt/biber/bin")),
+            PdfBiberMode::Strict,
+            ToolInstallPolicy::Never,
         );
         assert_eq!(cfg.output_dir, PathBuf::from("/tmp/out"));
         assert_eq!(cfg.output_stem, "main");
         assert_eq!(cfg.format, OutputFormat::Both);
+        assert_eq!(cfg.pdf_biber_bin_dir, Some(PathBuf::from("/opt/biber/bin")));
+        assert_eq!(cfg.pdf_biber_mode, PdfBiberMode::Strict);
+        assert_eq!(cfg.tool_install_policy, ToolInstallPolicy::Never);
     }
 
     // -- Artifact path helpers -----------------------------------------------
@@ -285,6 +381,9 @@ mod tests {
             Path::new("thesis.tex"),
             Some(Path::new("/out")),
             OutputFormat::Docx,
+            None,
+            PdfBiberMode::Auto,
+            ToolInstallPolicy::Ask,
         );
         assert_eq!(cfg.docx_path(), PathBuf::from("/out/thesis.docx"));
     }
@@ -295,6 +394,9 @@ mod tests {
             Path::new("thesis.tex"),
             Some(Path::new("/out")),
             OutputFormat::Pdf,
+            None,
+            PdfBiberMode::Auto,
+            ToolInstallPolicy::Ask,
         );
         assert_eq!(cfg.pdf_path(), PathBuf::from("/out/thesis.pdf"));
     }
@@ -305,6 +407,9 @@ mod tests {
             Path::new("thesis.tex"),
             Some(Path::new("/out")),
             OutputFormat::Md,
+            None,
+            PdfBiberMode::Auto,
+            ToolInstallPolicy::Ask,
         );
         assert_eq!(cfg.md_path(), PathBuf::from("/out/thesis.md"));
     }

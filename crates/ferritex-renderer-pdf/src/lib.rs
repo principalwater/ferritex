@@ -29,6 +29,8 @@ const ENV_PDF_BIBER_BIN_DIRS: &str = "FERRITEX_PDF_BIBER_BIN_DIRS";
 const ENV_PDF_BIBER_AUTO_INSTALL: &str = "FERRITEX_PDF_BIBER_AUTO_INSTALL";
 const ENV_PDF_BIBER_CACHE_DIR: &str = "FERRITEX_PDF_BIBER_CACHE_DIR";
 const BIBER_MISMATCH_MARKER: &str = "biber/biblatex compatibility mismatch detected";
+const AUTO_BIBER_SUPPORTED_MATRIX: &str =
+    "BCF 3.8 -> biber 2.17 (platforms: macos-universal, linux-x86_64, windows-x86_64)";
 const SOURCEFORGE_BIBER_BASE_URL: &str = "https://sourceforge.net/projects/biblatex-biber/files";
 const AUTOINSTALL_USER_AGENT: &str = "ferritex/pdf-biber-autoinstall";
 const MAX_AUTOINSTALL_ARCHIVE_BYTES: usize = 256 * 1024 * 1024;
@@ -290,9 +292,11 @@ fn compile_pdf_with_tectonic(
                                         continue;
                                     }
                                     Ok(None) => {
+                                        let matrix_guidance =
+                                            auto_biber_matrix_guidance(&observed_bcf);
                                         log::warn!(
-                                            "no built-in biber auto-install asset available for observed BCF {} on this platform",
-                                            observed_bcf
+                                            "no built-in biber auto-install asset available: {}",
+                                            matrix_guidance
                                         );
                                     }
                                     Err(install_error) => {
@@ -571,6 +575,21 @@ fn parse_bcf_controlfile_version(bcf_text: &str) -> Option<String> {
     parse_version_after_marker(bcf_text, "controlfile version=\"")
 }
 
+fn auto_biber_matrix_guidance(observed_bcf: &str) -> String {
+    if let Some(asset) = resolve_auto_biber_asset_for_bcf(observed_bcf) {
+        return format!(
+            "built-in auto-install supports BCF {} -> biber {} on platform {}",
+            asset.bcf_version, asset.biber_version, asset.platform_id
+        );
+    }
+
+    format!(
+        "built-in auto-install currently supports only {AUTO_BIBER_SUPPORTED_MATRIX}; observed BCF {} has no bundled auto-install asset for current platform {}",
+        observed_bcf,
+        current_platform_id()
+    )
+}
+
 enum AutoInstallPermission {
     Allowed,
     Denied(String),
@@ -726,6 +745,36 @@ fn resolve_auto_biber_asset_for_bcf(observed_bcf: &str) -> Option<AutoBiberAsset
     }
 
     resolve_auto_biber_asset_for_current_platform()
+}
+
+#[cfg(all(
+    target_os = "macos",
+    any(target_arch = "aarch64", target_arch = "x86_64")
+))]
+fn current_platform_id() -> &'static str {
+    "macos-universal"
+}
+
+#[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+fn current_platform_id() -> &'static str {
+    "linux-x86_64"
+}
+
+#[cfg(all(target_os = "windows", target_arch = "x86_64"))]
+fn current_platform_id() -> &'static str {
+    "windows-x86_64"
+}
+
+#[cfg(not(any(
+    all(
+        target_os = "macos",
+        any(target_arch = "aarch64", target_arch = "x86_64")
+    ),
+    all(target_os = "linux", target_arch = "x86_64"),
+    all(target_os = "windows", target_arch = "x86_64")
+)))]
+fn current_platform_id() -> &'static str {
+    "unsupported-platform"
 }
 
 #[cfg(all(
@@ -1280,8 +1329,9 @@ fn biber_bcf_version_mismatch_hint(
 
     for source in sources {
         if let Some((observed, expected)) = parse_biber_mismatch_versions(source) {
+            let matrix_guidance = auto_biber_matrix_guidance(&observed);
             return Some(format!(
-                "biber/biblatex compatibility mismatch detected (BCF {observed}, biber expects {expected}); install a matching biber for the active TeX bundle or pass --pdf-biber-bin-dir <DIR> (or env {ENV_PDF_BIBER_BIN_DIR}) that contains a compatible 'biber'. Auto mode retries PATH candidates and can auto-install a compatible biber when --tool-install-policy allows it (and {ENV_PDF_BIBER_AUTO_INSTALL} is not disabled); you can also provide additional candidate directories via {ENV_PDF_BIBER_BIN_DIRS}"
+                "biber/biblatex compatibility mismatch detected (BCF {observed}, biber expects {expected}); install a matching biber for the active TeX bundle or pass --pdf-biber-bin-dir <DIR> (or env {ENV_PDF_BIBER_BIN_DIR}) that contains a compatible 'biber'. Auto mode retries PATH candidates and can auto-install a compatible biber when --tool-install-policy allows it (and {ENV_PDF_BIBER_AUTO_INSTALL} is not disabled); you can also provide additional candidate directories via {ENV_PDF_BIBER_BIN_DIRS}. {matrix_guidance}"
             ));
         }
     }
@@ -1302,9 +1352,9 @@ fn format_error_chain(error: &dyn std::error::Error) -> String {
 #[cfg(test)]
 mod tests {
     use super::{
-        AutoInstallPermission, ToolInstallPolicy, biber_bcf_version_mismatch_hint,
-        evaluate_biber_auto_install_policy, external_tool_excerpt, interactive_prompt_supported,
-        parse_bcf_controlfile_version, parse_biber_mismatch_versions,
+        AutoInstallPermission, ToolInstallPolicy, auto_biber_matrix_guidance,
+        biber_bcf_version_mismatch_hint, evaluate_biber_auto_install_policy, external_tool_excerpt,
+        interactive_prompt_supported, parse_bcf_controlfile_version, parse_biber_mismatch_versions,
         resolve_auto_biber_asset_for_bcf,
     };
 
@@ -1322,6 +1372,7 @@ mod tests {
         assert!(hint.contains("3.11"));
         assert!(hint.contains("--pdf-biber-bin-dir"));
         assert!(hint.contains("FERRITEX_PDF_BIBER_BIN_DIRS"));
+        assert!(hint.contains("built-in auto-install"));
     }
 
     #[test]
@@ -1372,6 +1423,15 @@ mod tests {
 <bcf:controlfile version="3.8" bltxversion="3.17" xmlns:bcf="https://sourceforge.net/projects/biblatex">
 </bcf:controlfile>"#;
         assert_eq!(parse_bcf_controlfile_version(text), Some("3.8".to_string()));
+    }
+
+    #[test]
+    fn unsupported_bcf_matrix_guidance_lists_supported_scope() {
+        let guidance = auto_biber_matrix_guidance("9.9");
+        assert!(guidance.contains("supports only"));
+        assert!(guidance.contains("BCF 3.8"));
+        assert!(guidance.contains("biber 2.17"));
+        assert!(guidance.contains("9.9"));
     }
 
     #[test]

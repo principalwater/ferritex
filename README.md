@@ -173,6 +173,11 @@ If no compatible local candidate is found, auto mode can bootstrap a compatible
 - `auto`: install automatically (good for CI/non-interactive runs);
 - `never`: fail with explicit manual-install guidance.
 
+Current built-in auto-install matrix:
+
+- `BCF 3.8 -> biber 2.17` on `macos-universal`, `linux-x86_64`, `windows-x86_64`.
+- Other BCF/platform combinations currently require manual compatible `biber` setup.
+
 To force-disable bootstrap regardless of CLI policy:
 
 ```bash

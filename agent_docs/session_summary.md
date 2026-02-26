@@ -1,4 +1,4 @@
-# Session Summary (updated 2026-02-26, tool-install policy + PDF biber guidance hardening)
+# Session Summary (updated 2026-02-26, post-merge matrix-guidance WIP)
 
 ## Project Goal
 
@@ -20,9 +20,14 @@ DOCX/MD: parser-first semantics + LayoutProbe fallback/validation
 
 ## Repository State
 
-- `origin/master` includes merged PRs `#40`, `#41`, `#42`, `#43`.
-- Current working branch: `fix/v0.9.6-pdf-dissertation-diagnostics`.
-- Working tree: dirty (PDF bibliography runtime updates + docs/memory sync).
+- `origin/master` includes merged PRs `#40`, `#41`, `#42`, `#43`, `#44`.
+- PR `#44` (`fix: harden tectonic PDF runtime and tool install policy`) is `MERGED`:
+  - URL: `https://github.com/principalwater/ferritex/pull/44`
+  - CI checks: `SUCCESS`
+  - merge mode: squash (bot-merge flow), remote feature branch deleted.
+- Local `master` is synced to `origin/master` (`efcdfe0`).
+- Current working branch: `feat/v0.9.6-biber-matrix-guidance` (branched from updated `master`).
+- Working tree: dirty (WIP matrix-guidance updates in PDF runtime + docs + memory files).
 
 ## Completed in This Session
 
@@ -70,6 +75,26 @@ DOCX/MD: parser-first semantics + LayoutProbe fallback/validation
    - `cargo fmt --all`,
    - `cargo clippy --workspace --all-targets --locked -- -D warnings`,
    - `cargo test --workspace --locked` (green).
+11. Packaged and merged delivery:
+   - committed as `3b92d20` on feature branch,
+   - PR `#44` opened and merged into `master`,
+   - repository-level CI and bot-merge workflows passed.
+12. Started next `v0.9.5` follow-up slice on fresh branch from updated `master`:
+   - added explicit built-in auto-install matrix guidance to PDF biber mismatch hints/runtime warnings:
+     - matrix now stated explicitly as `BCF 3.8 -> biber 2.17` on `macos-universal`, `linux-x86_64`, `windows-x86_64`,
+     - unsupported BCF/platform combinations are now explicitly called out in user-facing guidance.
+   - updated docs to reflect the same bounded support surface:
+     - `README.md`,
+     - `docs/TECTONIC_INTEGRATION.md`.
+   - added renderer unit regression for unsupported-matrix messaging.
+13. Focused validation for current WIP slice:
+   - `cargo fmt --all` ✅
+   - `cargo clippy -p ferritex-renderer-pdf --all-targets --locked -- -D warnings` ✅
+   - `cargo test -p ferritex-renderer-pdf --locked` ✅
+   - `cargo test --test integration_pdf --locked` ✅
+14. Full workspace validation on current branch:
+   - `cargo clippy --workspace --all-targets --locked -- -D warnings` ✅
+   - `cargo test --workspace --locked` ✅
 
 ## Known Gaps / Active Blockers
 
@@ -77,10 +102,12 @@ DOCX/MD: parser-first semantics + LayoutProbe fallback/validation
 2. Other BCF mismatches/platform combinations still require local compatible `biber` unless additional pinned assets are added.
 3. Network access is required for first-time bootstrap download.
 4. `--tool-install-policy` is global in build-core, but only PDF/biber currently has installable runtime tooling; DOCX/MD have no installer-backed tools yet.
+5. Built-in auto-install matrix still covers only one BCF family (`3.8`) even though unsupported scope is now explicit.
+6. Current matrix-guidance slice is still uncommitted and not yet opened as PR.
 
 ## Quality Gate Status
 
-- Full workspace quality gate is green:
+- Full workspace quality gate is green on current branch:
   - `cargo fmt --all` ✅
   - `cargo clippy --workspace --all-targets --locked -- -D warnings` ✅
   - `cargo test --workspace --locked` ✅
@@ -96,4 +123,9 @@ DOCX/MD: parser-first semantics + LayoutProbe fallback/validation
 
 1. Add at least one more pinned BCF->biber asset mapping (or document explicit unsupported matrix boundaries).
 2. Decide whether to persist user consent/profile defaults for `--tool-install-policy` in future config (current behavior is per-run CLI/env only).
-3. Open PR with tool-install-policy wiring + PDF policy-aware fail-fast guidance + tests/docs synchronization.
+3. Finalize and ship current matrix-guidance slice:
+   - commit WIP changes on `feat/v0.9.6-biber-matrix-guidance`,
+   - open PR with focused validation output.
+4. After matrix-guidance PR, implement next compatibility increment:
+   - either add next pinned `BCF -> biber` mapping,
+   - or explicitly keep bounded matrix and add docs/tests that lock this contract.

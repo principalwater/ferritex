@@ -75,6 +75,7 @@ Rationale: raw TeX font/baseline metrics from degraded runs can produce incorrec
     if tool-install policy permits it.
   - current built-in auto-install matrix:
     - `BCF 3.8 -> biber 2.17` on `macos-universal`, `linux-x86_64`, `windows-x86_64`.
+    - `BCF 3.11 -> biber 2.21` on `macos-universal`, `linux-x86_64`, `windows-x86_64`.
     - other BCF/platform combinations currently require manual compatible `biber`.
   - users can select a local compatible biber installation for PDF runs via:
     - CLI: `--pdf-biber-bin-dir <DIR>`

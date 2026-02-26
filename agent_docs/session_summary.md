@@ -1,4 +1,4 @@
-# Session Summary (updated 2026-02-26, post-merge matrix-guidance WIP)
+# Session Summary (updated 2026-02-26, PR #45 opened)
 
 ## Project Goal
 
@@ -26,8 +26,13 @@ DOCX/MD: parser-first semantics + LayoutProbe fallback/validation
   - CI checks: `SUCCESS`
   - merge mode: squash (bot-merge flow), remote feature branch deleted.
 - Local `master` is synced to `origin/master` (`efcdfe0`).
-- Current working branch: `feat/v0.9.6-biber-matrix-guidance` (branched from updated `master`).
-- Working tree: dirty (WIP matrix-guidance updates in PDF runtime + docs + memory files).
+- Current working branch: `feat/v0.9.6-biber-matrix-guidance`.
+- Current branch head: `f6e4138` (`fix: clarify biber auto-install matrix guidance`).
+- PR `#45` is open:
+  - URL: `https://github.com/principalwater/ferritex/pull/45`
+  - state: `OPEN`, `MERGEABLE`, review required,
+  - checks: `CI` in progress, `bot-merge` workflow queued.
+- Working tree: clean.
 
 ## Completed in This Session
 
@@ -95,6 +100,10 @@ DOCX/MD: parser-first semantics + LayoutProbe fallback/validation
 14. Full workspace validation on current branch:
    - `cargo clippy --workspace --all-targets --locked -- -D warnings` ✅
    - `cargo test --workspace --locked` ✅
+15. Packaged current matrix-guidance slice:
+   - committed as `f6e4138`,
+   - pushed to `origin/feat/v0.9.6-biber-matrix-guidance`,
+   - opened PR `#45` and applied `bot-merge` label.
 
 ## Known Gaps / Active Blockers
 
@@ -103,7 +112,7 @@ DOCX/MD: parser-first semantics + LayoutProbe fallback/validation
 3. Network access is required for first-time bootstrap download.
 4. `--tool-install-policy` is global in build-core, but only PDF/biber currently has installable runtime tooling; DOCX/MD have no installer-backed tools yet.
 5. Built-in auto-install matrix still covers only one BCF family (`3.8`) even though unsupported scope is now explicit.
-6. Current matrix-guidance slice is still uncommitted and not yet opened as PR.
+6. PR `#45` still needs repository merge conditions (CI completion + required review/policy flow).
 
 ## Quality Gate Status
 
@@ -124,8 +133,7 @@ DOCX/MD: parser-first semantics + LayoutProbe fallback/validation
 1. Add at least one more pinned BCF->biber asset mapping (or document explicit unsupported matrix boundaries).
 2. Decide whether to persist user consent/profile defaults for `--tool-install-policy` in future config (current behavior is per-run CLI/env only).
 3. Finalize and ship current matrix-guidance slice:
-   - commit WIP changes on `feat/v0.9.6-biber-matrix-guidance`,
-   - open PR with focused validation output.
+   - wait for `#45` CI completion and required review/policy merge path.
 4. After matrix-guidance PR, implement next compatibility increment:
    - either add next pinned `BCF -> biber` mapping,
    - or explicitly keep bounded matrix and add docs/tests that lock this contract.

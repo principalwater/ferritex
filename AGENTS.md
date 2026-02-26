@@ -188,7 +188,11 @@ Update this file with: crate name, version pinned, reason for adding.
 | docx-rs | 0.4.19 | DOCX generation |
 | log | 0.4.29 | Logging facade |
 | env_logger | 0.11.9 | Env-driven logging implementation |
+| flate2 | 1.1.0 | Gzip extraction for auto-installed PDF bibliography tool archives |
 | zip | 8.1.0 | ZIP/DOCX container handling |
+| sha1 | 0.10.6 | Checksum verification for downloaded biber archives |
+| tar | 0.4.44 | TAR extraction for auto-installed PDF bibliography tool archives |
+| ureq | 2.12.1 | HTTP download client for compatible biber auto-installation |
 | crossterm | 0.29.0 | Terminal events/raw mode for TUI |
 | ratatui | 0.30.0 | TUI rendering/layout |
 | tectonic | 0.15.0 | Embedded TeX engine for LayoutProbe (feature-gated in ferritex-core) |

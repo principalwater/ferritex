@@ -18,7 +18,7 @@ not express a preference.
 ```
 LaTeX source
   → LayoutProbe + parser extraction
-  → merge (probe > parser > fallback)
+  → merge (parser > probe > fallback)
   → AST + DocumentLayout
   → renderer
   → DOCX / PDF / Markdown
@@ -58,7 +58,6 @@ Current release: **v0.9.1**
 - OMML / Word equation rendering (currently plain-text approximation)
 - Image embedding in DOCX
 - Bibliography entry list rendering (heading is placed, entries are pending)
-- PDF output backend
 - Resolved `\ref` / `\cite` hyperlinks in body text
 
 ---
@@ -138,6 +137,12 @@ ferritex build --input main.tex --format docx
 # Build to multiple formats
 ferritex build --input main.tex --format all --output-dir out/
 
+# PDF build with explicit compatible biber binary location
+ferritex build --input main.tex --format pdf --pdf-biber-bin-dir /opt/biber/bin
+
+# Non-interactive CI-style run: allow automatic tool bootstrap
+ferritex build --input main.tex --format pdf --tool-install-policy auto
+
 # Legacy shorthand (compatible with older versions)
 ferritex --input main.tex --output main.docx
 ferritex convert --input main.tex --output main.docx
@@ -145,6 +150,57 @@ ferritex convert --input main.tex --output main.docx
 # Interactive TUI
 ferritex tui
 ferritex tui --input main.tex --output main.docx
+```
+
+### PDF bibliography compatibility (`biblatex`/`biber`)
+
+PDF build runs through tectonic runtime and fails fast when bibliography tooling
+is incompatible (for example, BCF version mismatch).
+
+By default, ferritex uses:
+
+- `--pdf-biber-mode auto` (retry alternative `biber` candidates),
+- `--tool-install-policy ask` (prompt before downloading/installing compatible tooling).
+
+If the first `biber` candidate from `PATH` is incompatible, ferritex retries
+alternative local candidates available in `PATH`.
+
+If no compatible local candidate is found, auto mode can bootstrap a compatible
+`biber` binary into the ferritex cache (supported platforms only), depending on
+`--tool-install-policy`:
+
+- `ask` (default): prompt user for confirmation in interactive terminal sessions;
+- `auto`: install automatically (good for CI/non-interactive runs);
+- `never`: fail with explicit manual-install guidance.
+
+To force-disable bootstrap regardless of CLI policy:
+
+```bash
+export FERRITEX_PDF_BIBER_AUTO_INSTALL=0
+```
+
+If your system has multiple `biber` installations, select a compatible one:
+
+```bash
+# CLI override (preferred for one-off runs)
+ferritex build --input main.tex --format pdf --pdf-biber-bin-dir /path/to/biber/bin --pdf-biber-mode strict
+
+# Always auto-install compatible tools when needed
+ferritex build --input main.tex --format pdf --tool-install-policy auto
+
+# Never auto-install tools (strictly manual environment)
+ferritex build --input main.tex --format pdf --tool-install-policy never
+
+# Environment override (for repeated runs)
+export FERRITEX_PDF_BIBER_BIN_DIR=/path/to/biber/bin
+ferritex build --input main.tex --format pdf
+
+# Provide extra auto-mode candidates (PATH-like list)
+export FERRITEX_PDF_BIBER_BIN_DIRS="/opt/biber-2.19/bin:/opt/biber-2.21/bin"
+ferritex build --input main.tex --format pdf --pdf-biber-mode auto
+
+# Optional cache override for auto-installed binaries
+export FERRITEX_PDF_BIBER_CACHE_DIR=/tmp/ferritex-biber-cache
 ```
 
 ### TUI keys

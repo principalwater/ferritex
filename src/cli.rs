@@ -2,7 +2,7 @@ use std::path::PathBuf;
 
 use clap::{Parser, Subcommand, ValueEnum};
 
-use crate::build::OutputFormat;
+use crate::build::{OutputFormat, PdfBiberMode, ToolInstallPolicy};
 
 /// Command-line arguments for the `ferritex` binary.
 #[derive(Debug, Parser)]
@@ -10,7 +10,7 @@ use crate::build::OutputFormat;
     name = "ferritex",
     version,
     about = "Build LaTeX (.tex) projects into DOCX, PDF, Markdown, or combined sets",
-    after_help = "Examples:\n  ferritex build --input main.tex --format docx\n  ferritex build --input main.tex --format both --output-dir out/\n  ferritex build --input main.tex --format md --output-dir out/\n  ferritex convert --input main.tex --output main.docx\n  ferritex tui --input main.tex"
+    after_help = "Examples:\n  ferritex build --input main.tex --format docx\n  ferritex build --input main.tex --format both --output-dir out/\n  ferritex build --input main.tex --format pdf --pdf-biber-mode auto --tool-install-policy ask\n  ferritex build --input main.tex --format pdf --pdf-biber-bin-dir /opt/biber/bin --pdf-biber-mode strict\n  ferritex build --input main.tex --format md --output-dir out/\n  ferritex convert --input main.tex --output main.docx\n  ferritex tui --input main.tex"
 )]
 pub struct Cli {
     /// Enable verbose logging.
@@ -45,6 +45,24 @@ pub enum Command {
         /// Directory for output artifacts (defaults to input file's directory).
         #[arg(long, value_name = "DIR")]
         output_dir: Option<PathBuf>,
+        /// Optional directory containing a compatible `biber` binary for PDF builds.
+        ///
+        /// When set, ferritex prepends this directory to `PATH` only for the
+        /// PDF runtime session.
+        #[arg(long, value_name = "DIR")]
+        pdf_biber_bin_dir: Option<PathBuf>,
+        /// Bibliography tool resolution mode for PDF builds.
+        ///
+        /// `auto` retries with alternative `biber` candidates when a BCF
+        /// mismatch is detected. `strict` fails on the first candidate.
+        #[arg(long, value_name = "MODE", default_value = "auto")]
+        pdf_biber_mode: CliPdfBiberMode,
+        /// Policy for missing/incompatible external tools used by renderers.
+        ///
+        /// `ask` prompts before installing tool shims, `auto` installs
+        /// automatically when possible, `never` always fails with guidance.
+        #[arg(long, value_name = "POLICY", default_value = "ask")]
+        tool_install_policy: CliToolInstallPolicy,
     },
     /// Convert LaTeX source to DOCX in non-interactive mode (legacy).
     Convert {
@@ -88,6 +106,40 @@ impl From<CliOutputFormat> for OutputFormat {
     }
 }
 
+/// CLI-facing bibliography tool resolution mode for PDF builds.
+#[derive(Debug, Clone, Copy, ValueEnum)]
+pub enum CliPdfBiberMode {
+    Strict,
+    Auto,
+}
+
+impl From<CliPdfBiberMode> for PdfBiberMode {
+    fn from(value: CliPdfBiberMode) -> Self {
+        match value {
+            CliPdfBiberMode::Strict => PdfBiberMode::Strict,
+            CliPdfBiberMode::Auto => PdfBiberMode::Auto,
+        }
+    }
+}
+
+/// CLI-facing policy for missing/incompatible external tool handling.
+#[derive(Debug, Clone, Copy, ValueEnum)]
+pub enum CliToolInstallPolicy {
+    Ask,
+    Auto,
+    Never,
+}
+
+impl From<CliToolInstallPolicy> for ToolInstallPolicy {
+    fn from(value: CliToolInstallPolicy) -> Self {
+        match value {
+            CliToolInstallPolicy::Ask => ToolInstallPolicy::Ask,
+            CliToolInstallPolicy::Auto => ToolInstallPolicy::Auto,
+            CliToolInstallPolicy::Never => ToolInstallPolicy::Never,
+        }
+    }
+}
+
 /// Resolved application mode after CLI parsing.
 #[derive(Debug)]
 pub enum Mode {
@@ -96,6 +148,9 @@ pub enum Mode {
         input: PathBuf,
         format: OutputFormat,
         output_dir: Option<PathBuf>,
+        pdf_biber_bin_dir: Option<PathBuf>,
+        pdf_biber_mode: PdfBiberMode,
+        tool_install_policy: ToolInstallPolicy,
     },
     /// Legacy single-file DOCX conversion.
     Convert { input: PathBuf, output: PathBuf },
@@ -116,10 +171,16 @@ impl Cli {
                 input,
                 format,
                 output_dir,
+                pdf_biber_bin_dir,
+                pdf_biber_mode,
+                tool_install_policy,
             }) => Mode::Build {
                 input,
                 format: format.into(),
                 output_dir,
+                pdf_biber_bin_dir,
+                pdf_biber_mode: pdf_biber_mode.into(),
+                tool_install_policy: tool_install_policy.into(),
             },
             Some(Command::Convert { input, output }) => Mode::Convert { input, output },
             Some(Command::Tui { input, output }) => Mode::Tui { input, output },
@@ -196,10 +257,16 @@ mod tests {
                 input,
                 format,
                 output_dir,
+                pdf_biber_bin_dir,
+                pdf_biber_mode,
+                tool_install_policy,
             } => {
                 assert_eq!(input, PathBuf::from("main.tex"));
                 assert_eq!(format, OutputFormat::Docx);
                 assert!(output_dir.is_none());
+                assert!(pdf_biber_bin_dir.is_none());
+                assert_eq!(pdf_biber_mode, PdfBiberMode::Auto);
+                assert_eq!(tool_install_policy, ToolInstallPolicy::Ask);
             }
             other => panic!("expected build mode, got {other:?}"),
         }
@@ -216,14 +283,28 @@ mod tests {
             "both",
             "--output-dir",
             "/tmp/out",
+            "--pdf-biber-bin-dir",
+            "/opt/biber/bin",
+            "--pdf-biber-mode",
+            "strict",
+            "--tool-install-policy",
+            "never",
         ]);
         let (_, mode) = cli.resolve_mode().expect("mode should resolve");
         match mode {
             Mode::Build {
-                format, output_dir, ..
+                format,
+                output_dir,
+                pdf_biber_bin_dir,
+                pdf_biber_mode,
+                tool_install_policy,
+                ..
             } => {
                 assert_eq!(format, OutputFormat::Both);
                 assert_eq!(output_dir, Some(PathBuf::from("/tmp/out")));
+                assert_eq!(pdf_biber_bin_dir, Some(PathBuf::from("/opt/biber/bin")));
+                assert_eq!(pdf_biber_mode, PdfBiberMode::Strict);
+                assert_eq!(tool_install_policy, ToolInstallPolicy::Never);
             }
             other => panic!("expected build mode, got {other:?}"),
         }

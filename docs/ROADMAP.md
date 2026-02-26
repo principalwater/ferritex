@@ -114,6 +114,9 @@
   - explicit engine profile (`halt_on_error`, `shell_escape`, `build_date`) remains aligned with runtime settings,
   - primary probe pass is `PassSetting::Tex` (single-pass extraction),
   - conditional recovery pass uses `PassSetting::Default` with fixed `reruns=1` when primary signal is empty or errored.
+- Build-core external tool install policy is now explicit:
+  - `--tool-install-policy ask|auto|never` (default `ask`),
+  - currently consumed by PDF runtime for policy-aware biber compatibility bootstrap.
 - `TotPages` layering no longer depends on `.aux` only:
   - sidecar resolution now supports `.aux` and `.log`,
   - fallback heuristic now considers `\\newpage` + `\\clearpage` + `\\cleardoublepage` + `\\pagebreak`,

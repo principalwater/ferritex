@@ -17,8 +17,18 @@ fn main() -> Result<()> {
             input,
             format,
             output_dir,
+            pdf_biber_bin_dir,
+            pdf_biber_mode,
+            tool_install_policy,
         } => {
-            let config = BuildConfig::from_build_args(&input, output_dir.as_deref(), format);
+            let config = BuildConfig::from_build_args(
+                &input,
+                output_dir.as_deref(),
+                format,
+                pdf_biber_bin_dir.as_deref(),
+                pdf_biber_mode,
+                tool_install_policy,
+            );
             let result = build::run_build(&config)?;
             if let Some(ref docx) = result.docx {
                 log::info!("DOCX: {}", docx.display());

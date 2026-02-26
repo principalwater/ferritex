@@ -9,5 +9,10 @@ license = "MIT"
 [dependencies]
 anyhow = { workspace = true }
 ferritex-core = { path = "../ferritex-core" }
+flate2 = { workspace = true }
 log = { workspace = true }
+sha1 = { workspace = true }
+tar = { workspace = true }
 tectonic = { version = "0.15.0", features = ["external-harfbuzz"] }
+ureq = { workspace = true }
+zip = { workspace = true }
